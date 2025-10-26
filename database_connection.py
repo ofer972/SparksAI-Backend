@@ -72,7 +72,8 @@ def get_db_engine() -> Optional[create_engine]:
     
     # Add connection pooling and retry settings (same as JiraDashboard-NEWUI)
     try:
-        logger.info("🚨 DATABASE: Creating NEW engine (not from pool) - this should be rare!")
+        logger.info("🚀 DATABASE: Creating NEW engine (not from pool) - this should be rare!")
+        print("🚀 DATABASE: Creating NEW engine (not from pool) - this should be rare!")
         engine = create_engine(
             connection_string,
             pool_size=5,         # Keep 5 connections in pool
@@ -162,8 +163,13 @@ def get_db_connection():
         # 'yield' passes the connection to the endpoint function
         yield conn
     except Exception as e:
-        logger.error(f"Failed to get DB connection from pool: {e}")
-        raise HTTPException(status_code=503, detail="Database connection error")
+        # Only log as database error if it's actually a database-related exception
+        if "psycopg2" in str(type(e)) or "sqlalchemy" in str(type(e)) or "database" in str(e).lower():
+            logger.error(f"Database connection error: {e}")
+            raise HTTPException(status_code=503, detail="Database connection error")
+        else:
+            # Re-raise non-database exceptions (like validation errors) without modification
+            raise e
     finally:
         # This code runs *after* the endpoint is finished
         if conn:

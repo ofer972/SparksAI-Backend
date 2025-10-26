@@ -11,10 +11,16 @@ API_PREFIX = f"/api/{API_VERSION}"
 
 # --- Table Names Configuration ---
 WORK_ITEMS_TABLE = "jira_issues"  # Main table name - can be changed here
+RECOMMENDATIONS_TABLE = "recommendations"  # Recommendations table
+TEAM_AI_CARDS_TABLE = "team_ai_summary_cards"  # Team AI cards table
 
 # --- Service Configuration ---
 # Teams Service
 TEAMS_SERVICE_PREFIX = "/teams"
+# Recommendations Service
+RECOMMENDATIONS_SERVICE_PREFIX = "/recommendations"
+# Team AI Cards Service
+TEAM_AI_CARDS_SERVICE_PREFIX = "/team-ai-cards"
 
 # --- Error Handling Configuration ---
 DEFAULT_ERROR_MESSAGE = "An unexpected error occurred"

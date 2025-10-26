@@ -56,7 +56,7 @@ async def get_team_names(conn: Connection = Depends(get_db_connection)):
             ORDER BY team_name
         """)
         
-        logger.info(f"Executing query to get distinct team names from {config.WORK_ITEMS_TABLE}")
+        logger.info(f"Executing query to get distinct team names from work items table")
         
         # Execute query with connection from dependency
         result = conn.execute(query)
@@ -81,51 +81,3 @@ async def get_team_names(conn: Connection = Depends(get_db_connection)):
             detail=f"Failed to fetch team names: {str(e)}"
         )
 
-@teams_router.get("/teams/stats")
-async def get_teams_stats(conn: Connection = Depends(get_db_connection)):
-    """
-    Get statistics about teams.
-    Uses parameterized queries to prevent SQL injection.
-    
-    Returns:
-        JSON response with team statistics
-    """
-    try:
-        # SECURE: Parameterized query prevents SQL injection
-        query = text(f"""
-            SELECT 
-                COUNT(DISTINCT team_name) as total_teams,
-                COUNT(*) as total_issues,
-                AVG(team_issue_count) as avg_issues_per_team
-            FROM (
-                SELECT team_name, COUNT(*) as team_issue_count
-                FROM {config.WORK_ITEMS_TABLE} 
-                WHERE team_name IS NOT NULL AND team_name != ''
-                GROUP BY team_name
-            ) team_counts
-        """)
-        
-        logger.info("Executing query to get team statistics")
-        
-        # Execute query with connection from dependency
-        result = conn.execute(query)
-        row = result.fetchone()
-        
-        stats = {
-            "total_teams": row[0] if row[0] else 0,
-            "total_issues": row[1] if row[1] else 0,
-            "avg_issues_per_team": round(float(row[2]), 2) if row[2] else 0
-        }
-        
-        return {
-            "success": True,
-            "data": stats,
-            "message": "Retrieved team statistics"
-        }
-    
-    except Exception as e:
-        logger.error(f"Error fetching team statistics: {e}")
-        raise HTTPException(
-            status_code=500,
-            detail=f"Failed to fetch team statistics: {str(e)}"
-        )
