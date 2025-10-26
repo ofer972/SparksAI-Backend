@@ -50,13 +50,13 @@ async def get_team_names(conn: Connection = Depends(get_db_connection)):
         # SECURE: Parameterized query prevents SQL injection
         query = text(f"""
             SELECT DISTINCT team_name 
-            FROM {config.JIRA_ISSUES_TABLE} 
+            FROM {config.WORK_ITEMS_TABLE} 
             WHERE team_name IS NOT NULL 
             AND team_name != '' 
             ORDER BY team_name
         """)
         
-        logger.info(f"Executing query to get distinct team names from {config.JIRA_ISSUES_TABLE}")
+        logger.info(f"Executing query to get distinct team names from {config.WORK_ITEMS_TABLE}")
         
         # Execute query with connection from dependency
         result = conn.execute(query)
@@ -99,7 +99,7 @@ async def get_teams_stats(conn: Connection = Depends(get_db_connection)):
                 AVG(team_issue_count) as avg_issues_per_team
             FROM (
                 SELECT team_name, COUNT(*) as team_issue_count
-                FROM {config.JIRA_ISSUES_TABLE} 
+                FROM {config.WORK_ITEMS_TABLE} 
                 WHERE team_name IS NOT NULL AND team_name != ''
                 GROUP BY team_name
             ) team_counts

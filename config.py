@@ -10,7 +10,7 @@ API_PREFIX = f"/api/{API_VERSION}"
 # Uses config.ini with fallback to DATABASE_URL environment variable
 
 # --- Table Names Configuration ---
-JIRA_ISSUES_TABLE = "jira_issues"  # Main table name - can be changed here
+WORK_ITEMS_TABLE = "jira_issues"  # Main table name - can be changed here
 
 # --- Service Configuration ---
 # Teams Service
