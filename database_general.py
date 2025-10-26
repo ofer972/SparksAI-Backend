@@ -164,3 +164,41 @@ def get_top_ai_cards(team_name: str, limit: int = 4, conn: Connection = None) ->
     except Exception as e:
         logger.error(f"Error fetching top AI cards for team {team_name}: {e}")
         raise e
+
+
+def get_all_settings_db(conn: Connection = None) -> Dict[str, str]:
+    """
+    Get all global settings from the database.
+    
+    Returns dictionary of setting_key: setting_value pairs.
+    Includes full API keys as stored in database.
+    Copied exact logic from JiraDashboard-NEWUI project.
+    
+    Args:
+        conn (Connection): Database connection from FastAPI dependency
+    
+    Returns:
+        dict: Dictionary of setting_key: setting_value pairs
+    """
+    try:
+        # SECURE: Parameterized query prevents SQL injection
+        sql_query = """
+            SELECT setting_key, setting_value 
+            FROM global_settings
+        """
+        
+        logger.info(f"Executing query to get all global settings")
+        logger.info(f"SQL Query: {sql_query}")
+        
+        result = conn.execute(text(sql_query))
+        
+        # Convert rows to dictionary of key-value pairs
+        settings = {row[0]: row[1] for row in result}
+        
+        return settings
+            
+    except Exception as e:
+        logger.error(f"Error fetching all global settings: {e}")
+        raise e
+
+

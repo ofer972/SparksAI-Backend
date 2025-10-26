@@ -10,6 +10,7 @@ from teams_service import teams_router
 from recommendations_service import recommendations_router
 from team_ai_cards_service import team_ai_cards_router
 from team_metrics_service import team_metrics_router
+from settings_service import settings_router
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -37,6 +38,7 @@ app.include_router(teams_router, prefix="/api/v1", tags=["teams"])
 app.include_router(recommendations_router, prefix="/api/v1", tags=["recommendations"])
 app.include_router(team_ai_cards_router, prefix="/api/v1", tags=["team-ai-cards"])
 app.include_router(team_metrics_router, prefix="/api/v1", tags=["team-metrics"])
+app.include_router(settings_router, prefix="/api/v1", tags=["settings"])
 
 @app.get("/")
 async def root():
