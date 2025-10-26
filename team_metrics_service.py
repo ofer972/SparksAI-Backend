@@ -14,7 +14,9 @@ from database_connection import get_db_connection
 from database_team_metrics import (
     get_team_avg_sprint_metrics,
     get_team_count_in_progress,
-    get_team_current_sprint_completion
+    get_team_current_sprint_completion,
+    get_active_sprints_with_total_issues_db,
+    get_sprint_burndown_data_db
 )
 import config
 
@@ -185,4 +187,103 @@ async def get_current_sprint_completion(
         raise HTTPException(
             status_code=500,
             detail=f"Failed to fetch current sprint completion: {str(e)}"
+        )
+
+
+@team_metrics_router.get("/team-metrics/sprint-burndown")
+async def get_sprint_burndown_data(
+    team_name: str = Query(..., description="Team name to get burndown data for"),
+    issue_type: str = Query("all", description="Issue type filter (default: 'all')"),
+    sprint_name: str = Query(None, description="Sprint name (optional, will auto-select ACTIVE Sprint if not provided)"),
+    conn: Connection = Depends(get_db_connection)
+):
+    """
+    Get sprint burndown data for a specific team.
+
+    If no sprint_name is provided, automatically selects the ACTIVE sprint with the maximum total issues.
+
+    Args:
+        team_name: Name of the team
+        issue_type: Issue type filter (default: "all")
+        sprint_name: Sprint name (optional, auto-selected if not provided)
+
+    Returns:
+        JSON response with burndown data and metadata
+    """
+    try:
+        # Validate inputs
+        validated_team_name = validate_team_name(team_name)
+        
+        # Validate issue_type
+        if not isinstance(issue_type, str):
+            raise HTTPException(status_code=400, detail="Issue type must be a string")
+        if issue_type.strip() == "":
+            issue_type = "all"
+        
+        # Sprint selection logic (API service decides)
+        selected_sprint_name = sprint_name
+        selected_sprint_id = None
+        
+        if not selected_sprint_name:
+            # Get active sprints and select the one with max total issues
+            sprints = get_active_sprints_with_total_issues_db(validated_team_name, conn)
+            if sprints:
+                # Select sprint with maximum total_issues
+                selected_sprint = max(sprints, key=lambda x: x['total_issues'])
+                selected_sprint_name = selected_sprint['name']
+                selected_sprint_id = selected_sprint['sprint_id']
+                logger.info(f"Auto-selected sprint '{selected_sprint_name}' (ID: {selected_sprint_id}) with {selected_sprint['total_issues']} total issues")
+            else:
+                return {
+                    "success": False,
+                    "data": {
+                        "burndown_data": [],
+                        "team_name": validated_team_name,
+                        "sprint_id": None,
+                        "sprint_name": None,
+                        "issue_type": issue_type,
+                        "total_issues_in_sprint": 0
+                    },
+                    "message": "No active sprints found"
+                }
+        else:
+            # If sprint_name was provided, we don't need to search for sprint_id
+            # We'll get it from the burndown data or set it to None
+            logger.info(f"Using provided sprint name: '{selected_sprint_name}'")
+        
+        # Get burndown data for selected sprint
+        burndown_data = get_sprint_burndown_data_db(validated_team_name, selected_sprint_name, issue_type, conn)
+        
+        # Calculate total issues in sprint and extract start/end dates from burndown data
+        total_issues_in_sprint = 0
+        start_date = None
+        end_date = None
+        
+        if burndown_data:
+            total_issues_in_sprint = burndown_data[0].get('total_issues', 0)
+            start_date = burndown_data[0].get('start_date')
+            end_date = burndown_data[0].get('end_date')
+        
+        return {
+            "success": True,
+            "data": {
+                "sprint_id": selected_sprint_id,
+                "sprint_name": selected_sprint_name,
+                "start_date": start_date,
+                "end_date": end_date,
+                "burndown_data": burndown_data,
+                "team_name": validated_team_name,
+                "issue_type": issue_type,
+                "total_issues_in_sprint": total_issues_in_sprint
+            },
+            "message": f"Retrieved sprint burndown data for team '{validated_team_name}' and sprint '{selected_sprint_name}'"
+        }
+    
+    except HTTPException:
+        raise # Re-raise FastAPI HTTPExceptions
+    except Exception as e:
+        logger.error(f"Error fetching sprint burndown data for team {validated_team_name}: {e}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to fetch sprint burndown data: {str(e)}"
         )

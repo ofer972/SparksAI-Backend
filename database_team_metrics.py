@@ -8,7 +8,7 @@ Copied exact logic, SQL statements, and functions from JiraDashboard-NEWUI proje
 
 from sqlalchemy import text
 from sqlalchemy.engine import Connection
-from typing import Dict, Any
+from typing import Dict, Any, List
 import logging
 import config
 
@@ -190,4 +190,156 @@ def get_team_active_sprint_metrics(team_name: str, conn: Connection = None) -> D
             
     except Exception as e:
         logger.error(f"Error fetching active sprint metrics for team {team_name}: {e}")
+        raise e
+
+
+def get_active_sprints_with_total_issues_db(team_name: str, conn: Connection = None) -> List[Dict[str, Any]]:
+    """
+    Get active sprints with their total issues count (excluding SYS sprints).
+    Used for sprint selection logic in sprint burndown service.
+    Copied exact logic from JiraDashboard-NEWUI project.
+    
+    Args:
+        conn (Connection): Database connection from FastAPI dependency
+    
+    Returns:
+        list: List of sprint dictionaries with sprint_id, name, and total_issues
+    """
+    try:
+        # SECURE: Parameterized query prevents SQL injection
+        sql_query = """
+            SELECT 
+                s.sprint_id, 
+                s.name,
+                COUNT(i.issue_id) as total_issues
+            FROM public.jira_sprints s
+            LEFT JOIN public.jira_issues i ON s.sprint_id = i.current_sprint_id
+            WHERE s.state = 'active'
+            AND i.team_name = :team_name
+            GROUP BY s.sprint_id, s.name
+            ORDER BY total_issues DESC, s.name ASC;
+        """
+        
+        logger.info(f"Executing query to get active sprints with total issues count for team: {team_name}")
+        logger.info(f"SQL Query: {sql_query}")
+        logger.info(f"Parameters: team_name={team_name}")
+        
+        result = conn.execute(text(sql_query), {"team_name": team_name})
+        
+        sprints = []
+        for row in result:
+            sprints.append({
+                'sprint_id': row[0],
+                'name': row[1],
+                'total_issues': int(row[2]) if row[2] else 0
+            })
+        
+        return sprints
+            
+    except Exception as e:
+        logger.error(f"Error fetching active sprints with total issues: {e}")
+        raise e
+
+
+def get_sprint_burndown_data_db(team_name: str, sprint_name: str, issue_type: str = "all", conn: Connection = None) -> List[Dict[str, Any]]:
+    """
+    Get sprint burndown data for a specific team and sprint.
+    Uses the get_sprint_burndown_data_for_team database function.
+    Copied exact logic from JiraDashboard-NEWUI project.
+    
+    Args:
+        team_name (str): Team name
+        sprint_name (str): Sprint name
+        issue_type (str): Issue type filter (default: "all")
+        conn (Connection): Database connection from FastAPI dependency
+    
+    Returns:
+        list: List of burndown data dictionaries
+    """
+    try:
+        # SECURE: Parameterized query prevents SQL injection
+        sql_query = """
+            SELECT * FROM get_sprint_burndown_data_for_team(:sprint_name, :issue_type, :team_name);
+        """
+        
+        logger.info(f"Executing query to get sprint burndown data for team: {team_name}, sprint: {sprint_name}")
+        logger.info(f"SQL Query: {sql_query}")
+        logger.info(f"Parameters: sprint_name={sprint_name}, issue_type={issue_type}, team_name={team_name}")
+        
+        result = conn.execute(text(sql_query), {
+            "sprint_name": sprint_name,
+            "issue_type": issue_type,
+            "team_name": team_name
+        })
+        
+        burndown_data = []
+        for row in result:
+            burndown_data.append({
+                'snapshot_date': row[0],
+                'start_date': row[1],
+                'end_date': row[2],
+                'remaining_issues': int(row[3]) if row[3] else 0,
+                'ideal_remaining': int(row[4]) if row[4] else 0,
+                'total_issues': int(row[5]) if row[5] else 0,
+                'issues_added_on_day': int(row[6]) if row[6] else 0,
+                'issues_removed_on_day': int(row[7]) if row[7] else 0,
+                'issues_completed_on_day': int(row[8]) if row[8] else 0
+            })
+        
+        return burndown_data
+            
+    except Exception as e:
+        logger.error(f"Error fetching sprint burndown data for team {team_name}, sprint {sprint_name}: {e}")
+        raise e
+
+
+def get_sprint_burndown_data_db(team_name: str, sprint_name: str, issue_type: str = "all", conn: Connection = None) -> List[Dict[str, Any]]:
+    """
+    Get sprint burndown data for a specific team and sprint.
+    Uses the get_sprint_burndown_data_for_team database function.
+    Copied exact logic from JiraDashboard-NEWUI project.
+    
+    Args:
+        team_name (str): Team name
+        sprint_name (str): Sprint name
+        issue_type (str): Issue type filter (default: "all")
+        conn (Connection): Database connection from FastAPI dependency
+    
+    Returns:
+        list: List of dictionaries with burndown data
+    """
+    try:
+        # SECURE: Parameterized query prevents SQL injection
+        sql_query = """
+            SELECT * FROM public.get_sprint_burndown_data_for_team(:sprint_name, :issue_type, :team_name);
+        """
+        
+        logger.info(f"Executing query to get sprint burndown data for team: {team_name}, sprint: {sprint_name}")
+        logger.info(f"SQL Query: {sql_query}")
+        logger.info(f"Parameters: sprint_name={sprint_name}, issue_type={issue_type}, team_name={team_name}")
+        
+        result = conn.execute(text(sql_query), {
+            'sprint_name': sprint_name,
+            'issue_type': issue_type,
+            'team_name': team_name
+        })
+        
+        burndown_data = []
+        for row in result:
+            burndown_data.append({
+                'snapshot_date': row.snapshot_date,
+                'start_date': row.sprint_start_date,
+                'end_date': row.sprint_end_date,
+                'remaining_issues': row.remaining_issues,
+                'ideal_remaining': row.ideal_remaining,
+                'total_issues': row.total_issues,
+                'issues_added_on_day': row.issues_added_on_day,
+                'issues_removed_on_day': row.issues_removed_on_day,
+                'issues_completed_on_day': row.issues_completed_on_day
+            })
+        
+        return burndown_data
+            
+    except Exception as e:
+        logger.error(f"Error fetching sprint burndown data for team {team_name}, sprint {sprint_name}: {e}")
         raise e
