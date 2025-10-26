@@ -12,6 +12,7 @@ from typing import List, Dict, Any
 import logging
 import re
 from database_connection import get_db_connection
+import config
 
 logger = logging.getLogger(__name__)
 
@@ -47,15 +48,15 @@ async def get_team_names(conn: Connection = Depends(get_db_connection)):
     """
     try:
         # SECURE: Parameterized query prevents SQL injection
-        query = text("""
+        query = text(f"""
             SELECT DISTINCT team_name 
-            FROM jira_issues 
+            FROM {config.JIRA_ISSUES_TABLE} 
             WHERE team_name IS NOT NULL 
             AND team_name != '' 
             ORDER BY team_name
         """)
         
-        logger.info("Executing query to get distinct team names from jira_issues")
+        logger.info(f"Executing query to get distinct team names from {config.JIRA_ISSUES_TABLE}")
         
         # Execute query with connection from dependency
         result = conn.execute(query)
@@ -91,14 +92,14 @@ async def get_teams_stats(conn: Connection = Depends(get_db_connection)):
     """
     try:
         # SECURE: Parameterized query prevents SQL injection
-        query = text("""
+        query = text(f"""
             SELECT 
                 COUNT(DISTINCT team_name) as total_teams,
                 COUNT(*) as total_issues,
                 AVG(team_issue_count) as avg_issues_per_team
             FROM (
                 SELECT team_name, COUNT(*) as team_issue_count
-                FROM jira_issues 
+                FROM {config.JIRA_ISSUES_TABLE} 
                 WHERE team_name IS NOT NULL AND team_name != ''
                 GROUP BY team_name
             ) team_counts
