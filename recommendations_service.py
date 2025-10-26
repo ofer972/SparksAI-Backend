@@ -10,6 +10,7 @@ from typing import List, Dict, Any, Optional
 import logging
 import re
 from database_connection import get_db_connection
+from database_general import get_top_ai_recommendations
 import config
 
 logger = logging.getLogger(__name__)
@@ -73,54 +74,8 @@ async def get_top_recommendations(
         validated_team_name = validate_team_name(team_name)
         validated_limit = validate_limit(limit)
         
-        # SECURE: Parameterized query prevents SQL injection
-        query = text("""
-            SELECT 
-                id,
-                team_name,
-                date,
-                action_text,
-                rational,
-                full_information,
-                priority,
-                status
-            FROM public.recommendations
-            WHERE team_name = :team_name
-            ORDER BY 
-                DATE(date) DESC,
-                CASE priority 
-                    WHEN 'High' THEN 1
-                    WHEN 'Medium' THEN 2
-                    WHEN 'Low' THEN 3
-                    ELSE 4
-                END,
-                id DESC
-            LIMIT :limit
-        """)
-        
-        logger.info(f"Executing query to get top recommendations from {config.RECOMMENDATIONS_TABLE} for team: {validated_team_name}")
-        logger.info(f"SQL Query: {query}")
-        logger.info(f"Parameters: team_name={validated_team_name}, limit={validated_limit}")
-        
-        # Execute query with connection from dependency
-        result = conn.execute(query, {
-            'team_name': validated_team_name, 
-            'limit': validated_limit
-        })
-        
-        # Convert rows to list of dictionaries
-        recommendations = []
-        for row in result:
-            recommendations.append({
-                'id': row.id,
-                'team_name': row.team_name,
-                'date': row.date,
-                'action_text': row.action_text,
-                'rational': row.rational,
-                'full_information': row.full_information,
-                'priority': row.priority,
-                'status': row.status
-            })
+        # Get recommendations from database function
+        recommendations = get_top_ai_recommendations(validated_team_name, validated_limit, conn)
         
         return {
             "success": True,

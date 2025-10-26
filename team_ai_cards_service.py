@@ -10,6 +10,7 @@ from typing import List, Dict, Any, Optional
 import logging
 import re
 from database_connection import get_db_connection
+from database_general import get_top_ai_cards
 import config
 
 logger = logging.getLogger(__name__)
@@ -73,60 +74,8 @@ async def get_team_ai_cards(
         validated_team_name = validate_team_name(team_name)
         validated_limit = validate_limit(limit)
         
-        # SECURE: Parameterized query prevents SQL injection
-        query = text("""
-            WITH ranked_cards AS (
-                SELECT *,
-                       ROW_NUMBER() OVER (
-                           PARTITION BY card_type 
-                           ORDER BY 
-                               date DESC,
-                               CASE priority 
-                                   WHEN 'Critical' THEN 1 
-                                   WHEN 'High' THEN 2 
-                                   WHEN 'Medium' THEN 3 
-                               END
-                       ) as rn
-                FROM public.team_ai_summary_cards
-                WHERE team_name = :team_name
-            )
-            SELECT id, date, team_name, card_name, card_type, priority, source, description, full_information
-            FROM ranked_cards
-            WHERE rn = 1
-            ORDER BY 
-                CASE priority 
-                    WHEN 'Critical' THEN 1 
-                    WHEN 'High' THEN 2 
-                    WHEN 'Medium' THEN 3 
-                END,
-                date DESC
-            LIMIT :limit
-        """)
-        
-        logger.info(f"Executing query to get team AI cards from {config.TEAM_AI_CARDS_TABLE} for team: {validated_team_name}")
-        logger.info(f"SQL Query: {query}")
-        logger.info(f"Parameters: team_name={validated_team_name}, limit={validated_limit}")
-        
-        # Execute query with connection from dependency
-        result = conn.execute(query, {
-            'team_name': validated_team_name, 
-            'limit': validated_limit
-        })
-        
-        # Convert rows to list of dictionaries
-        ai_cards = []
-        for row in result:
-            ai_cards.append({
-                'id': row[0],
-                'date': row[1],
-                'team_name': row[2],
-                'card_name': row[3],
-                'card_type': row[4],
-                'priority': row[5],
-                'source': row[6],
-                'description': row[7],
-                'full_information': row[8]
-            })
+        # Get AI cards from database function
+        ai_cards = get_top_ai_cards(validated_team_name, validated_limit, conn)
         
         return {
             "success": True,
