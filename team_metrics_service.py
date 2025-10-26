@@ -108,27 +108,29 @@ async def get_count_in_progress(
     conn: Connection = Depends(get_db_connection)
 ):
     """
-    Get count of issues currently in progress for a specific team.
+    Get count of issues currently in progress for a specific team with breakdown by issue type.
     
-    Returns the number of issues with status_category = 'In Progress'.
+    Returns the number of issues with status_category = 'In Progress', grouped by issue type.
+    Only includes issue types that have at least one issue in progress.
     
     Args:
         team_name: Name of the team
     
     Returns:
-        JSON response with count of issues in progress
+        JSON response with total count and breakdown by issue type
     """
     try:
         # Validate inputs
         validated_team_name = validate_team_name(team_name)
         
-        # Get count from database function
-        count = get_team_count_in_progress(validated_team_name, conn)
+        # Get count breakdown from database function
+        count_data = get_team_count_in_progress(validated_team_name, conn)
         
         return {
             "success": True,
             "data": {
-                "count": count,
+                "total_in_progress": count_data['total_in_progress'],
+                "count_by_type": count_data['count_by_type'],
                 "team_name": validated_team_name
             },
             "message": f"Retrieved count in progress for team '{validated_team_name}'"

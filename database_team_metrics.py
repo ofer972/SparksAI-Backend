@@ -40,6 +40,8 @@ def get_team_avg_sprint_metrics(team_name: str, sprint_count: int = 5, conn: Con
         """
         
         logger.info(f"Executing query to get average sprint metrics for team: {team_name}")
+        logger.info(f"SQL Query: {sql_query}")
+        logger.info(f"Parameters: sprint_count={sprint_count}, team_name={team_name}")
         
         result = conn.execute(text(sql_query), {
             "sprint_count": sprint_count, 
@@ -61,10 +63,10 @@ def get_team_avg_sprint_metrics(team_name: str, sprint_count: int = 5, conn: Con
         raise e
 
 
-def get_team_count_in_progress(team_name: str, conn: Connection = None) -> int:
+def get_team_count_in_progress(team_name: str, conn: Connection = None) -> Dict[str, Any]:
     """
-    Get current work in progress (WIP) for a team.
-    WIP = number of issues currently in progress.
+    Get current work in progress (WIP) for a team with breakdown by issue type.
+    WIP = number of issues currently in progress, grouped by issue type.
     Copied exact logic from JiraDashboard-NEWUI project.
     
     Args:
@@ -72,26 +74,41 @@ def get_team_count_in_progress(team_name: str, conn: Connection = None) -> int:
         conn (Connection): Database connection from FastAPI dependency
     
     Returns:
-        int: Number of issues in progress
+        dict: Dictionary with total count and breakdown by issue type
     """
     try:
         # SECURE: Parameterized query prevents SQL injection
         sql_query = """
-            SELECT COUNT(*) as wip_count
+            SELECT 
+                issue_type,
+                COUNT(*) as type_count
             FROM public.jira_issues
             WHERE team_name = :team_name 
-            AND status_category = 'In Progress';
+            AND status_category = 'In Progress'
+            GROUP BY issue_type
+            ORDER BY type_count DESC;
         """
         
         logger.info(f"Executing query to get count in progress for team: {team_name}")
+        logger.info(f"SQL Query: {sql_query}")
+        logger.info(f"Parameters: team_name={team_name}")
         
         result = conn.execute(text(sql_query), {"team_name": team_name})
-        row = result.fetchone()
+        rows = result.fetchall()
         
-        if row and row[0] is not None:
-            return int(row[0])
-        else:
-            return 0
+        total_count = 0
+        count_by_type = {}
+        
+        for row in rows:
+            issue_type = row[0]
+            type_count = int(row[1])
+            count_by_type[issue_type] = type_count
+            total_count += type_count
+        
+        return {
+            'total_in_progress': total_count,
+            'count_by_type': count_by_type
+        }
             
     except Exception as e:
         logger.error(f"Error fetching count in progress for team {team_name}: {e}")
@@ -156,6 +173,8 @@ def get_team_active_sprint_metrics(team_name: str, conn: Connection = None) -> D
         """
         
         logger.info(f"Executing query to get active sprint metrics for team: {team_name}")
+        logger.info(f"SQL Query: {sql_query}")
+        logger.info(f"Parameters: team_name={team_name}")
         
         result = conn.execute(text(sql_query), {"team_name": team_name})
         row = result.fetchone()

@@ -104,6 +104,8 @@ async def get_team_ai_cards(
         """)
         
         logger.info(f"Executing query to get team AI cards from {config.TEAM_AI_CARDS_TABLE} for team: {validated_team_name}")
+        logger.info(f"SQL Query: {query}")
+        logger.info(f"Parameters: team_name={validated_team_name}, limit={validated_limit}")
         
         # Execute query with connection from dependency
         result = conn.execute(query, {

@@ -99,6 +99,8 @@ async def get_top_recommendations(
         """)
         
         logger.info(f"Executing query to get top recommendations from {config.RECOMMENDATIONS_TABLE} for team: {validated_team_name}")
+        logger.info(f"SQL Query: {query}")
+        logger.info(f"Parameters: team_name={validated_team_name}, limit={validated_limit}")
         
         # Execute query with connection from dependency
         result = conn.execute(query, {
