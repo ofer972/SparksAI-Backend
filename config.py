@@ -21,6 +21,8 @@ TEAMS_SERVICE_PREFIX = "/teams"
 RECOMMENDATIONS_SERVICE_PREFIX = "/recommendations"
 # Team AI Cards Service
 TEAM_AI_CARDS_SERVICE_PREFIX = "/team-ai-cards"
+# Team Metrics Service
+TEAM_METRICS_SERVICE_PREFIX = "/team-metrics"
 
 # --- Error Handling Configuration ---
 DEFAULT_ERROR_MESSAGE = "An unexpected error occurred"

@@ -71,9 +71,10 @@ def get_db_engine() -> Optional[create_engine]:
         return None
     
     # Add connection pooling and retry settings (same as JiraDashboard-NEWUI)
+    max_retries = 3
     try:
-        logger.info("🚀 DATABASE: Creating NEW engine (not from pool) - this should be rare!")
-        print("🚀 DATABASE: Creating NEW engine (not from pool) - this should be rare!")
+        logger.info("ROCKET DATABASE: Creating NEW engine (not from pool) - this should be rare!")
+        print("ROCKET DATABASE: Creating NEW engine (not from pool) - this should be rare!")
         engine = create_engine(
             connection_string,
             pool_size=5,         # Keep 5 connections in pool
@@ -85,7 +86,6 @@ def get_db_engine() -> Optional[create_engine]:
         )
         
         # Test connection with retry
-        max_retries = 3
         for attempt in range(max_retries):
             try:
                 with engine.connect() as connection:
