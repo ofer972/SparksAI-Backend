@@ -15,7 +15,7 @@ from database_team_metrics import (
     get_team_avg_sprint_metrics,
     get_team_count_in_progress,
     get_team_current_sprint_completion,
-    get_active_sprints_with_total_issues_db,
+    get_sprints_with_total_issues_db,
     get_sprint_burndown_data_db
 )
 import config
@@ -226,7 +226,7 @@ async def get_sprint_burndown_data(
         
         if not selected_sprint_name:
             # Get active sprints and select the one with max total issues
-            sprints = get_active_sprints_with_total_issues_db(validated_team_name, conn)
+            sprints = get_sprints_with_total_issues_db(validated_team_name, "active", conn)
             if sprints:
                 # Select sprint with maximum total_issues
                 selected_sprint = max(sprints, key=lambda x: x['total_issues'])
@@ -286,4 +286,52 @@ async def get_sprint_burndown_data(
         raise HTTPException(
             status_code=500,
             detail=f"Failed to fetch sprint burndown data: {str(e)}"
+        )
+
+
+@team_metrics_router.get("/team-metrics/get-sprints")
+async def get_sprints(
+    team_name: str = Query(..., description="Team name to get sprints for"),
+    sprint_status: str = Query(None, description="Sprint status filter (optional: 'active', 'closed', or leave empty for all)"),
+    conn: Connection = Depends(get_db_connection)
+):
+    """
+    Get list of sprints for a specific team with total issues count.
+
+    Args:
+        team_name: Name of the team
+        sprint_status: Sprint status filter (optional: "active", "closed", or None for all)
+
+    Returns:
+        JSON response with sprints list and metadata
+    """
+    try:
+        # Validate inputs
+        validated_team_name = validate_team_name(team_name)
+        
+        # Validate sprint_status if provided
+        if sprint_status and sprint_status not in ["active", "closed"]:
+            raise HTTPException(status_code=400, detail="Sprint status must be 'active' or 'closed'")
+        
+        # Get sprints from database function
+        sprints = get_sprints_with_total_issues_db(validated_team_name, sprint_status, conn)
+        
+        return {
+            "success": True,
+            "data": {
+                "team_name": validated_team_name,
+                "sprint_status": sprint_status,
+                "sprints": sprints,
+                "count": len(sprints)
+            },
+            "message": f"Retrieved {len(sprints)} sprints for team '{validated_team_name}'"
+        }
+    
+    except HTTPException:
+        raise # Re-raise FastAPI HTTPExceptions
+    except Exception as e:
+        logger.error(f"Error fetching sprints for team {validated_team_name}: {e}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to fetch sprints: {str(e)}"
         )

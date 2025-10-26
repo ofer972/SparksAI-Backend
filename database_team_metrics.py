@@ -193,13 +193,14 @@ def get_team_active_sprint_metrics(team_name: str, conn: Connection = None) -> D
         raise e
 
 
-def get_active_sprints_with_total_issues_db(team_name: str, conn: Connection = None) -> List[Dict[str, Any]]:
+def get_sprints_with_total_issues_db(team_name: str, sprint_status: str = None, conn: Connection = None) -> List[Dict[str, Any]]:
     """
-    Get active sprints with their total issues count (excluding SYS sprints).
-    Used for sprint selection logic in sprint burndown service.
-    Copied exact logic from JiraDashboard-NEWUI project.
+    Get sprints with their total issues count for a specific team.
+    Used for sprint list endpoint and sprint selection logic.
     
     Args:
+        team_name (str): Team name
+        sprint_status (str): Sprint status filter (optional: "active", "closed", or None for all)
         conn (Connection): Database connection from FastAPI dependency
     
     Returns:
@@ -213,18 +214,42 @@ def get_active_sprints_with_total_issues_db(team_name: str, conn: Connection = N
                 s.name,
                 COUNT(i.issue_id) as total_issues
             FROM public.jira_sprints s
-            LEFT JOIN public.jira_issues i ON s.sprint_id = i.current_sprint_id
-            WHERE s.state = 'active'
-            AND i.team_name = :team_name
-            GROUP BY s.sprint_id, s.name
-            ORDER BY total_issues DESC, s.name ASC;
+            LEFT JOIN public.jira_issues i ON (
+                s.sprint_id = i.current_sprint_id AND i.team_name = :team_name
+                OR s.sprint_id = ANY(i.sprint_ids) AND i.team_name = :team_name
+            )
+            WHERE s.sprint_id IN (
+                SELECT DISTINCT current_sprint_id 
+                FROM public.jira_issues 
+                WHERE team_name = :team_name 
+                AND current_sprint_id IS NOT NULL
+                UNION
+                SELECT DISTINCT unnest(sprint_ids) as sprint_id
+                FROM public.jira_issues 
+                WHERE team_name = :team_name 
+                AND sprint_ids IS NOT NULL
+            )
         """
         
-        logger.info(f"Executing query to get active sprints with total issues count for team: {team_name}")
-        logger.info(f"SQL Query: {sql_query}")
-        logger.info(f"Parameters: team_name={team_name}")
+        # Add sprint status filter if provided
+        if sprint_status:
+            sql_query += " AND s.state = :sprint_status"
         
-        result = conn.execute(text(sql_query), {"team_name": team_name})
+        sql_query += """
+            GROUP BY s.sprint_id, s.name, s.end_date
+            ORDER BY s.end_date DESC
+            LIMIT 10;"""
+        
+        logger.info(f"Executing query to get sprints with total issues count for team: {team_name}")
+        logger.info(f"SQL Query: {sql_query}")
+        logger.info(f"Parameters: team_name={team_name}, sprint_status={sprint_status}")
+        
+        # Prepare parameters
+        params = {"team_name": team_name}
+        if sprint_status:
+            params["sprint_status"] = sprint_status
+        
+        result = conn.execute(text(sql_query), params)
         
         sprints = []
         for row in result:
