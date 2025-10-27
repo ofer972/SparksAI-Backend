@@ -34,15 +34,7 @@ def get_top_ai_recommendations(team_name: str, limit: int = 4, conn: Connection 
     try:
         # SECURE: Parameterized query prevents SQL injection
         sql_query = """
-            SELECT 
-                id,
-                team_name,
-                date,
-                action_text,
-                rational,
-                full_information,
-                priority,
-                status
+            SELECT *
             FROM public.recommendations
             WHERE team_name = :team_name
             ORDER BY 
@@ -69,16 +61,8 @@ def get_top_ai_recommendations(team_name: str, limit: int = 4, conn: Connection 
         # Convert rows to list of dictionaries
         recommendations = []
         for row in result:
-            recommendations.append({
-                'id': row.id,
-                'team_name': row.team_name,
-                'date': row.date,
-                'action_text': row.action_text,
-                'rational': row.rational,
-                'full_information': row.full_information,
-                'priority': row.priority,
-                'status': row.status
-            })
+            # Convert row to dictionary dynamically since we're using SELECT *
+            recommendations.append(dict(row._mapping))
         
         return recommendations
             
@@ -122,7 +106,7 @@ def get_top_ai_cards(team_name: str, limit: int = 4, conn: Connection = None) ->
                 FROM public.team_ai_summary_cards
                 WHERE team_name = :team_name
             )
-            SELECT id, date, team_name, card_name, card_type, priority, source, description, full_information
+            SELECT id, date, team_name, card_name, card_type, priority, source, description, full_information, information_json
             FROM ranked_cards
             WHERE rn = 1
             ORDER BY 
@@ -156,7 +140,8 @@ def get_top_ai_cards(team_name: str, limit: int = 4, conn: Connection = None) ->
                 'priority': row[5],
                 'source': row[6],
                 'description': row[7],
-                'full_information': row[8]
+                'full_information': row[8],
+                'information_json': row[9]
             })
         
         return ai_cards
