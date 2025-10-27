@@ -5,12 +5,13 @@ This service provides endpoints for managing and retrieving PI information.
 Uses FastAPI dependencies for clean connection management and SQL injection protection.
 """
 
-from fastapi import APIRouter, HTTPException, Depends
+from fastapi import APIRouter, HTTPException, Depends, Query
 from sqlalchemy import text
 from sqlalchemy.engine import Connection
-from typing import List, Dict, Any
+from typing import List, Dict, Any, Union
 import logging
 from database_connection import get_db_connection
+from database_pi import fetch_pi_predictability_data, fetch_pi_burndown_data, fetch_scope_changes_data
 import config
 
 logger = logging.getLogger(__name__)
@@ -66,4 +67,199 @@ async def get_pis(conn: Connection = Depends(get_db_connection)):
         raise HTTPException(
             status_code=500,
             detail=f"Failed to fetch PIs: {str(e)}"
+        )
+
+
+@pis_router.get("/pis/predictability")
+async def get_pi_predictability(
+    pi_names: Union[str, List[str]] = Query(..., description="Single PI name or array of PI names (comma-separated)"),
+    team_name: str = Query(None, description="Single team name filter (or 'ALL SUMMARY' for summary)"),
+    conn: Connection = Depends(get_db_connection)
+):
+    """
+    Get PI predictability report data for specified PI(s).
+    
+    Supports multiple PI names (array or comma-separated) and single team name.
+    Returns all columns from get_pi_predictability_by_team database function.
+    
+    Parameters:
+        pi_names: Single PI name or array of PI names (comma-separated)
+        team_name: Optional single team name for filtering (use 'ALL SUMMARY' for aggregated view)
+    
+    Returns:
+        JSON response with PI predictability data (all columns)
+    """
+    try:
+        # Handle pi_names parameter - can be comma-separated string or already a list
+        if not pi_names:
+            raise HTTPException(
+                status_code=400,
+                detail="pi_names parameter is required"
+            )
+        
+        # Convert to list if it's a string
+        if isinstance(pi_names, str):
+            # Check if it's comma-separated
+            if ',' in pi_names:
+                pi_names = [name.strip() for name in pi_names.split(',')]
+            else:
+                pi_names = [pi_names]
+        
+        logger.info(f"Fetching PI predictability data for PIs: {pi_names}")
+        logger.info(f"Team filter: {team_name if team_name else 'None'}")
+        
+        # Call database function (logic copied from old project)
+        predictability_data = fetch_pi_predictability_data(
+            pi_names=pi_names,
+            team_name=team_name,
+            conn=conn
+        )
+        
+        return {
+            "success": True,
+            "data": {
+                "predictability_data": predictability_data,
+                "count": len(predictability_data),
+                "pi_names": pi_names,
+                "team_name": team_name
+            },
+            "message": f"Retrieved PI predictability data for {len(predictability_data)} records"
+        }
+    
+    except HTTPException:
+        # Re-raise HTTP exceptions (like the 400 error above)
+        raise
+    except Exception as e:
+        logger.error(f"Error fetching PI predictability data: {e}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to fetch PI predictability data: {str(e)}"
+        )
+
+
+@pis_router.get("/pis/burndown")
+async def get_pi_burndown(
+    pi: str = Query(..., description="PI name (mandatory)"),
+    project: str = Query(None, description="Project key filter"),
+    issue_type: str = Query(None, description="Issue type filter"),
+    team: str = Query(None, description="Team name filter"),
+    conn: Connection = Depends(get_db_connection)
+):
+    """
+    Get PI burndown data for a specific PI.
+    
+    Parameters:
+        pi: PI name (mandatory)
+        project: Project key filter (optional)
+        issue_type: Issue type filter (optional, defaults to 'all')
+        team: Team name filter (optional)
+    
+    Returns:
+        JSON response with PI burndown data
+    """
+    try:
+        # Validate pi parameter (mandatory)
+        if not pi:
+            raise HTTPException(
+                status_code=400,
+                detail="pi parameter is required"
+            )
+        
+        logger.info(f"Fetching PI burndown data for PI: {pi}")
+        logger.info(f"Filters: project={project}, issue_type={issue_type}, team={team}")
+        
+        # Call database function (logic copied from old project)
+        burndown_data = fetch_pi_burndown_data(
+            pi_name=pi,
+            project_keys=project,
+            issue_type=issue_type,
+            team_names=team,
+            conn=conn
+        )
+        
+        return {
+            "success": True,
+            "data": {
+                "burndown_data": burndown_data,
+                "count": len(burndown_data),
+                "pi": pi,
+                "project": project,
+                "issue_type": issue_type,
+                "team": team
+            },
+            "message": f"Retrieved PI burndown data for {len(burndown_data)} records"
+        }
+    
+    except HTTPException:
+        # Re-raise HTTP exceptions (like the 400 error above)
+        raise
+    except Exception as e:
+        logger.error(f"Error fetching PI burndown data: {e}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to fetch PI burndown data: {str(e)}"
+        )
+
+
+@pis_router.get("/pis/scope-changes")
+async def get_scope_changes(
+    quarter: Union[str, List[str]] = Query(..., description="Quarter/PI name(s) to get scope changes for (can be single or multiple)"),
+    conn: Connection = Depends(get_db_connection)
+):
+    """
+    Get scope changes data for specified quarters/PIs.
+    
+    Parameters:
+        quarter: Quarter/PI name(s) - can be a single value or multiple (e.g., quarter=2025-Q1&quarter=2025-Q2)
+    
+    Returns:
+        JSON response with scope changes data
+    """
+    try:
+        # Validate quarter parameter (mandatory)
+        if not quarter:
+            raise HTTPException(
+                status_code=400,
+                detail="quarter parameter is required"
+            )
+        
+        # Normalize quarter to a list
+        if isinstance(quarter, str):
+            quarters = [quarter]
+        else:
+            quarters = quarter
+        
+        # Validate we have at least one quarter
+        if not quarters or len(quarters) == 0:
+            raise HTTPException(
+                status_code=400,
+                detail="At least one quarter must be provided"
+            )
+        
+        logger.info(f"Fetching scope changes data for quarters: {quarters}")
+        
+        # Call database function (logic copied from old project)
+        scope_data = fetch_scope_changes_data(
+            quarters=quarters,
+            conn=conn
+        )
+        
+        return {
+            "success": True,
+            "data": {
+                "scope_data": scope_data,
+                "count": len(scope_data),
+                "quarters": quarters
+            },
+            "message": f"Retrieved scope changes data for {len(scope_data)} records"
+        }
+    
+    except HTTPException:
+        # Re-raise HTTP exceptions (like the 400 error above)
+        raise
+    except Exception as e:
+        logger.error(f"Error fetching scope changes data: {e}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to fetch scope changes data: {str(e)}"
         )
