@@ -139,8 +139,9 @@ if __name__ == "__main__":
     if port is None:
         port = int(os.getenv("PORT", 8000))
     
-    # Use 5 workers by default (can override with WORKERS env var)
-    workers = int(os.getenv("WORKERS", 5))
+    # Use 1 worker by default (can override with WORKERS env var)
+    # Note: Multiple workers require app as import string (use: workers=1 for development)
+    workers = int(os.getenv("WORKERS", 1))
     
     print(f"Starting server on port {port} with {workers} worker(s)")
     uvicorn.run(app, host="0.0.0.0", port=port, workers=workers)
