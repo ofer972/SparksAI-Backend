@@ -14,6 +14,7 @@ WORK_ITEMS_TABLE = "jira_issues"  # Main table name - can be changed here
 RECOMMENDATIONS_TABLE = "recommendations"  # Recommendations table
 TEAM_AI_CARDS_TABLE = "team_ai_summary_cards"  # Team AI cards table
 PIS_TABLE = "pis"  # PIs table
+CLOSED_SPRINT_VIEW = "closed_sprint_summary"  # Closed sprint summary view
 
 # --- Service Configuration ---
 # Teams Service

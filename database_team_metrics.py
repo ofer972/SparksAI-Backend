@@ -266,6 +266,72 @@ def get_sprints_with_total_issues_db(team_name: str, sprint_status: str = None, 
         raise e
 
 
+def get_closed_sprints_data_db(team_name: str, months: int = 3, conn: Connection = None) -> List[Dict[str, Any]]:
+    """
+    Get closed sprints data for a specific team with detailed metrics.
+    Uses the closed_sprint_summary view to get comprehensive sprint completion data.
+    
+    Args:
+        team_name (str): Team name to filter by
+        months (int): Number of months to look back (1, 2, 3, 4, 6, 9)
+        conn (Connection): Database connection from FastAPI dependency
+    
+    Returns:
+        list: List of closed sprint dictionaries with detailed metrics
+    """
+    try:
+        # Calculate start date based on months parameter
+        from datetime import datetime, timedelta
+        start_date = datetime.now().date() - timedelta(days=months * 30)
+        
+        # SECURE: Parameterized query prevents SQL injection
+        sql_query = """
+            SELECT 
+                sprint_name,
+                start_date,
+                end_date,
+                completed_percentage,
+                issues_at_start,
+                issues_added,
+                issues_done,
+                issues_remaining,
+                sprint_goal
+            FROM closed_sprint_summary
+            WHERE team_name = :team_name 
+            AND end_date >= :start_date
+            ORDER BY end_date DESC
+        """
+        
+        logger.info(f"Executing query to get closed sprints data for team: {team_name}")
+        logger.info(f"SQL Query: {sql_query}")
+        logger.info(f"Parameters: team_name={team_name}, months={months}, start_date={start_date}")
+        
+        result = conn.execute(text(sql_query), {
+            "team_name": team_name,
+            "start_date": start_date.strftime("%Y-%m-%d")
+        })
+        
+        closed_sprints = []
+        for row in result:
+            closed_sprints.append({
+                'sprint_name': row[0],
+                'start_date': row[1],
+                'end_date': row[2],
+                'completed_percentage': float(row[3]) if row[3] else 0.0,
+                'issues_at_start': int(row[4]) if row[4] else 0,
+                'issues_added': int(row[5]) if row[5] else 0,
+                'issues_done': int(row[6]) if row[6] else 0,
+                'issues_remaining': int(row[7]) if row[7] else 0,
+                'sprint_goal': row[8] if row[8] else ""
+            })
+        
+        return closed_sprints
+            
+    except Exception as e:
+        logger.error(f"Error fetching closed sprints data for team {team_name}: {e}")
+        raise e
+
+
 def get_sprint_burndown_data_db(team_name: str, sprint_name: str, issue_type: str = "all", conn: Connection = None) -> List[Dict[str, Any]]:
     """
     Get sprint burndown data for a specific team and sprint.

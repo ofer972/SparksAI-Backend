@@ -16,7 +16,8 @@ from database_team_metrics import (
     get_team_count_in_progress,
     get_team_current_sprint_completion,
     get_sprints_with_total_issues_db,
-    get_sprint_burndown_data_db
+    get_sprint_burndown_data_db,
+    get_closed_sprints_data_db
 )
 import config
 
@@ -334,4 +335,66 @@ async def get_sprints(
         raise HTTPException(
             status_code=500,
             detail=f"Failed to fetch sprints: {str(e)}"
+        )
+
+
+@team_metrics_router.get("/team-metrics/closed-sprints")
+async def get_closed_sprints(
+    team_name: str = Query(..., description="Team name to get closed sprints for"),
+    months: int = Query(3, description="Number of months to look back (1, 2, 3, 4, 6, 9)", ge=1, le=12),
+    conn: Connection = Depends(get_db_connection)
+):
+    """
+    Get closed sprints data for a specific team with detailed completion metrics.
+    
+    This endpoint retrieves comprehensive sprint completion data including:
+    - Sprint name, start/end dates, and sprint goals
+    - Completion percentages and issue counts
+    - Issues planned, added, done, and remaining
+    
+    Parameters:
+    - team_name: Name of the team (required)
+    - months: Number of months to look back (optional, default: 3)
+      Valid values: 1, 2, 3, 4, 6, 9
+      Examples:
+        - months=1: Last 1 month
+        - months=3: Last 3 months (default)
+        - months=6: Last 6 months
+        - months=9: Last 9 months
+    
+    Returns:
+        JSON response with closed sprints list and metadata
+    """
+    try:
+        # Validate inputs
+        validated_team_name = validate_team_name(team_name)
+        
+        # Validate months parameter
+        if months not in [1, 2, 3, 4, 6, 9]:
+            raise HTTPException(
+                status_code=400, 
+                detail="Months parameter must be one of: 1, 2, 3, 4, 6, 9"
+            )
+        
+        # Get closed sprints from database function
+        closed_sprints = get_closed_sprints_data_db(validated_team_name, months, conn)
+        
+        return {
+            "success": True,
+            "data": {
+                "team_name": validated_team_name,
+                "months": months,
+                "closed_sprints": closed_sprints,
+                "count": len(closed_sprints)
+            },
+            "message": f"Retrieved {len(closed_sprints)} closed sprints for team '{validated_team_name}' (last {months} months)"
+        }
+    
+    except HTTPException:
+        raise # Re-raise FastAPI HTTPExceptions
+    except Exception as e:
+        logger.error(f"Error fetching closed sprints for team {validated_team_name}: {e}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to fetch closed sprints: {str(e)}"
         )
