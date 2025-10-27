@@ -9,6 +9,7 @@ Copied exact logic, SQL statements, and functions from JiraDashboard-NEWUI proje
 from sqlalchemy import text
 from sqlalchemy.engine import Connection
 from typing import Dict, Any, List
+from datetime import datetime, date, timedelta
 import logging
 import config
 
@@ -281,7 +282,6 @@ def get_closed_sprints_data_db(team_name: str, months: int = 3, conn: Connection
     """
     try:
         # Calculate start date based on months parameter
-        from datetime import datetime, timedelta
         start_date = datetime.now().date() - timedelta(days=months * 30)
         
         # SECURE: Parameterized query prevents SQL injection
@@ -433,4 +433,67 @@ def get_sprint_burndown_data_db(team_name: str, sprint_name: str, issue_type: st
             
     except Exception as e:
         logger.error(f"Error fetching sprint burndown data for team {team_name}, sprint {sprint_name}: {e}")
+        raise e
+
+
+def get_issues_trend_data_db(team_name: str, months: int = 6, issue_type: str = "all", conn: Connection = None) -> List[Dict[str, Any]]:
+    """
+    Get issues created and resolved over time for a specific team.
+    Uses the issues_created_and_resolved_over_time view.
+    Returns all columns from the view (pass-through).
+    
+    Args:
+        team_name (str): Team name to filter by
+        months (int): Number of months to look back (1, 2, 3, 4, 6, 9, 12) - default: 6
+        issue_type (str): Issue type filter (default: "all")
+        conn (Connection): Database connection from FastAPI dependency
+    
+    Returns:
+        list: List of trend data dictionaries directly from the view
+    """
+    try:
+        # Calculate start date based on months parameter
+        start_date = datetime.now().date() - timedelta(days=months * 30)
+        
+        # SECURE: Parameterized query prevents SQL injection
+        # We use SELECT * to pass through all columns from the view
+        sql_query = """
+            SELECT *
+            FROM issues_created_and_resolved_over_time
+            WHERE team_name = :team_name 
+            AND report_month >= :start_date
+        """
+        
+        # Add issue type filter if not "all"
+        if issue_type and issue_type != "all":
+            sql_query += " AND issue_type = :issue_type"
+        
+        sql_query += " ORDER BY report_month DESC;"
+        
+        logger.info(f"Executing query to get issues trend data for team: {team_name}")
+        logger.info(f"SQL Query: {sql_query}")
+        logger.info(f"Parameters: team_name={team_name}, months={months}, start_date={start_date}, issue_type={issue_type}")
+        
+        # Prepare parameters
+        params = {
+            "team_name": team_name,
+            "start_date": start_date.strftime("%Y-%m-%d")
+        }
+        
+        if issue_type and issue_type != "all":
+            params["issue_type"] = issue_type
+        
+        result = conn.execute(text(sql_query), params)
+        
+        # Convert rows to dictionaries - pass through all columns
+        trend_data = []
+        for row in result:
+            # Convert row to dictionary using row._mapping
+            row_dict = dict(row._mapping)
+            trend_data.append(row_dict)
+        
+        return trend_data
+            
+    except Exception as e:
+        logger.error(f"Error fetching issues trend data for team {team_name}: {e}")
         raise e

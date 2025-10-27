@@ -17,7 +17,8 @@ from database_team_metrics import (
     get_team_current_sprint_completion,
     get_sprints_with_total_issues_db,
     get_sprint_burndown_data_db,
-    get_closed_sprints_data_db
+    get_closed_sprints_data_db,
+    get_issues_trend_data_db
 )
 import config
 
@@ -397,4 +398,70 @@ async def get_closed_sprints(
         raise HTTPException(
             status_code=500,
             detail=f"Failed to fetch closed sprints: {str(e)}"
+        )
+
+
+@team_metrics_router.get("/team-metrics/issues-trend")
+async def get_issues_trend(
+    team_name: str = Query(..., description="Team name to get trend data for"),
+    months: int = Query(6, description="Number of months to look back (1, 2, 3, 4, 6, 9, 12)", ge=1, le=12),
+    issue_type: str = Query("all", description="Issue type filter (default: 'all')"),
+    conn: Connection = Depends(get_db_connection)
+):
+    """
+    Get issues created and resolved over time for a specific team.
+    
+    This endpoint retrieves trend data showing issues created, resolved, and cumulative open issues over time.
+    Returns all columns from the issues_created_and_resolved_over_time view.
+    
+    Parameters:
+    - team_name: Name of the team (required)
+    - months: Number of months to look back (optional, default: 6)
+      Valid values: 1, 2, 3, 4, 6, 9, 12
+      Note: Only values 1, 2, 3, 4, 6, 9 are accepted (will validate in code)
+    - issue_type: Issue type filter (optional, default: 'all')
+      Examples: 'Bug', 'Story', 'Task', 'all'
+    
+    Returns:
+        JSON response with trend data list and metadata
+    """
+    try:
+        # Validate inputs
+        validated_team_name = validate_team_name(team_name)
+        
+        # Validate months parameter (same validation as closed sprints)
+        if months not in [1, 2, 3, 4, 6, 9]:
+            raise HTTPException(
+                status_code=400, 
+                detail="Months parameter must be one of: 1, 2, 3, 4, 6, 9"
+            )
+        
+        # Validate issue_type
+        if not isinstance(issue_type, str):
+            raise HTTPException(status_code=400, detail="Issue type must be a string")
+        if issue_type.strip() == "":
+            issue_type = "all"
+        
+        # Get issues trend data from database function
+        trend_data = get_issues_trend_data_db(validated_team_name, months, issue_type, conn)
+        
+        return {
+            "success": True,
+            "data": {
+                "team_name": validated_team_name,
+                "months": months,
+                "issue_type": issue_type,
+                "trend_data": trend_data,
+                "count": len(trend_data)
+            },
+            "message": f"Retrieved issues trend data for team '{validated_team_name}' (last {months} months)"
+        }
+    
+    except HTTPException:
+        raise # Re-raise FastAPI HTTPExceptions
+    except Exception as e:
+        logger.error(f"Error fetching issues trend data for team {validated_team_name}: {e}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to fetch issues trend data: {str(e)}"
         )
