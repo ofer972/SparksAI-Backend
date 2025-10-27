@@ -1,9 +1,10 @@
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, Response
 import os
 import logging
 import base64
+import time
 
 # Import service modules
 from teams_service import teams_router
@@ -33,6 +34,20 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# Add timing middleware to log request/response times
+@app.middleware("http")
+async def timing_middleware(request: Request, call_next):
+    start_time = time.time()
+    logger.info(f"REQUEST: {request.method} {request.url.path} - START")
+    
+    response = await call_next(request)
+    
+    end_time = time.time()
+    duration = end_time - start_time
+    logger.info(f"REQUEST: {request.method} {request.url.path} - END (Duration: {duration:.3f}s)")
+    
+    return response
 
 # Include service routers
 app.include_router(teams_router, prefix="/api/v1", tags=["teams"])
