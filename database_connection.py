@@ -91,6 +91,15 @@ def get_db_engine() -> Optional[create_engine]:
                 with engine.connect() as connection:
                     connection.execute(text("SELECT 1"))
                 logger.info("✅ DATABASE: New engine created and connection tested successfully.")
+                
+                # Initialize database tables on new engine creation (not from pool)
+                try:
+                    from database_table_creation import initialize_database_tables_with_engine
+                    initialize_database_tables_with_engine(engine)
+                except Exception as table_error:
+                    logger.warning(f"Database table initialization failed: {table_error}")
+                    # Continue anyway - tables might already exist
+                
                 logger.info("✅ DATABASE: Engine cached for future reuse (pool connections available)")
                 # Cache the engine and return it
                 _cached_engine = engine
