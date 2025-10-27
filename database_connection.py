@@ -8,7 +8,8 @@ and related utilities. Uses the exact same pattern as JiraDashboard-NEWUI.
 import configparser
 import os
 import time
-from sqlalchemy import create_engine, text
+from sqlalchemy import create_engine, text, event
+from sqlalchemy.engine import Engine
 from typing import Optional
 import logging
 
@@ -16,6 +17,21 @@ logger = logging.getLogger(__name__)
 
 # Global engine cache to prevent multiple engine creation
 _cached_engine = None
+
+# Add SQL query timing event listeners
+@event.listens_for(Engine, "before_cursor_execute")
+def receive_before_cursor_execute(conn, cursor, statement, parameters, context, executemany):
+    """Log SQL queries before execution"""
+    context._query_start_time = time.time()
+
+@event.listens_for(Engine, "after_cursor_execute")
+def receive_after_cursor_execute(conn, cursor, statement, parameters, context, executemany):
+    """Log SQL query execution time"""
+    if hasattr(context, '_query_start_time'):
+        total_time = time.time() - context._query_start_time
+        # Truncate long queries for readability
+        query = statement if len(statement) < 200 else statement[:200] + "..."
+        logger.info(f"SQL: {query} - EXECUTE (Duration: {total_time:.3f}s)")
 
 
 def get_db_engine() -> Optional[create_engine]:
