@@ -50,7 +50,6 @@ def get_top_ai_recommendations(team_name: str, limit: int = 4, conn: Connection 
         """
         
         logger.info(f"Executing query to get top AI recommendations for team: {team_name}")
-        logger.info(f"SQL Query: {sql_query}")
         logger.info(f"Parameters: team_name={team_name}, limit={limit}")
         
         result = conn.execute(text(sql_query), {
@@ -120,7 +119,6 @@ def get_top_ai_cards(team_name: str, limit: int = 4, conn: Connection = None) ->
         """
         
         logger.info(f"Executing query to get top AI cards for team: {team_name}")
-        logger.info(f"SQL Query: {sql_query}")
         logger.info(f"Parameters: team_name={team_name}, limit={limit}")
         
         result = conn.execute(text(sql_query), {
@@ -173,7 +171,6 @@ def get_all_settings_db(conn: Connection = None) -> Dict[str, str]:
         """
         
         logger.info(f"Executing query to get all global settings")
-        logger.info(f"SQL Query: {sql_query}")
         
         result = conn.execute(text(sql_query))
         

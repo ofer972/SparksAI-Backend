@@ -57,7 +57,6 @@ async def get_team_names(conn: Connection = Depends(get_db_connection)):
         """)
         
         logger.info(f"Executing query to get distinct team names from work items table")
-        logger.info(f"SQL Query: {query}")
         
         # Execute query with connection from dependency
         result = conn.execute(query)

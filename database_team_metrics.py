@@ -41,7 +41,6 @@ def get_team_avg_sprint_metrics(team_name: str, sprint_count: int = 5, conn: Con
         """
         
         logger.info(f"Executing query to get average sprint metrics for team: {team_name}")
-        logger.info(f"SQL Query: {sql_query}")
         logger.info(f"Parameters: sprint_count={sprint_count}, team_name={team_name}")
         
         result = conn.execute(text(sql_query), {
@@ -91,7 +90,6 @@ def get_team_count_in_progress(team_name: str, conn: Connection = None) -> Dict[
         """
         
         logger.info(f"Executing query to get count in progress for team: {team_name}")
-        logger.info(f"SQL Query: {sql_query}")
         logger.info(f"Parameters: team_name={team_name}")
         
         result = conn.execute(text(sql_query), {"team_name": team_name})
@@ -174,7 +172,6 @@ def get_team_active_sprint_metrics(team_name: str, conn: Connection = None) -> D
         """
         
         logger.info(f"Executing query to get active sprint metrics for team: {team_name}")
-        logger.info(f"SQL Query: {sql_query}")
         logger.info(f"Parameters: team_name={team_name}")
         
         result = conn.execute(text(sql_query), {"team_name": team_name})
@@ -242,7 +239,6 @@ def get_sprints_with_total_issues_db(team_name: str, sprint_status: str = None, 
             LIMIT 10;"""
         
         logger.info(f"Executing query to get sprints with total issues count for team: {team_name}")
-        logger.info(f"SQL Query: {sql_query}")
         logger.info(f"Parameters: team_name={team_name}, sprint_status={sprint_status}")
         
         # Prepare parameters
@@ -303,7 +299,6 @@ def get_closed_sprints_data_db(team_name: str, months: int = 3, conn: Connection
         """
         
         logger.info(f"Executing query to get closed sprints data for team: {team_name}")
-        logger.info(f"SQL Query: {sql_query}")
         logger.info(f"Parameters: team_name={team_name}, months={months}, start_date={start_date}")
         
         result = conn.execute(text(sql_query), {
@@ -354,7 +349,6 @@ def get_sprint_burndown_data_db(team_name: str, sprint_name: str, issue_type: st
         """
         
         logger.info(f"Executing query to get sprint burndown data for team: {team_name}, sprint: {sprint_name}")
-        logger.info(f"SQL Query: {sql_query}")
         logger.info(f"Parameters: sprint_name={sprint_name}, issue_type={issue_type}, team_name={team_name}")
         
         result = conn.execute(text(sql_query), {
@@ -406,7 +400,6 @@ def get_sprint_burndown_data_db(team_name: str, sprint_name: str, issue_type: st
         """
         
         logger.info(f"Executing query to get sprint burndown data for team: {team_name}, sprint: {sprint_name}")
-        logger.info(f"SQL Query: {sql_query}")
         logger.info(f"Parameters: sprint_name={sprint_name}, issue_type={issue_type}, team_name={team_name}")
         
         result = conn.execute(text(sql_query), {
@@ -471,7 +464,6 @@ def get_issues_trend_data_db(team_name: str, months: int = 6, issue_type: str = 
         sql_query += " ORDER BY report_month DESC;"
         
         logger.info(f"Executing query to get issues trend data for team: {team_name}")
-        logger.info(f"SQL Query: {sql_query}")
         logger.info(f"Parameters: team_name={team_name}, months={months}, start_date={start_date}, issue_type={issue_type}")
         
         # Prepare parameters
