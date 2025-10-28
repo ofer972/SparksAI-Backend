@@ -98,3 +98,123 @@ async def get_team_ai_cards(
             detail=f"Failed to fetch AI cards: {str(e)}"
         )
 
+@team_ai_cards_router.get("/team-ai-cards")
+async def get_team_ai_cards_collection(conn: Connection = Depends(get_db_connection)):
+    """
+    Get the latest 100 team AI summary cards from team_ai_summary_cards table.
+    Uses parameterized queries to prevent SQL injection.
+    
+    Returns:
+        JSON response with list of team AI cards and count
+    """
+    try:
+        # SECURE: Parameterized query prevents SQL injection
+        # Only return selected fields for the collection endpoint
+        query = text(f"""
+            SELECT 
+                id,
+                date,
+                team_name,
+                card_name,
+                priority,
+                description,
+                source_job_id
+            FROM {config.TEAM_AI_CARDS_TABLE}
+            ORDER BY id DESC 
+            LIMIT 100
+        """)
+        
+        logger.info(f"Executing query to get latest 100 team AI cards from {config.TEAM_AI_CARDS_TABLE}")
+        
+        # Execute query with connection from dependency
+        result = conn.execute(query)
+        rows = result.fetchall()
+        
+        # Convert rows to list of dictionaries
+        cards = []
+        for row in rows:
+            # Truncate description to first 200 characters with ellipsis when longer
+            description_text = row[5]
+            if isinstance(description_text, str) and len(description_text) > 200:
+                description_text = description_text[:200] + "..."
+
+            card_dict = {
+                "id": row[0],
+                "date": row[1],
+                "team_name": row[2],
+                "card_name": row[3],
+                "priority": row[4],
+                "description": description_text,
+                "source_job_id": row[6]
+            }
+            cards.append(card_dict)
+        
+        return {
+            "success": True,
+            "data": {
+                "cards": cards,
+                "count": len(cards)
+            },
+            "message": f"Retrieved {len(cards)} team AI summary cards"
+        }
+    
+    except Exception as e:
+        logger.error(f"Error fetching team AI cards: {e}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to fetch team AI cards: {str(e)}"
+        )
+
+@team_ai_cards_router.get("/team-ai-cards/{id}")
+async def get_team_ai_card(id: int, conn: Connection = Depends(get_db_connection)):
+    """
+    Get a single team AI summary card by ID from team_ai_summary_cards table.
+    Uses parameterized queries to prevent SQL injection.
+    
+    Args:
+        id: The ID of the team AI card to retrieve
+    
+    Returns:
+        JSON response with single team AI card or 404 if not found
+    """
+    try:
+        # SECURE: Parameterized query prevents SQL injection
+        query = text(f"""
+            SELECT * 
+            FROM {config.TEAM_AI_CARDS_TABLE} 
+            WHERE id = :id
+        """)
+        
+        logger.info(f"Executing query to get team AI card with ID {id} from {config.TEAM_AI_CARDS_TABLE}")
+        
+        # Execute query with connection from dependency
+        result = conn.execute(query, {"id": id})
+        row = result.fetchone()
+        
+        if not row:
+            raise HTTPException(
+                status_code=404,
+                detail=f"Team AI card with ID {id} not found"
+            )
+        
+        # Convert row to dictionary - get all fields from database
+        card = dict(row._mapping)
+        
+        return {
+            "success": True,
+            "data": {
+                "card": card
+            },
+            "message": f"Retrieved team AI card with ID {id}"
+        }
+    
+    except HTTPException:
+        # Re-raise HTTP exceptions (like the 404 error above)
+        raise
+    except Exception as e:
+        logger.error(f"Error fetching team AI card {id}: {e}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to fetch team AI card: {str(e)}"
+        )
+
