@@ -48,7 +48,7 @@ def validate_limit(limit: int) -> int:
     
     return limit
 
-@team_ai_cards_router.get("/team-ai-cards/getCards")
+@team_ai_cards_router.get("/team-ai-cards/getTopCards")
 async def get_team_ai_cards(
     team_name: str = Query(..., description="Team name to get AI cards for"),
     limit: int = Query(4, description="Number of AI cards to return (default: 4, max: 50)"),

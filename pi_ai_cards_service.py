@@ -49,7 +49,7 @@ def validate_limit(limit: int) -> int:
     
     return limit
 
-@pi_ai_cards_router.get("/pi-ai-cards/getCards")
+@pi_ai_cards_router.get("/pi-ai-cards/getTopCards")
 async def get_pi_ai_cards(
     pi: str = Query(..., description="PI name to get PI AI cards for"),
     limit: int = Query(4, description="Number of PI AI cards to return (default: 4, max: 50)"),
