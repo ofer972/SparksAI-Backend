@@ -118,22 +118,8 @@ async def get_agent_job(job_id: int, conn: Connection = Depends(get_db_connectio
                 detail=f"Agent job with ID {job_id} not found"
             )
         
-        # Convert row to dictionary
-        job = {
-            "job_id": row[0],
-            "job_type": row[1],
-            "status": row[2],
-            "claimed_by": row[3],
-            "claimed_at": row[4],
-            "job_data": row[5],
-            "result": row[6],
-            "error": row[7],
-            "created_at": row[8],
-            "completed_at": row[9],
-            "updated_at": row[10],
-            "team_name": row[11],
-            "input_sent": row[12]
-        }
+        # Convert row to dictionary - get all fields from database
+        job = dict(row._mapping)
         
         return {
             "success": True,
