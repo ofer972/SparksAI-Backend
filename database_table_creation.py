@@ -281,6 +281,7 @@ def create_agent_jobs_table_if_not_exists(engine=None) -> bool:
                     job_type VARCHAR(100) NOT NULL,
                     status VARCHAR(50) NOT NULL DEFAULT 'pending',
                     team_name VARCHAR(255),
+                    pi VARCHAR(50),
                     parameters JSONB,
                     result_data JSONB,
                     error_message TEXT,
@@ -429,6 +430,67 @@ def create_pi_ai_summary_cards_table_if_not_exists(engine=None) -> bool:
     except Exception as e:
         print(f"Error creating pi_ai_summary_cards table: {e}")
         traceback.print_exc()
+        return False
+
+
+def create_ai_summary_table_if_not_exists(engine=None) -> bool:
+    """Create ai_summary table if it doesn't exist"""
+    import database_connection
+    
+    if engine is None:
+        engine = database_connection.get_db_engine()
+    if engine is None:
+        print("Warning: Database engine not available, cannot create ai_summary table")
+        return False
+    
+    try:
+        with engine.connect() as conn:
+            # Check if table exists
+            check_table_sql = """
+            SELECT EXISTS (
+                SELECT FROM information_schema.tables 
+                WHERE table_schema = 'public' 
+                AND table_name = 'ai_summary'
+            );
+            """
+            result = conn.execute(text(check_table_sql))
+            table_exists = result.scalar()
+            
+            if not table_exists:
+                print("Creating ai_summary table...")
+                create_table_sql = """
+                CREATE TABLE public.ai_summary (
+                    id SERIAL PRIMARY KEY,
+                    date DATE NOT NULL,
+                    team_name VARCHAR(255) NOT NULL,
+                    card_name VARCHAR(255) NOT NULL,
+                    card_type VARCHAR(100) NOT NULL,
+                    priority VARCHAR(50) NOT NULL,
+                    source VARCHAR(255),
+                    source_job_id INTEGER,
+                    description TEXT NOT NULL,
+                    full_information TEXT,
+                    information_json TEXT,
+                    pi VARCHAR(255) NOT NULL,
+                    created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+                    updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+                    UNIQUE (date, team_name, card_name, pi)
+                );
+                
+                CREATE INDEX idx_ai_summary_team_date ON public.ai_summary(team_name, date DESC);
+                CREATE INDEX idx_ai_summary_priority ON public.ai_summary(priority);
+                CREATE INDEX idx_ai_summary_pi ON public.ai_summary(pi);
+                """
+                conn.execute(text(create_table_sql))
+                conn.commit()
+                print("ai_summary table created successfully")
+            else:
+                print("ai_summary table already exists")
+            
+            return True
+            
+    except Exception as e:
+        print(f"Error creating ai_summary table: {e}")
         return False
 
 
@@ -682,6 +744,7 @@ def initialize_database_tables_with_engine(engine) -> None:
     create_global_settings_table_if_not_exists(engine)
     create_team_ai_summary_cards_table_if_not_exists(engine)
     create_pi_ai_summary_cards_table_if_not_exists(engine)
+    create_ai_summary_table_if_not_exists(engine)
     create_agent_jobs_table_if_not_exists(engine)
     add_input_sent_column_to_agent_jobs(engine)
     create_transcripts_table_if_not_exists(engine)
@@ -703,6 +766,7 @@ def initialize_database_tables() -> None:
     create_global_settings_table_if_not_exists()
     create_team_ai_summary_cards_table_if_not_exists()
     create_pi_ai_summary_cards_table_if_not_exists()
+    create_ai_summary_table_if_not_exists()
     create_agent_jobs_table_if_not_exists()
     add_input_sent_column_to_agent_jobs()  # Temporary function to add input_sent column
     create_transcripts_table_if_not_exists()

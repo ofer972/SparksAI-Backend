@@ -75,7 +75,7 @@ async def get_pi_ai_cards(
         validated_pi_name = validate_pi_name(pi)
         validated_limit = validate_limit(limit)
         
-        # Get PI AI cards using direct SQL query (filter by quarter field which contains PI name)
+        # Get PI AI cards using direct SQL query (filter by pi field)
         query = text(f"""
             WITH ranked_cards AS (
                 SELECT *,
@@ -91,7 +91,7 @@ async def get_pi_ai_cards(
                             date DESC
                     ) as rn
                 FROM {config.PI_AI_CARDS_TABLE}
-                WHERE quarter = :pi_name
+                WHERE pi = :pi_name
             )
             SELECT *
             FROM ranked_cards
@@ -142,7 +142,7 @@ async def get_pi_ai_cards(
 @pi_ai_cards_router.get("/pi-ai-cards")
 async def get_pi_ai_cards_collection(conn: Connection = Depends(get_db_connection)):
     """
-    Get the latest 100 PI AI summary cards from pi_ai_summary_cards table.
+    Get the latest 100 PI AI summary cards from ai_summary table.
     Uses parameterized queries to prevent SQL injection.
     
     Returns:
@@ -156,11 +156,12 @@ async def get_pi_ai_cards_collection(conn: Connection = Depends(get_db_connectio
                 id,
                 date,
                 team_name,
-                quarter,
+                card_name,
                 card_type,
                 priority,
                 description,
-                source
+                source,
+                pi
             FROM {config.PI_AI_CARDS_TABLE}
             ORDER BY id DESC 
             LIMIT 100
@@ -184,11 +185,12 @@ async def get_pi_ai_cards_collection(conn: Connection = Depends(get_db_connectio
                 "id": row[0],
                 "date": row[1],
                 "team_name": row[2],
-                "quarter": row[3],
+                "card_name": row[3],
                 "card_type": row[4],
                 "priority": row[5],
                 "description": description_text,
-                "source": row[7]
+                "source": row[7],
+                "pi": row[8]
             }
             cards.append(card_dict)
         
@@ -211,7 +213,7 @@ async def get_pi_ai_cards_collection(conn: Connection = Depends(get_db_connectio
 @pi_ai_cards_router.get("/pi-ai-cards/{id}")
 async def get_pi_ai_card(id: int, conn: Connection = Depends(get_db_connection)):
     """
-    Get a single PI AI summary card by ID from pi_ai_summary_cards table.
+    Get a single PI AI summary card by ID from ai_summary table.
     Uses parameterized queries to prevent SQL injection.
     
     Args:

@@ -17,8 +17,9 @@ PIS_TABLE = "pis"  # PIs table
 CLOSED_SPRINT_VIEW = "closed_sprint_summary"  # Closed sprint summary view
 AGENT_JOBS_TABLE = "agent_jobs"  # Agent jobs table
 SECURITY_LOGS_TABLE = "security_logs"  # Security logs table
-PI_AI_CARDS_TABLE = "pi_ai_summary_cards"  # PI AI cards table
+PI_AI_CARDS_TABLE = "ai_summary"  # PI AI cards table
 TRANSCRIPTS_TABLE = "transcripts"  # Transcripts table
+AI_SUMMARY_TABLE = "ai_summary"  # AI summary table
 
 # --- Service Configuration ---
 # Teams Service
