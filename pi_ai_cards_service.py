@@ -1,0 +1,262 @@
+"""
+PI AI Cards Service - REST API endpoints for PI AI summary card-related operations.
+
+This service provides endpoints for managing and retrieving PI AI summary card information.
+Uses FastAPI dependencies for clean connection management and SQL injection protection.
+"""
+
+from fastapi import APIRouter, HTTPException, Depends, Query
+from sqlalchemy import text
+from sqlalchemy.engine import Connection
+from typing import List, Dict, Any
+import logging
+import re
+from database_connection import get_db_connection
+import config
+
+logger = logging.getLogger(__name__)
+
+pi_ai_cards_router = APIRouter()
+
+def validate_pi_name(pi_name: str) -> str:
+    """
+    Validate and sanitize PI name to prevent SQL injection.
+    Only allows alphanumeric characters, spaces, hyphens, and underscores.
+    """
+    if not pi_name or not isinstance(pi_name, str):
+        raise HTTPException(status_code=400, detail="PI name is required and must be a string")
+    
+    # Remove any potentially dangerous characters
+    sanitized = re.sub(r'[^a-zA-Z0-9\s\-_]', '', pi_name.strip())
+    
+    if not sanitized:
+        raise HTTPException(status_code=400, detail="PI name contains invalid characters")
+    
+    if len(sanitized) > 100:  # Reasonable length limit
+        raise HTTPException(status_code=400, detail="PI name is too long (max 100 characters)")
+    
+    return sanitized
+
+def validate_limit(limit: int) -> int:
+    """
+    Validate limit parameter to prevent abuse.
+    """
+    if limit < 1:
+        raise HTTPException(status_code=400, detail="Limit must be at least 1")
+    
+    if limit > 50:  # Reasonable upper limit
+        raise HTTPException(status_code=400, detail="Limit cannot exceed 50")
+    
+    return limit
+
+@pi_ai_cards_router.get("/pi-ai-cards/getCards")
+async def get_pi_ai_cards(
+    pi: str = Query(..., description="PI name to get PI AI cards for"),
+    limit: int = Query(4, description="Number of PI AI cards to return (default: 4, max: 50)"),
+    conn: Connection = Depends(get_db_connection)
+):
+    """
+    Get PI AI summary cards for a specific PI.
+    
+    Returns the most recent + highest priority card for each type (max 1 per type).
+    Cards are ordered by:
+    1. Priority (Critical > High > Medium)
+    2. Date (newest first)
+    
+    Args:
+        pi: Name of the PI
+        limit: Number of PI AI cards to return (default: 4)
+    
+    Returns:
+        JSON response with PI AI cards list and metadata
+    """
+    try:
+        # Validate inputs
+        validated_pi_name = validate_pi_name(pi)
+        validated_limit = validate_limit(limit)
+        
+        # Get PI AI cards using direct SQL query (filter by quarter field which contains PI name)
+        query = text(f"""
+            WITH ranked_cards AS (
+                SELECT *,
+                    ROW_NUMBER() OVER (
+                        PARTITION BY card_type 
+                        ORDER BY 
+                            CASE priority 
+                                WHEN 'Critical' THEN 1 
+                                WHEN 'High' THEN 2 
+                                WHEN 'Medium' THEN 3 
+                                ELSE 4 
+                            END,
+                            date DESC
+                    ) as rn
+                FROM {config.PI_AI_CARDS_TABLE}
+                WHERE quarter = :pi_name
+            )
+            SELECT *
+            FROM ranked_cards
+            WHERE rn = 1
+            ORDER BY 
+                CASE priority 
+                    WHEN 'Critical' THEN 1 
+                    WHEN 'High' THEN 2 
+                    WHEN 'Medium' THEN 3 
+                    ELSE 4 
+                END,
+                date DESC
+            LIMIT :limit
+        """)
+        
+        logger.info(f"Executing query to get PI AI cards for PI '{validated_pi_name}'")
+        
+        result = conn.execute(query, {"pi_name": validated_pi_name, "limit": validated_limit})
+        rows = result.fetchall()
+        
+        # Convert rows to list of dictionaries
+        ai_cards = []
+        for row in rows:
+            card_dict = dict(row._mapping)
+            ai_cards.append(card_dict)
+        
+        return {
+            "success": True,
+            "data": {
+                "ai_cards": ai_cards,
+                "count": len(ai_cards),
+                "pi": validated_pi_name,
+                "limit": validated_limit
+            },
+            "message": f"Retrieved {len(ai_cards)} PI AI cards for PI '{validated_pi_name}'"
+        }
+    
+    except HTTPException:
+        # Re-raise HTTP exceptions (validation errors)
+        raise
+    except Exception as e:
+        logger.error(f"Error fetching PI AI cards for PI {pi}: {e}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to fetch PI AI cards: {str(e)}"
+        )
+
+@pi_ai_cards_router.get("/pi-ai-cards")
+async def get_pi_ai_cards_collection(conn: Connection = Depends(get_db_connection)):
+    """
+    Get the latest 100 PI AI summary cards from pi_ai_summary_cards table.
+    Uses parameterized queries to prevent SQL injection.
+    
+    Returns:
+        JSON response with list of PI AI cards and count
+    """
+    try:
+        # SECURE: Parameterized query prevents SQL injection
+        # Only return selected fields for the collection endpoint
+        query = text(f"""
+            SELECT 
+                id,
+                date,
+                team_name,
+                quarter,
+                card_type,
+                priority,
+                description,
+                source
+            FROM {config.PI_AI_CARDS_TABLE}
+            ORDER BY id DESC 
+            LIMIT 100
+        """)
+        
+        logger.info(f"Executing query to get latest 100 PI AI cards from {config.PI_AI_CARDS_TABLE}")
+        
+        # Execute query with connection from dependency
+        result = conn.execute(query)
+        rows = result.fetchall()
+        
+        # Convert rows to list of dictionaries
+        cards = []
+        for row in rows:
+            # Truncate description to first 200 characters with ellipsis when longer
+            description_text = row[6]
+            if isinstance(description_text, str) and len(description_text) > 200:
+                description_text = description_text[:200] + "..."
+
+            card_dict = {
+                "id": row[0],
+                "date": row[1],
+                "team_name": row[2],
+                "quarter": row[3],
+                "card_type": row[4],
+                "priority": row[5],
+                "description": description_text,
+                "source": row[7]
+            }
+            cards.append(card_dict)
+        
+        return {
+            "success": True,
+            "data": {
+                "cards": cards,
+                "count": len(cards)
+            },
+            "message": f"Retrieved {len(cards)} PI AI summary cards"
+        }
+    
+    except Exception as e:
+        logger.error(f"Error fetching PI AI cards: {e}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to fetch PI AI cards: {str(e)}"
+        )
+
+@pi_ai_cards_router.get("/pi-ai-cards/{id}")
+async def get_pi_ai_card(id: int, conn: Connection = Depends(get_db_connection)):
+    """
+    Get a single PI AI summary card by ID from pi_ai_summary_cards table.
+    Uses parameterized queries to prevent SQL injection.
+    
+    Args:
+        id: The ID of the PI AI card to retrieve
+    
+    Returns:
+        JSON response with single PI AI card or 404 if not found
+    """
+    try:
+        # SECURE: Parameterized query prevents SQL injection
+        query = text(f"""
+            SELECT * 
+            FROM {config.PI_AI_CARDS_TABLE} 
+            WHERE id = :id
+        """)
+        
+        logger.info(f"Executing query to get PI AI card with ID {id} from {config.PI_AI_CARDS_TABLE}")
+        
+        # Execute query with connection from dependency
+        result = conn.execute(query, {"id": id})
+        row = result.fetchone()
+        
+        if not row:
+            raise HTTPException(
+                status_code=404,
+                detail=f"PI AI card with ID {id} not found"
+            )
+        
+        # Convert row to dictionary - get all fields from database
+        card = dict(row._mapping)
+        
+        return {
+            "success": True,
+            "data": {
+                "card": card
+            },
+            "message": f"Retrieved PI AI card with ID {id}"
+        }
+    
+    except HTTPException:
+        # Re-raise HTTP exceptions (like the 404 error above)
+        raise
+    except Exception as e:
+        logger.error(f"Error fetching PI AI card {id}: {e}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to fetch PI AI card: {str(e)}"
+        )
