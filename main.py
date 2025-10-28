@@ -22,6 +22,8 @@ from transcripts_service import transcripts_router
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
+# Simple comment for testing commit and push
+
 app = FastAPI(
     title="SparksAI Backend Services",
     description="Backend API services for SparksAI - REST API endpoints for various services",
