@@ -16,6 +16,7 @@ TEAM_AI_CARDS_TABLE = "team_ai_summary_cards"  # Team AI cards table
 PIS_TABLE = "pis"  # PIs table
 CLOSED_SPRINT_VIEW = "closed_sprint_summary"  # Closed sprint summary view
 AGENT_JOBS_TABLE = "agent_jobs"  # Agent jobs table
+SECURITY_LOGS_TABLE = "security_logs"  # Security logs table
 
 # --- Service Configuration ---
 # Teams Service
@@ -32,6 +33,8 @@ SETTINGS_SERVICE_PREFIX = "/settings"
 PIS_SERVICE_PREFIX = "/pis"
 # Agent Jobs Service
 AGENT_JOBS_SERVICE_PREFIX = "/agent-jobs"
+# Security Logs Service
+SECURITY_LOGS_SERVICE_PREFIX = "/security-logs"
 
 # --- Error Handling Configuration ---
 DEFAULT_ERROR_MESSAGE = "An unexpected error occurred"
