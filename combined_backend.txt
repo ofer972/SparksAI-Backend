@@ -1,0 +1,5092 @@
+ 
+========================================== 
+File: agent_jobs_service.py 
+========================================== 
+ 
+"""
+Agent Jobs Service - REST API endpoints for agent job-related operations.
+
+This service provides endpoints for managing, creating, and cancelling agent jobs.
+Uses FastAPI dependencies for clean connection management and SQL injection protection.
+"""
+
+from fastapi import APIRouter, HTTPException, Depends
+from sqlalchemy import text
+from sqlalchemy.engine import Connection
+from typing import List, Dict, Any
+import logging
+from pydantic import BaseModel
+from database_connection import get_db_connection
+import config
+
+logger = logging.getLogger(__name__)
+
+agent_jobs_router = APIRouter()
+
+
+class TeamJobCreateRequest(BaseModel):
+    job_type: str
+    team_name: str
+
+
+class PIJobCreateRequest(BaseModel):
+    job_type: str
+    pi: str
+
+
+def validate_team_exists(team_name: str, conn: Connection):
+    """Validate that the team exists in the database by checking jira_issues table"""
+    try:
+        query = text(f"""
+            SELECT COUNT(*) 
+            FROM {config.WORK_ITEMS_TABLE} 
+            WHERE team_name = :team_name 
+            AND team_name IS NOT NULL 
+            AND team_name != ''
+        """)
+        result = conn.execute(query, {"team_name": team_name})
+        count = result.scalar()
+        
+        if count == 0:
+            raise HTTPException(status_code=404, detail=f"Team '{team_name}' not found")
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error validating team existence: {e}")
+        raise HTTPException(status_code=500, detail="Error validating team")
+
+
+def validate_pi_exists(pi: str, conn: Connection):
+    """Validate that the PI exists in the database by checking pis table"""
+    try:
+        query = text(f"""
+            SELECT COUNT(*) 
+            FROM {config.PIS_TABLE} 
+            WHERE pi_name = :pi
+        """)
+        result = conn.execute(query, {"pi": pi})
+        count = result.scalar()
+        
+        if count == 0:
+            raise HTTPException(status_code=404, detail=f"PI '{pi}' not found")
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error validating PI existence: {e}")
+        raise HTTPException(status_code=500, detail="Error validating PI")
+
+
+def validate_team_job_request(job_type: str, team_name: str, conn: Connection):
+    """Validate team job creation request"""
+    if not job_type or not job_type.strip():
+        raise HTTPException(status_code=400, detail="job_type is required")
+    
+    if not team_name or not team_name.strip():
+        raise HTTPException(status_code=400, detail="team_name is required")
+    
+    # Validate team exists in database
+    validate_team_exists(team_name, conn)
+
+
+def validate_pi_job_request(job_type: str, pi: str, conn: Connection):
+    """Validate PI job creation request"""
+    if not job_type or not job_type.strip():
+        raise HTTPException(status_code=400, detail="job_type is required")
+    
+    if not pi or not pi.strip():
+        raise HTTPException(status_code=400, detail="pi is required")
+    
+    # Validate PI exists in database
+    validate_pi_exists(pi, conn)
+
+@agent_jobs_router.get("/agent-jobs")
+async def get_agent_jobs(conn: Connection = Depends(get_db_connection)):
+    """
+    Get the latest 100 agent jobs from agent_jobs table.
+    Uses parameterized queries to prevent SQL injection.
+    
+    Returns:
+        JSON response with list of agent jobs and count
+    """
+    try:
+        # SECURE: Parameterized query prevents SQL injection
+        # Only return selected fields for the collection endpoint
+        query = text(f"""
+            SELECT 
+                job_id,
+                job_type,
+                team_name,
+                status,
+                claimed_by,
+                claimed_at,
+                result,
+                error
+            FROM {config.AGENT_JOBS_TABLE}
+            ORDER BY job_id DESC 
+            LIMIT 100
+        """)
+        
+        logger.info(f"Executing query to get latest 100 agent jobs from {config.AGENT_JOBS_TABLE}")
+        
+        # Execute query with connection from dependency
+        result = conn.execute(query)
+        rows = result.fetchall()
+        
+        # Convert rows to list of dictionaries
+        jobs = []
+        for row in rows:
+            # Truncate result to first 200 characters with ellipsis when longer
+            result_text = row[6]
+            if isinstance(result_text, str) and len(result_text) > 200:
+                result_text = result_text[:200] + "..."
+
+            job_dict = {
+                "job_id": row[0],
+                "job_type": row[1],
+                "team_name": row[2],
+                "status": row[3],
+                "claimed_by": row[4],
+                "claimed_at": row[5],
+                "result": result_text,
+                "error": row[7]
+            }
+            jobs.append(job_dict)
+        
+        return {
+            "success": True,
+            "data": {
+                "jobs": jobs,
+                "count": len(jobs)
+            },
+            "message": f"Retrieved {len(jobs)} agent jobs"
+        }
+    
+    except Exception as e:
+        logger.error(f"Error fetching agent jobs: {e}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to fetch agent jobs: {str(e)}"
+        )
+
+@agent_jobs_router.get("/agent-jobs/{job_id}")
+async def get_agent_job(job_id: int, conn: Connection = Depends(get_db_connection)):
+    """
+    Get a single agent job by ID from agent_jobs table.
+    Uses parameterized queries to prevent SQL injection.
+    
+    Args:
+        job_id: The ID of the agent job to retrieve
+    
+    Returns:
+        JSON response with single agent job or 404 if not found
+    """
+    try:
+        # SECURE: Parameterized query prevents SQL injection
+        query = text(f"""
+            SELECT * 
+            FROM {config.AGENT_JOBS_TABLE} 
+            WHERE job_id = :job_id
+        """)
+        
+        logger.info(f"Executing query to get agent job with ID {job_id} from {config.AGENT_JOBS_TABLE}")
+        
+        # Execute query with connection from dependency
+        result = conn.execute(query, {"job_id": job_id})
+        row = result.fetchone()
+        
+        if not row:
+            raise HTTPException(
+                status_code=404,
+                detail=f"Agent job with ID {job_id} not found"
+            )
+        
+        # Convert row to dictionary - get all fields from database
+        job = dict(row._mapping)
+        
+        return {
+            "success": True,
+            "data": {
+                "job": job
+            },
+            "message": f"Retrieved agent job with ID {job_id}"
+        }
+    
+    except HTTPException:
+        # Re-raise HTTP exceptions (like the 404 error above)
+        raise
+    except Exception as e:
+        logger.error(f"Error fetching agent job {job_id}: {e}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to fetch agent job: {str(e)}"
+        )
+
+
+@agent_jobs_router.post("/agent-jobs/create-team-job")
+async def create_team_job(
+    request: TeamJobCreateRequest,
+    conn: Connection = Depends(get_db_connection)
+):
+    """
+    Create a new team-based agent job.
+    
+    Args:
+        request: TeamJobCreateRequest containing job_type and team_name
+        conn: Database connection from FastAPI dependency
+    
+    Returns:
+        JSON response with created job information
+    """
+    try:
+        # Validate request
+        validate_team_job_request(request.job_type, request.team_name, conn)
+        
+        # Create the job
+        insert_query = text(f"""
+            INSERT INTO {config.AGENT_JOBS_TABLE} 
+            (job_type, team_name, pi, status, created_at, updated_at)
+            VALUES (:job_type, :team_name, NULL, 'pending', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+            RETURNING job_id, job_type, team_name, pi, status, created_at
+        """)
+        
+        logger.info(f"Creating team job: {request.job_type} for team: {request.team_name}")
+        
+        result = conn.execute(insert_query, {
+            "job_type": request.job_type,
+            "team_name": request.team_name
+        })
+        
+        row = result.fetchone()
+        conn.commit()
+        
+        # Convert row to dictionary
+        job = dict(row._mapping)
+        
+        return {
+            "success": True,
+            "data": {
+                "job": job
+            },
+            "message": "Team job created successfully"
+        }
+    
+    except HTTPException:
+        # Re-raise HTTP exceptions (validation errors)
+        raise
+    except Exception as e:
+        logger.error(f"Error creating team job: {e}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to create team job: {str(e)}"
+        )
+
+
+@agent_jobs_router.post("/agent-jobs/create-pi-job")
+async def create_pi_job(
+    request: PIJobCreateRequest,
+    conn: Connection = Depends(get_db_connection)
+):
+    """
+    Create a new PI-based agent job.
+    
+    Args:
+        request: PIJobCreateRequest containing job_type and pi
+        conn: Database connection from FastAPI dependency
+    
+    Returns:
+        JSON response with created job information
+    """
+    try:
+        # Validate request
+        validate_pi_job_request(request.job_type, request.pi, conn)
+        
+        # Create the job
+        insert_query = text(f"""
+            INSERT INTO {config.AGENT_JOBS_TABLE} 
+            (job_type, team_name, pi, status, created_at, updated_at)
+            VALUES (:job_type, NULL, :pi, 'pending', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+            RETURNING job_id, job_type, team_name, pi, status, created_at
+        """)
+        
+        logger.info(f"Creating PI job: {request.job_type} for PI: {request.pi}")
+        
+        result = conn.execute(insert_query, {
+            "job_type": request.job_type,
+            "pi": request.pi
+        })
+        
+        row = result.fetchone()
+        conn.commit()
+        
+        # Convert row to dictionary
+        job = dict(row._mapping)
+        
+        return {
+            "success": True,
+            "data": {
+                "job": job
+            },
+            "message": "PI job created successfully"
+        }
+    
+    except HTTPException:
+        # Re-raise HTTP exceptions (validation errors)
+        raise
+    except Exception as e:
+        logger.error(f"Error creating PI job: {e}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to create PI job: {str(e)}"
+        )
+
+
+@agent_jobs_router.post("/agent-jobs/{job_id}/cancel")
+async def cancel_agent_job(
+    job_id: int,
+    conn: Connection = Depends(get_db_connection)
+):
+    """
+    Cancel an agent job by setting its status to 'cancelled'.
+    
+    Args:
+        job_id: The ID of the job to cancel
+        conn: Database connection from FastAPI dependency
+    
+    Returns:
+        JSON response with updated job information
+    """
+    try:
+        # Cancel the job
+        update_query = text(f"""
+            UPDATE {config.AGENT_JOBS_TABLE} 
+            SET status = 'cancelled', updated_at = CURRENT_TIMESTAMP
+            WHERE job_id = :job_id
+            RETURNING job_id, job_type, team_name, pi, status, created_at, updated_at
+        """)
+        
+        logger.info(f"Cancelling job {job_id}")
+        
+        result = conn.execute(update_query, {"job_id": job_id})
+        row = result.fetchone()
+        conn.commit()
+        
+        if not row:
+            raise HTTPException(status_code=404, detail=f"Job {job_id} not found")
+        
+        # Convert row to dictionary
+        job = dict(row._mapping)
+        
+        return {
+            "success": True,
+            "data": {
+                "job": job
+            },
+            "message": f"Job {job_id} cancelled successfully"
+        }
+    
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error cancelling job {job_id}: {e}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to cancel job: {str(e)}"
+        )
+ 
+ 
+ 
+========================================== 
+File: config.py 
+========================================== 
+ 
+# FILE: config.py
+# Central configuration file for SparksAI Backend Services
+
+# --- API Configuration ---
+API_VERSION = "v1"
+API_PREFIX = f"/api/{API_VERSION}"
+
+# --- Database Configuration ---
+# Database connection is handled in database_connection.py
+# Uses config.ini with fallback to DATABASE_URL environment variable
+
+# --- Table Names Configuration ---
+WORK_ITEMS_TABLE = "jira_issues"  # Main table name - can be changed here
+RECOMMENDATIONS_TABLE = "recommendations"  # Recommendations table
+TEAM_AI_CARDS_TABLE = "team_ai_summary_cards"  # Team AI cards table
+PIS_TABLE = "pis"  # PIs table
+CLOSED_SPRINT_VIEW = "closed_sprint_summary"  # Closed sprint summary view
+AGENT_JOBS_TABLE = "agent_jobs"  # Agent jobs table
+SECURITY_LOGS_TABLE = "security_logs"  # Security logs table
+PI_AI_CARDS_TABLE = "ai_summary"  # PI AI cards table
+TRANSCRIPTS_TABLE = "transcripts"  # Transcripts table
+AI_SUMMARY_TABLE = "ai_summary"  # AI summary table
+PROMPTS_TABLE = "prompts"  # Prompts table
+
+# --- Service Configuration ---
+# Teams Service
+TEAMS_SERVICE_PREFIX = "/teams"
+# Recommendations Service
+RECOMMENDATIONS_SERVICE_PREFIX = "/recommendations"
+# Team AI Cards Service
+TEAM_AI_CARDS_SERVICE_PREFIX = "/team-ai-cards"
+# Team Metrics Service
+TEAM_METRICS_SERVICE_PREFIX = "/team-metrics"
+# Settings Service
+SETTINGS_SERVICE_PREFIX = "/settings"
+# PIs Service
+PIS_SERVICE_PREFIX = "/pis"
+# Agent Jobs Service
+AGENT_JOBS_SERVICE_PREFIX = "/agent-jobs"
+# Security Logs Service
+SECURITY_LOGS_SERVICE_PREFIX = "/security-logs"
+# PI AI Cards Service
+PI_AI_CARDS_SERVICE_PREFIX = "/pi-ai-cards"
+# Transcripts Service
+TRANSCRIPTS_SERVICE_PREFIX = "/transcripts"
+# Prompts Service
+PROMPTS_SERVICE_PREFIX = "/prompts"
+
+# --- Error Handling Configuration ---
+DEFAULT_ERROR_MESSAGE = "An unexpected error occurred"
+DEFAULT_ERROR_CODE = 500
+
+# --- Logging Configuration ---
+LOG_LEVEL = "INFO"
+LOG_FORMAT = "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
+
+# --- CORS Configuration ---
+CORS_ORIGINS = ["*"]  # Configure appropriately for production
+CORS_METHODS = ["*"]
+CORS_HEADERS = ["*"]
+
+# --- Server Configuration ---
+DEFAULT_PORT = 8000
+DEFAULT_HOST = "0.0.0.0"
+ 
+ 
+ 
+========================================== 
+File: database_connection.py 
+========================================== 
+ 
+"""
+Database connection utilities for SparksAI Backend Services.
+
+This module handles database engine creation, connection management,
+and related utilities. Uses the exact same pattern as JiraDashboard-NEWUI.
+"""
+
+import configparser
+import os
+import time
+from sqlalchemy import create_engine, text, event
+from sqlalchemy.engine import Engine
+from typing import Optional
+import logging
+
+logger = logging.getLogger(__name__)
+
+# Global engine cache to prevent multiple engine creation
+_cached_engine = None
+
+# Add SQL query timing event listeners
+@event.listens_for(Engine, "before_cursor_execute")
+def receive_before_cursor_execute(conn, cursor, statement, parameters, context, executemany):
+    """Log SQL queries before execution"""
+    context._query_start_time = time.time()
+
+@event.listens_for(Engine, "after_cursor_execute")
+def receive_after_cursor_execute(conn, cursor, statement, parameters, context, executemany):
+    """Log SQL query execution time"""
+    if hasattr(context, '_query_start_time'):
+        total_time = time.time() - context._query_start_time
+        # Truncate long queries for readability
+        query = statement if len(statement) < 200 else statement[:200] + "..."
+        logger.info(f"SQL: {query} - EXECUTE (Duration: {total_time:.3f}s)")
+
+
+def get_db_engine() -> Optional[create_engine]:
+    """
+    Create and configure the database engine with connection pooling and retry logic.
+    Uses caching to prevent multiple engine creation.
+    Uses the exact same pattern as JiraDashboard-NEWUI.
+    
+    Returns:
+        SQLAlchemy engine or None if connection fails
+    """
+    global _cached_engine
+    
+    # Return cached engine if available
+    if _cached_engine is not None:
+        return _cached_engine
+    
+    connection_string = None
+    db_url_env = os.getenv('DATABASE_URL')
+    
+    if db_url_env:
+        connection_string = db_url_env
+        if connection_string.startswith('postgres://'):
+            connection_string = connection_string.replace('postgres://', 'postgresql://', 1)
+        # Add SSL mode for Railway database - require SSL for secure connections
+        if 'railway' in connection_string.lower() or 'caboose.proxy.rlwy.net' in connection_string:
+            if '?' in connection_string:
+                connection_string += '&sslmode=require'
+            else:
+                connection_string += '?sslmode=require'
+    else:
+        cfg_parser = configparser.ConfigParser()
+        try:
+            cfg_parser.read('config.ini')
+            connection_string = cfg_parser['database']['connection_string']
+            
+            # Add SSL mode for Railway database connections (from config.ini)
+            # Only require SSL when running on Railway (production)
+            if ('railway' in connection_string.lower() or 'caboose.proxy.rlwy.net' in connection_string) and os.getenv('RAILWAY_ENVIRONMENT'):
+                if '?' in connection_string:
+                    connection_string += '&sslmode=require'
+                else:
+                    connection_string += '?sslmode=require'
+        except FileNotFoundError:
+            logger.error("Error: config.ini not found.")
+            return None
+        except KeyError:
+            logger.error("Error: 'database' section or 'connection_string' not found in config.ini.")
+            return None
+
+    if not connection_string:
+        logger.error("Error: No database connection string configured.")
+        return None
+    
+    # Add connection pooling and retry settings (same as JiraDashboard-NEWUI)
+    max_retries = 3
+    try:
+        logger.info("🚀 DATABASE: Creating NEW engine (not from pool) - this should be rare!")
+        print("🚀 DATABASE: Creating NEW engine (not from pool) - this should be rare!")
+        engine = create_engine(
+            connection_string,
+            pool_size=20,        # Keep 20 connections in pool
+            pool_pre_ping=True,  # Verify connections before use
+            pool_recycle=300,    # Recycle connections every 5 minutes
+            pool_timeout=30,     # Timeout for getting connection from pool
+            max_overflow=10,     # Allow up to 10 extra connections (total: 30 connections)
+            echo=False           # Set to True for SQL debugging
+        )
+        
+        # Test connection with retry
+        for attempt in range(max_retries):
+            try:
+                with engine.connect() as connection:
+                    connection.execute(text("SELECT 1"))
+                logger.info("✅ DATABASE: New engine created and connection tested successfully.")
+                
+                # Initialize database tables on new engine creation (not from pool)
+                try:
+                    from database_table_creation import initialize_database_tables_with_engine
+                    initialize_database_tables_with_engine(engine)
+                except Exception as table_error:
+                    logger.warning(f"Database table initialization failed: {table_error}")
+                    # Continue anyway - tables might already exist
+                
+                logger.info("✅ DATABASE: Engine cached for future reuse (pool connections available)")
+                # Cache the engine and return it
+                _cached_engine = engine
+                return engine
+            except Exception as e:
+                if attempt < max_retries - 1:
+                    logger.warning(f"Database connection attempt {attempt + 1} failed, retrying...")
+                    time.sleep(2)  # Wait 2 seconds before retry
+                else:
+                    raise e
+    except Exception as e:
+        logger.error(f"Error connecting to database after {max_retries} attempts: {e}")
+        # Don't print full traceback to reduce noise
+        return None
+
+
+def get_fresh_db_engine() -> Optional[create_engine]:
+    """
+    Get a fresh database engine (bypasses any cached engine).
+    
+    Returns:
+        SQLAlchemy engine or None if connection fails
+    """
+    global _cached_engine
+    _cached_engine = None  # Clear cache to force new engine creation
+    return get_db_engine()
+
+
+def safe_db_query(query_func, *args, **kwargs):
+    """
+    Execute a database query with proper error handling and connection management.
+    
+    Args:
+        query_func: Function that performs the database query
+        *args: Positional arguments to pass to query_func
+        **kwargs: Keyword arguments to pass to query_func
+        
+    Returns:
+        Result of query_func or None if error occurs
+    """
+    try:
+        return query_func(*args, **kwargs)
+    except Exception as e:
+        logger.error(f"Database query error: {e}")
+        import traceback
+        traceback.print_exc()
+        return None
+
+
+# Global engine instance
+engine = get_db_engine()
+
+# FastAPI Dependencies
+from fastapi import HTTPException, Depends
+from sqlalchemy.engine import Connection
+
+def get_db_connection():
+    """
+    FastAPI dependency to get a DB connection from the pool.
+    This handles all connection errors and ensures the connection is closed.
+    """
+    if engine is None:
+        logger.error("Database engine is not initialized.")
+        raise HTTPException(status_code=503, detail="Database connection not available")
+    
+    conn = None
+    try:
+        # Get a connection from the pool
+        conn = engine.connect()
+        # 'yield' passes the connection to the endpoint function
+        yield conn
+    except Exception as e:
+        # Only log as database error if it's actually a database-related exception
+        if "psycopg2" in str(type(e)) or "sqlalchemy" in str(type(e)) or "database" in str(e).lower():
+            logger.error(f"Database connection error: {e}")
+            raise HTTPException(status_code=503, detail="Database connection error")
+        else:
+            # Re-raise non-database exceptions (like validation errors) without modification
+            raise e
+    finally:
+        # This code runs *after* the endpoint is finished
+        if conn:
+            conn.close()  # Returns the connection to the pool
+ 
+ 
+ 
+========================================== 
+File: database_general.py 
+========================================== 
+ 
+"""
+Database General - Database access functions for general services.
+
+This module contains database access functions for recommendations and team AI cards.
+Uses FastAPI dependencies for clean connection management and SQL injection protection.
+"""
+
+from sqlalchemy import text
+from sqlalchemy.engine import Connection
+from typing import List, Dict, Any
+import logging
+import config
+
+logger = logging.getLogger(__name__)
+
+
+def get_top_ai_recommendations(team_name: str, limit: int = 4, conn: Connection = None) -> List[Dict[str, Any]]:
+    """
+    Get top AI recommendations for a specific team.
+    
+    Returns recommendations ordered by:
+    1. Date (newest first)
+    2. Priority (High > Medium > Low)
+    3. ID (descending)
+    
+    Args:
+        team_name (str): Team name
+        limit (int): Number of recommendations to return (default: 4)
+        conn (Connection): Database connection from FastAPI dependency
+    
+    Returns:
+        list: List of recommendation dictionaries
+    """
+    try:
+        # SECURE: Parameterized query prevents SQL injection
+        sql_query = """
+            SELECT *
+            FROM public.recommendations
+            WHERE team_name = :team_name
+            ORDER BY 
+                DATE(date) DESC,
+                CASE priority 
+                    WHEN 'High' THEN 1
+                    WHEN 'Medium' THEN 2
+                    WHEN 'Low' THEN 3
+                    ELSE 4
+                END,
+                id DESC
+            LIMIT :limit
+        """
+        
+        logger.info(f"Executing query to get top AI recommendations for team: {team_name}")
+        logger.info(f"Parameters: team_name={team_name}, limit={limit}")
+        
+        result = conn.execute(text(sql_query), {
+            'team_name': team_name, 
+            'limit': limit
+        })
+        
+        # Convert rows to list of dictionaries
+        recommendations = []
+        for row in result:
+            # Convert row to dictionary dynamically since we're using SELECT *
+            recommendations.append(dict(row._mapping))
+        
+        return recommendations
+            
+    except Exception as e:
+        logger.error(f"Error fetching top AI recommendations for team {team_name}: {e}")
+        raise e
+
+
+def get_top_ai_cards(team_name: str, limit: int = 4, conn: Connection = None) -> List[Dict[str, Any]]:
+    """
+    Get top AI cards for a specific team.
+    
+    Returns the most recent + highest priority card for each type (max 1 per type).
+    Cards are ordered by:
+    1. Priority (Critical > High > Medium)
+    2. Date (newest first)
+    
+    Args:
+        team_name (str): Team name
+        limit (int): Number of AI cards to return (default: 4)
+        conn (Connection): Database connection from FastAPI dependency
+    
+    Returns:
+        list: List of AI card dictionaries
+    """
+    try:
+        # SECURE: Parameterized query prevents SQL injection
+        sql_query = """
+            WITH ranked_cards AS (
+                SELECT *,
+                       ROW_NUMBER() OVER (
+                           PARTITION BY card_type 
+                           ORDER BY 
+                               date DESC,
+                               CASE priority 
+                                   WHEN 'Critical' THEN 1 
+                                   WHEN 'High' THEN 2 
+                                   WHEN 'Medium' THEN 3 
+                               END
+                       ) as rn
+                FROM public.team_ai_summary_cards
+                WHERE team_name = :team_name
+            )
+            SELECT id, date, team_name, card_name, card_type, priority, source, description, full_information, information_json
+            FROM ranked_cards
+            WHERE rn = 1
+            ORDER BY 
+                CASE priority 
+                    WHEN 'Critical' THEN 1 
+                    WHEN 'High' THEN 2 
+                    WHEN 'Medium' THEN 3 
+                END,
+                date DESC
+            LIMIT :limit
+        """
+        
+        logger.info(f"Executing query to get top AI cards for team: {team_name}")
+        logger.info(f"Parameters: team_name={team_name}, limit={limit}")
+        
+        result = conn.execute(text(sql_query), {
+            'team_name': team_name, 
+            'limit': limit
+        })
+        
+        # Convert rows to list of dictionaries
+        ai_cards = []
+        for row in result:
+            ai_cards.append({
+                'id': row[0],
+                'date': row[1],
+                'team_name': row[2],
+                'card_name': row[3],
+                'card_type': row[4],
+                'priority': row[5],
+                'source': row[6],
+                'description': row[7],
+                'full_information': row[8],
+                'information_json': row[9]
+            })
+        
+        return ai_cards
+            
+    except Exception as e:
+        logger.error(f"Error fetching top AI cards for team {team_name}: {e}")
+        raise e
+
+
+def get_all_settings_db(conn: Connection = None) -> Dict[str, str]:
+    """
+    Get all global settings from the database.
+    
+    Returns dictionary of setting_key: setting_value pairs.
+    Includes full API keys as stored in database.
+    Copied exact logic from JiraDashboard-NEWUI project.
+    
+    Args:
+        conn (Connection): Database connection from FastAPI dependency
+    
+    Returns:
+        dict: Dictionary of setting_key: setting_value pairs
+    """
+    try:
+        # SECURE: Parameterized query prevents SQL injection
+        sql_query = """
+            SELECT setting_key, setting_value 
+            FROM global_settings
+        """
+        
+        logger.info(f"Executing query to get all global settings")
+        
+        result = conn.execute(text(sql_query))
+        
+        # Convert rows to dictionary of key-value pairs
+        settings = {row[0]: row[1] for row in result}
+        
+        return settings
+            
+    except Exception as e:
+        logger.error(f"Error fetching all global settings: {e}")
+        raise e
+
+
+ 
+ 
+ 
+========================================== 
+File: database_pi.py 
+========================================== 
+ 
+"""
+Database PI - Database access functions for PI-related operations.
+
+This module contains database access functions for PI operations.
+Copied EXACT logic from JiraDashboard-NEWUI project - database.py fetch_pi_predictability_data function.
+"""
+
+from sqlalchemy import text
+from sqlalchemy.engine import Connection
+from typing import List, Dict, Any, Optional
+import logging
+
+logger = logging.getLogger(__name__)
+
+
+def fetch_pi_predictability_data(pi_names, team_name=None, conn: Connection = None) -> List[Dict[str, Any]]:
+    """
+    Fetch PI predictability data from the database function.
+    Copied EXACT logic from JiraDashboard-NEWUI database.py lines 578-611
+    
+    For multiple PIs: loop through each PI and call the database function for each one.
+    This matches the logic from pi_predictability_table.py lines 189-195.
+    
+    Args:
+        pi_names (str | List[str]): Single PI name or list of PI names
+        team_name (str, optional): Single team name filter (can be "ALL SUMMARY")
+        conn (Connection): Database connection from FastAPI dependency
+    
+    Returns:
+        list: List of dictionaries with PI predictability data (all columns)
+    """
+    try:
+        # Normalize pi_names to a list
+        if isinstance(pi_names, str):
+            pi_names = [pi_names]
+        
+        logger.info(f"Executing PI predictability query for PIs: {pi_names}")
+        logger.info(f"Team filter: {team_name if team_name else 'None'}")
+        
+        # Execute query for each PI and combine results
+        # This matches the logic from pi_predictability_table.py lines 189-195
+        all_data = []
+        for pi_name in pi_names:
+            # Use parameterized query (same approach as other database functions)
+            sql_query_text = text("""
+                SELECT * FROM public.get_pi_predictability_by_team(
+                    :team_name,
+                    :pi_name
+                )
+            """)
+            
+            logger.info(f"Executing SQL for PI: {pi_name}")
+            
+            # Execute query with parameters (SECURE: prevents SQL injection)
+            result = conn.execute(sql_query_text, {
+                'team_name': team_name,
+                'pi_name': pi_name
+            })
+            
+            # Convert rows to list of dictionaries
+            for row in result:
+                row_dict = dict(row._mapping)
+                
+                # Format array columns (copied from old project lines 603-606)
+                for col in ['issues_in_scope_keys', 'completed_issues_keys']:
+                    if col in row_dict:
+                        if isinstance(row_dict[col], list):
+                            row_dict[col] = ', '.join(row_dict[col])
+                        # else keep as is (already string or None)
+                
+                all_data.append(row_dict)
+        
+        logger.info(f"Retrieved {len(all_data)} PI predictability records")
+        
+        return all_data
+            
+    except Exception as e:
+        logger.error(f"Error fetching PI predictability data: {e}")
+        raise e
+
+
+def fetch_pi_burndown_data(pi_name: str, project_keys: str = None, issue_type: str = None, team_names: str = None, conn: Connection = None) -> List[Dict[str, Any]]:
+    """
+    Fetch PI burndown data from the database function.
+    Copied EXACT logic from JiraDashboard-NEWUI database.py lines 538-576
+    
+    Args:
+        pi_name (str): PI name to fetch data for (mandatory)
+        project_keys (str, optional): Project keys filter
+        issue_type (str, optional): Issue type filter (defaults to 'all' if not provided)
+        team_names (str, optional): Team names filter
+        conn (Connection): Database connection from FastAPI dependency
+    
+    Returns:
+        list: List of dictionaries with PI burndown data (all columns)
+    """
+    try:
+        if not pi_name:
+            return []
+        
+        # Default issue_type to 'all' if not provided
+        issue_type = 'all' if not issue_type or issue_type == 'all' else issue_type
+        
+        logger.info(f"Executing PI burndown query for PI: {pi_name}")
+        logger.info(f"Filters: project_keys={project_keys}, issue_type={issue_type}, team_names={team_names}")
+        
+        # SECURITY: Use parameterized query to prevent SQL injection
+        sql_query_text = text("""
+            SELECT * FROM public.get_pi_burndown_data(
+                :pi_name,
+                :project_keys,
+                :issue_type,
+                :team_names
+            )
+        """)
+        
+        logger.info(f"Executing SQL for PI burndown: {pi_name}")
+        
+        # Execute query with parameters (SECURE: prevents SQL injection)
+        result = conn.execute(sql_query_text, {
+            'pi_name': pi_name,
+            'project_keys': project_keys,
+            'issue_type': issue_type,
+            'team_names': team_names
+        })
+        
+        # Convert rows to list of dictionaries
+        burndown_data = []
+        for row in result:
+            row_dict = dict(row._mapping)
+            
+            # Format array/list columns if present
+            # Following the same pattern as pi_predictability_data
+            for col in row_dict.keys():
+                if isinstance(row_dict[col], list):
+                    row_dict[col] = ', '.join(row_dict[col])
+            
+            burndown_data.append(row_dict)
+        
+        logger.info(f"Retrieved {len(burndown_data)} PI burndown records")
+        
+        return burndown_data
+            
+    except Exception as e:
+        logger.error(f"Error fetching PI burndown data: {e}")
+        raise e
+
+
+def fetch_scope_changes_data(quarters: List[str], conn: Connection = None) -> List[Dict[str, Any]]:
+    """
+    Fetch scope changes data for specified quarters.
+    Copied EXACT logic from JiraDashboard-NEWUI _db_data_fetchers.py lines 792-832
+    
+    Uses the view: public.epic_pi_scope_changes_long
+    Columns: "Quarter Name" (as quarter), "Metric Name" (as metric_name), "Value" (as value)
+    
+    Args:
+        quarters (List[str]): List of quarter/PI names to filter by (mandatory)
+        conn (Connection): Database connection from FastAPI dependency
+    
+    Returns:
+        list: List of dictionaries with scope changes data (all columns from view)
+    """
+    try:
+        if not quarters:
+            return []
+        
+        logger.info(f"Executing scope changes query for quarters: {quarters}")
+        
+        # SECURITY: Use parameterized query with PostgreSQL array handling for IN clause
+        sql_query_text = text("""
+            SELECT * FROM public.epic_pi_scope_changes_long
+            WHERE "Quarter Name" = ANY(:quarters)
+            ORDER BY "Quarter Name", "Metric Name"
+        """)
+        
+        logger.info(f"Executing SQL for scope changes")
+        
+        # Execute query with parameters (SECURE: prevents SQL injection)
+        # PostgreSQL handles the array properly with = ANY()
+        result = conn.execute(sql_query_text, {
+            'quarters': quarters
+        })
+        
+        # Convert rows to list of dictionaries
+        scope_data = []
+        for row in result:
+            row_dict = dict(row._mapping)
+            
+            # Format array/list columns if present
+            for col in row_dict.keys():
+                if isinstance(row_dict[col], list):
+                    row_dict[col] = ', '.join(row_dict[col])
+            
+            scope_data.append(row_dict)
+        
+        logger.info(f"Retrieved {len(scope_data)} scope changes records")
+        
+        return scope_data
+            
+    except Exception as e:
+        logger.error(f"Error fetching scope changes data: {e}")
+        raise e 
+ 
+ 
+========================================== 
+File: database_table_creation.py 
+========================================== 
+ 
+"""
+Database table creation module.
+
+This module contains all table creation functions and the initialization logic
+that runs when the database engine is created (new connection, not from pool).
+Copied from JiraDashboard-NEWUI project without any logic changes.
+"""
+
+import sys
+import traceback
+from datetime import date, timedelta
+from sqlalchemy import text
+from typing import Optional
+
+
+# Global flag to ensure tables are created only once
+_tables_initialized = False
+
+
+def create_users_table_if_not_exists(engine=None) -> bool:
+    """Create users table if it doesn't exist"""
+    # Use the same connection pattern as other functions for consistency
+    import database_connection
+    
+    if engine is None:
+        engine = database_connection.get_db_engine()
+    if engine is None:
+        print("Warning: Database engine not available, cannot create users table")
+        return False
+    
+    try:
+        with engine.connect() as conn:
+            # Check if table exists
+            check_table_sql = """
+            SELECT EXISTS (
+                SELECT FROM information_schema.tables 
+                WHERE table_schema = 'public' 
+                AND table_name = 'users'
+            );
+            """
+            result = conn.execute(text(check_table_sql))
+            table_exists = result.scalar()
+            
+            if not table_exists:
+                print("Creating users table...")
+                create_table_sql = """
+                CREATE TABLE public.users (
+                    email_address VARCHAR(255) PRIMARY KEY,
+                    display_name VARCHAR(255) NOT NULL,
+                    user_role VARCHAR(50) DEFAULT 'User',
+                    last_login TIMESTAMP WITH TIME ZONE,
+                    active BOOLEAN DEFAULT TRUE,
+                    ai_model_preference VARCHAR(100) DEFAULT 'gemini-2.5-flash',
+                    created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+                    updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+                );
+                
+                CREATE INDEX idx_users_email ON public.users(email_address);
+                CREATE INDEX idx_users_role ON public.users(user_role);
+                CREATE INDEX idx_users_active ON public.users(active);
+                """
+                conn.execute(text(create_table_sql))
+                conn.commit()
+                print("Users table created successfully")
+                
+                # Insert test data
+                insert_test_data_for_users()
+            else:
+                print("Users table already exists")
+            
+            return True
+            
+    except Exception as e:
+        print(f"Error creating users table: {e}")
+        traceback.print_exc()
+        return False
+
+
+def create_prompts_table_if_not_exists(engine=None) -> bool:
+    """Create prompts table if it doesn't exist"""
+    import database_connection
+    
+    if engine is None:
+        engine = database_connection.get_db_engine()
+    if engine is None:
+        print("Warning: Database engine not available, cannot create prompts table")
+        return False
+    
+    try:
+        with engine.connect() as conn:
+            # Check if table exists
+            check_table_sql = """
+            SELECT EXISTS (
+                SELECT FROM information_schema.tables 
+                WHERE table_schema = 'public' 
+                AND table_name = 'prompts'
+            );
+            """
+            result = conn.execute(text(check_table_sql))
+            table_exists = result.scalar()
+            
+            if not table_exists:
+                print("Creating prompts table...")
+                create_table_sql = """
+                CREATE TABLE public.prompts (
+                    email_address VARCHAR(255) NOT NULL,
+                    prompt_name VARCHAR(255) NOT NULL,
+                    prompt_description TEXT NULL,
+                    prompt_type VARCHAR(100) NOT NULL,
+                    prompt_active BOOLEAN DEFAULT TRUE NULL,
+                    created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP NULL,
+                    updated_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP NULL,
+                    CONSTRAINT prompts_pkey PRIMARY KEY (email_address, prompt_name)
+                );
+                
+                ALTER TABLE public.prompts ADD CONSTRAINT prompts_email_address_fkey 
+                FOREIGN KEY (email_address) REFERENCES public.users(email_address) ON DELETE CASCADE;
+                
+                CREATE INDEX idx_prompts_type ON public.prompts(prompt_type);
+                CREATE INDEX idx_prompts_active ON public.prompts(prompt_active);
+                CREATE INDEX idx_prompts_created ON public.prompts(created_at DESC);
+                """
+                conn.execute(text(create_table_sql))
+                conn.commit()
+                print("Prompts table created successfully")
+                
+                # Insert test data
+                insert_test_data_for_prompts()
+            else:
+                print("Prompts table already exists")
+            
+            return True
+            
+    except Exception as e:
+        print(f"Error creating prompts table: {e}")
+        traceback.print_exc()
+        return False
+
+
+def create_security_logs_table_if_not_exists(engine=None) -> bool:
+    """Create security_logs table if it doesn't exist"""
+    import database_connection
+    
+    if engine is None:
+        engine = database_connection.get_db_engine()
+    if engine is None:
+        print("Warning: Database engine not available, cannot create security_logs table")
+        return False
+    
+    try:
+        with engine.connect() as conn:
+            # Check if table exists
+            check_table_sql = """
+            SELECT EXISTS (
+                SELECT FROM information_schema.tables 
+                WHERE table_schema = 'public' 
+                AND table_name = 'security_logs'
+            );
+            """
+            result = conn.execute(text(check_table_sql))
+            table_exists = result.scalar()
+            
+            if not table_exists:
+                print("Creating security_logs table...")
+                create_table_sql = """
+                CREATE TABLE public.security_logs (
+                    id SERIAL PRIMARY KEY,
+                    user_email VARCHAR(255),
+                    action VARCHAR(255) NOT NULL,
+                    resource VARCHAR(255),
+                    ip_address INET,
+                    user_agent TEXT,
+                    success BOOLEAN NOT NULL,
+                    error_message TEXT,
+                    created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+                    FOREIGN KEY (user_email) REFERENCES public.users(email_address)
+                );
+                
+                CREATE INDEX idx_security_logs_user ON public.security_logs(user_email);
+                CREATE INDEX idx_security_logs_action ON public.security_logs(action);
+                CREATE INDEX idx_security_logs_created ON public.security_logs(created_at DESC);
+                CREATE INDEX idx_security_logs_success ON public.security_logs(success);
+                """
+                conn.execute(text(create_table_sql))
+                conn.commit()
+                print("Security logs table created successfully")
+            else:
+                print("Security logs table already exists")
+            
+            return True
+            
+    except Exception as e:
+        print(f"Error creating security_logs table: {e}")
+        traceback.print_exc()
+        return False
+
+
+def create_global_settings_table_if_not_exists(engine=None) -> bool:
+    """Create global_settings table if it doesn't exist"""
+    import database_connection
+    
+    if engine is None:
+        engine = database_connection.get_db_engine()
+    if engine is None:
+        print("Warning: Database engine not available, cannot create global_settings table")
+        return False
+    
+    try:
+        with engine.connect() as conn:
+            # Check if table exists
+            check_table_sql = """
+            SELECT EXISTS (
+                SELECT FROM information_schema.tables 
+                WHERE table_schema = 'public' 
+                AND table_name = 'global_settings'
+            );
+            """
+            result = conn.execute(text(check_table_sql))
+            table_exists = result.scalar()
+            
+            if not table_exists:
+                print("Creating global_settings table...")
+                create_table_sql = """
+                CREATE TABLE public.global_settings (
+                    setting_key VARCHAR(255) PRIMARY KEY,
+                    setting_value TEXT NOT NULL,
+                    setting_type VARCHAR(50) NOT NULL,
+                    description TEXT,
+                    is_encrypted BOOLEAN DEFAULT FALSE,
+                    created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+                    updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+                );
+                
+                CREATE INDEX idx_global_settings_type ON public.global_settings(setting_type);
+                CREATE INDEX idx_global_settings_encrypted ON public.global_settings(is_encrypted);
+                """
+                conn.execute(text(create_table_sql))
+                conn.commit()
+                print("Global settings table created successfully")
+                
+                # Insert default settings
+                insert_default_global_settings()
+            else:
+                print("Global settings table already exists")
+            
+            return True
+            
+    except Exception as e:
+        print(f"Error creating global_settings table: {e}")
+        traceback.print_exc()
+        return False
+
+
+def create_agent_jobs_table_if_not_exists(engine=None) -> bool:
+    """Create agent_jobs table if it doesn't exist"""
+    import database_connection
+    
+    if engine is None:
+        engine = database_connection.get_db_engine()
+    if engine is None:
+        print("Warning: Database engine not available, cannot create agent_jobs table")
+        return False
+    
+    try:
+        with engine.connect() as conn:
+            # Check if table exists
+            check_table_sql = """
+            SELECT EXISTS (
+                SELECT FROM information_schema.tables 
+                WHERE table_schema = 'public' 
+                AND table_name = 'agent_jobs'
+            );
+            """
+            result = conn.execute(text(check_table_sql))
+            table_exists = result.scalar()
+            
+            if not table_exists:
+                print("Creating agent_jobs table...")
+                create_table_sql = """
+                CREATE TABLE public.agent_jobs (
+                    id SERIAL PRIMARY KEY,
+                    job_name VARCHAR(255) NOT NULL,
+                    job_type VARCHAR(100) NOT NULL,
+                    status VARCHAR(50) NOT NULL DEFAULT 'pending',
+                    team_name VARCHAR(255),
+                    pi VARCHAR(50),
+                    parameters JSONB,
+                    result_data JSONB,
+                    error_message TEXT,
+                    started_at TIMESTAMP WITH TIME ZONE,
+                    completed_at TIMESTAMP WITH TIME ZONE,
+                    created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+                    updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+                    created_by VARCHAR(255),
+                    FOREIGN KEY (created_by) REFERENCES public.users(email_address)
+                );
+                
+                CREATE INDEX idx_agent_jobs_status ON public.agent_jobs(status);
+                CREATE INDEX idx_agent_jobs_type ON public.agent_jobs(job_type);
+                CREATE INDEX idx_agent_jobs_team ON public.agent_jobs(team_name);
+                CREATE INDEX idx_agent_jobs_created ON public.agent_jobs(created_at DESC);
+                """
+                conn.execute(text(create_table_sql))
+                conn.commit()
+                print("Agent jobs table created successfully")
+            else:
+                print("Agent jobs table already exists")
+            
+            return True
+            
+    except Exception as e:
+        print(f"Error creating agent_jobs table: {e}")
+        traceback.print_exc()
+        return False
+
+
+def create_team_ai_summary_cards_table_if_not_exists(engine=None) -> bool:
+    """Create team_ai_summary_cards table if it doesn't exist"""
+    import database_connection
+    
+    if engine is None:
+        engine = database_connection.get_db_engine()
+    if engine is None:
+        print("Warning: Database engine not available, cannot create team_ai_summary_cards table")
+        return False
+    
+    try:
+        with engine.connect() as conn:
+            # Check if table exists
+            check_table_sql = """
+            SELECT EXISTS (
+                SELECT FROM information_schema.tables 
+                WHERE table_schema = 'public' 
+                AND table_name = 'team_ai_summary_cards'
+            );
+            """
+            result = conn.execute(text(check_table_sql))
+            table_exists = result.scalar()
+            
+            if not table_exists:
+                print("Creating team_ai_summary_cards table...")
+                create_table_sql = """
+                CREATE TABLE public.team_ai_summary_cards (
+                    id SERIAL PRIMARY KEY,
+                    date DATE NOT NULL,
+                    team_name VARCHAR(255) NOT NULL,
+                    card_name VARCHAR(255) NOT NULL,
+                    card_type VARCHAR(100) NOT NULL,
+                    priority VARCHAR(50) NOT NULL,
+                    source VARCHAR(255),
+                    source_job_id INTEGER,
+                    description TEXT NOT NULL,
+                    full_information TEXT,
+                    information_json TEXT,
+                    created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+                    updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+                    UNIQUE (date, team_name, card_name)
+                );
+                
+                CREATE INDEX idx_team_ai_summary_cards_team_date ON public.team_ai_summary_cards(team_name, date DESC);
+                CREATE INDEX idx_team_ai_summary_cards_priority ON public.team_ai_summary_cards(priority);
+                """
+                conn.execute(text(create_table_sql))
+                conn.commit()
+                print("team_ai_summary_cards table created successfully")
+                
+                # Insert test data
+                insert_test_data_for_team_ai_summary_cards()
+            else:
+                print("team_ai_summary_cards table already exists")
+            
+            return True
+            
+    except Exception as e:
+        print(f"Error creating team_ai_summary_cards table: {e}")
+        traceback.print_exc()
+        return False
+
+
+def create_pi_ai_summary_cards_table_if_not_exists(engine=None) -> bool:
+    """Create pi_ai_summary_cards table if it doesn't exist"""
+    import database_connection
+    
+    if engine is None:
+        engine = database_connection.get_db_engine()
+    if engine is None:
+        print("Warning: Database engine not available, cannot create pi_ai_summary_cards table")
+        return False
+    
+    try:
+        with engine.connect() as conn:
+            # Check if table exists
+            check_table_sql = """
+            SELECT EXISTS (
+                SELECT FROM information_schema.tables 
+                WHERE table_schema = 'public' 
+                AND table_name = 'pi_ai_summary_cards'
+            );
+            """
+            result = conn.execute(text(check_table_sql))
+            table_exists = result.scalar()
+            
+            if not table_exists:
+                print("Creating pi_ai_summary_cards table...")
+                create_table_sql = """
+                CREATE TABLE public.pi_ai_summary_cards (
+                    id SERIAL PRIMARY KEY,
+                    date DATE NOT NULL,
+                    team_name VARCHAR(255) NOT NULL,
+                    quarter VARCHAR(100) NOT NULL,
+                    card_type VARCHAR(100) NOT NULL,
+                    priority VARCHAR(50) NOT NULL,
+                    source VARCHAR(255),
+                    description TEXT NOT NULL,
+                    full_information TEXT,
+                    information_json TEXT,
+                    created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+                    updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+                );
+                
+                CREATE INDEX idx_pi_ai_summary_cards_team_date ON public.pi_ai_summary_cards(team_name, date DESC);
+                CREATE INDEX idx_pi_ai_summary_cards_priority ON public.pi_ai_summary_cards(priority);
+                """
+                conn.execute(text(create_table_sql))
+                conn.commit()
+                print("pi_ai_summary_cards table created successfully")
+            else:
+                print("pi_ai_summary_cards table already exists")
+            
+            return True
+            
+    except Exception as e:
+        print(f"Error creating pi_ai_summary_cards table: {e}")
+        traceback.print_exc()
+        return False
+
+
+def create_ai_summary_table_if_not_exists(engine=None) -> bool:
+    """Create ai_summary table if it doesn't exist"""
+    import database_connection
+    
+    if engine is None:
+        engine = database_connection.get_db_engine()
+    if engine is None:
+        print("Warning: Database engine not available, cannot create ai_summary table")
+        return False
+    
+    try:
+        with engine.connect() as conn:
+            # Check if table exists
+            check_table_sql = """
+            SELECT EXISTS (
+                SELECT FROM information_schema.tables 
+                WHERE table_schema = 'public' 
+                AND table_name = 'ai_summary'
+            );
+            """
+            result = conn.execute(text(check_table_sql))
+            table_exists = result.scalar()
+            
+            if not table_exists:
+                print("Creating ai_summary table...")
+                create_table_sql = """
+                CREATE TABLE public.ai_summary (
+                    id SERIAL PRIMARY KEY,
+                    date DATE NOT NULL,
+                    team_name VARCHAR(255) NOT NULL,
+                    card_name VARCHAR(255) NOT NULL,
+                    card_type VARCHAR(100) NOT NULL,
+                    priority VARCHAR(50) NOT NULL,
+                    source VARCHAR(255),
+                    source_job_id INTEGER,
+                    description TEXT NOT NULL,
+                    full_information TEXT,
+                    information_json TEXT,
+                    pi VARCHAR(255) NOT NULL,
+                    created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+                    updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+                    UNIQUE (date, team_name, card_name, pi)
+                );
+                
+                CREATE INDEX idx_ai_summary_team_date ON public.ai_summary(team_name, date DESC);
+                CREATE INDEX idx_ai_summary_priority ON public.ai_summary(priority);
+                CREATE INDEX idx_ai_summary_pi ON public.ai_summary(pi);
+                """
+                conn.execute(text(create_table_sql))
+                conn.commit()
+                print("ai_summary table created successfully")
+            else:
+                print("ai_summary table already exists")
+            
+            return True
+            
+    except Exception as e:
+        print(f"Error creating ai_summary table: {e}")
+        return False
+
+
+def create_transcripts_table_if_not_exists(engine=None) -> bool:
+    """Create transcripts table if it doesn't exist"""
+    import database_connection
+    
+    if engine is None:
+        engine = database_connection.get_db_engine()
+    if engine is None:
+        print("Warning: Database engine not available, cannot create transcripts table")
+        return False
+    
+    try:
+        with engine.connect() as conn:
+            # Check if table exists
+            check_table_sql = """
+            SELECT EXISTS (
+                SELECT FROM information_schema.tables 
+                WHERE table_schema = 'public' 
+                AND table_name = 'transcripts'
+            );
+            """
+            result = conn.execute(text(check_table_sql))
+            table_exists = result.scalar()
+            
+            if not table_exists:
+                print("Creating transcripts table...")
+                create_table_sql = """
+                CREATE TABLE public.transcripts (
+                    id SERIAL PRIMARY KEY,
+                    transcript_date DATE,
+                    team_name VARCHAR(255),
+                    type VARCHAR(50),
+                    file_name VARCHAR(255),
+                    raw_text TEXT,
+                    origin VARCHAR(500),
+                    pi VARCHAR(255),
+                    created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+                    updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+                    CONSTRAINT unique_team_transcript UNIQUE (transcript_date, team_name),
+                    CONSTRAINT unique_pi_transcript UNIQUE (transcript_date, pi)
+                );
+                
+                CREATE INDEX idx_transcripts_type ON public.transcripts(type);
+                CREATE INDEX idx_transcripts_team ON public.transcripts(team_name);
+                CREATE INDEX idx_transcripts_pi ON public.transcripts(pi);
+                CREATE INDEX idx_transcripts_date ON public.transcripts(transcript_date DESC);
+                CREATE INDEX idx_transcripts_created ON public.transcripts(created_at DESC);
+                """
+                conn.execute(text(create_table_sql))
+                conn.commit()
+                print("Transcripts table created successfully")
+            else:
+                print("Transcripts table already exists")
+            
+            return True
+            
+    except Exception as e:
+        print(f"Error creating transcripts table: {e}")
+        traceback.print_exc()
+        return False
+
+
+def create_recommendations_table_if_not_exists(engine=None) -> bool:
+    """Create recommendations table if it doesn't exist"""
+    import database_connection
+    
+    if engine is None:
+        engine = database_connection.get_db_engine()
+    if engine is None:
+        print("Warning: Database engine not available, cannot create recommendations table")
+        return False
+    
+    try:
+        with engine.connect() as conn:
+            # Check if table exists
+            check_table_sql = """
+            SELECT EXISTS (
+                SELECT FROM information_schema.tables 
+                WHERE table_schema = 'public' 
+                AND table_name = 'recommendations'
+            );
+            """
+            result = conn.execute(text(check_table_sql))
+            table_exists = result.scalar()
+            
+            if not table_exists:
+                print("Creating recommendations table...")
+                create_table_sql = """
+                CREATE TABLE public.recommendations (
+                    id SERIAL PRIMARY KEY,
+                    team_name VARCHAR(255) NOT NULL,
+                    date TIMESTAMP WITH TIME ZONE NOT NULL,
+                    action_text TEXT NOT NULL,
+                    rational TEXT,
+                    full_information TEXT,
+                    information_json TEXT,
+                    priority VARCHAR(50) NOT NULL,
+                    status VARCHAR(50) NOT NULL,
+                    created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+                    updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+                    UNIQUE (team_name, date)
+                );
+                
+                CREATE INDEX idx_recommendations_team_date ON public.recommendations(team_name, date DESC);
+                CREATE INDEX idx_recommendations_priority ON public.recommendations(priority);
+                CREATE INDEX idx_recommendations_status ON public.recommendations(status);
+                """
+                conn.execute(text(create_table_sql))
+                conn.commit()
+                print("Recommendations table created successfully")
+            else:
+                print("Recommendations table already exists")
+            
+            return True
+            
+    except Exception as e:
+        print(f"Error creating recommendations table: {e}")
+        traceback.print_exc()
+        return False
+
+
+def add_input_sent_column_to_agent_jobs(engine=None) -> bool:
+    """Temporary function to add input_sent column to agent_jobs table"""
+    import database_connection
+    
+    if engine is None:
+        engine = database_connection.get_db_engine()
+    if engine is None:
+        print("Warning: Database engine not available, cannot add input_sent column")
+        return False
+    
+    try:
+        with engine.connect() as conn:
+            # Check if column exists
+            check_column_sql = """
+            SELECT EXISTS (
+                SELECT FROM information_schema.columns 
+                WHERE table_schema = 'public' 
+                AND table_name = 'agent_jobs'
+                AND column_name = 'input_sent'
+            );
+            """
+            result = conn.execute(text(check_column_sql))
+            column_exists = result.scalar()
+            
+            if not column_exists:
+                print("Adding input_sent column to agent_jobs table...")
+                alter_table_sql = """
+                ALTER TABLE public.agent_jobs 
+                ADD COLUMN input_sent TEXT;
+                """
+                conn.execute(text(alter_table_sql))
+                conn.commit()
+                print("input_sent column added successfully")
+            else:
+                print("input_sent column already exists")
+            
+            return True
+            
+    except Exception as e:
+        print(f"Error adding input_sent column: {e}")
+        traceback.print_exc()
+        return False
+
+
+# Test data insertion functions (copied from original)
+def insert_test_data_for_users():
+    """Insert test data for users table"""
+    import database_connection
+    
+    try:
+        with engine.connect() as conn:
+            insert_sql = """
+            INSERT INTO public.users (email_address, display_name, user_role, active) 
+            VALUES ('admin@example.com', 'Admin User', 'Admin', TRUE)
+            ON CONFLICT (email_address) DO NOTHING;
+            """
+            conn.execute(text(insert_sql))
+            conn.commit()
+            print("Test user data inserted")
+    except Exception as e:
+        print(f"Error inserting test user data: {e}")
+
+
+def insert_test_data_for_prompts():
+    """Insert test data for prompts table"""
+    import database_connection
+    
+    try:
+        with engine.connect() as conn:
+            insert_sql = """
+            INSERT INTO public.prompts (email_address, prompt_name, prompt_description, prompt_type, prompt_active) 
+            VALUES ('admin@example.com', 'test_prompt', 'This is a test prompt', 'general', TRUE)
+            ON CONFLICT (email_address, prompt_name) DO NOTHING;
+            """
+            conn.execute(text(insert_sql))
+            conn.commit()
+            print("Test prompt data inserted")
+    except Exception as e:
+        print(f"Error inserting test prompt data: {e}")
+
+
+def insert_test_data_for_team_ai_summary_cards():
+    """Insert test data for team_ai_summary_cards table"""
+    import database_connection
+    
+    try:
+        with engine.connect() as conn:
+            insert_sql = """
+            INSERT INTO public.team_ai_summary_cards (date, team_name, card_name, card_type, priority, description) 
+            VALUES (CURRENT_DATE, 'TestTeam', 'Test Card', 'performance', 'High', 'This is a test AI card')
+            ON CONFLICT (date, team_name, card_name) DO NOTHING;
+            """
+            conn.execute(text(insert_sql))
+            conn.commit()
+            print("Test AI card data inserted")
+    except Exception as e:
+        print(f"Error inserting test AI card data: {e}")
+
+
+def insert_default_global_settings():
+    """Insert default global settings"""
+    import database_connection
+    
+    try:
+        with engine.connect() as conn:
+            insert_sql = """
+            INSERT INTO public.global_settings (setting_key, setting_value, setting_type, description) 
+            VALUES 
+                ('default_ai_model', 'gemini-2.5-flash', 'string', 'Default AI model to use'),
+                ('max_ai_cards_per_team', '10', 'integer', 'Maximum AI cards per team'),
+                ('enable_ai_insights', 'true', 'boolean', 'Enable AI insights feature')
+            ON CONFLICT (setting_key) DO NOTHING;
+            """
+            conn.execute(text(insert_sql))
+            conn.commit()
+            print("Default global settings inserted")
+    except Exception as e:
+        print(f"Error inserting default global settings: {e}")
+
+
+def initialize_database_tables_with_engine(engine) -> None:
+    """Initialize all database tables using provided engine - should be called only once on startup"""
+    global _tables_initialized
+    if _tables_initialized:
+        return
+    
+    print("=== INITIALIZING DATABASE TABLES ===")
+    create_users_table_if_not_exists(engine)
+    create_prompts_table_if_not_exists(engine)
+    create_security_logs_table_if_not_exists(engine)
+    create_global_settings_table_if_not_exists(engine)
+    create_team_ai_summary_cards_table_if_not_exists(engine)
+    create_pi_ai_summary_cards_table_if_not_exists(engine)
+    create_ai_summary_table_if_not_exists(engine)
+    create_agent_jobs_table_if_not_exists(engine)
+    add_input_sent_column_to_agent_jobs(engine)
+    create_transcripts_table_if_not_exists(engine)
+    create_recommendations_table_if_not_exists(engine)
+    _tables_initialized = True
+    print("=== DATABASE TABLES INITIALIZATION COMPLETE ===")
+
+
+def initialize_database_tables() -> None:
+    """Initialize all database tables - should be called only once on startup"""
+    global _tables_initialized
+    if _tables_initialized:
+        return
+    
+    print("=== INITIALIZING DATABASE TABLES ===")
+    create_users_table_if_not_exists()
+    create_prompts_table_if_not_exists()
+    create_security_logs_table_if_not_exists()
+    create_global_settings_table_if_not_exists()
+    create_team_ai_summary_cards_table_if_not_exists()
+    create_pi_ai_summary_cards_table_if_not_exists()
+    create_ai_summary_table_if_not_exists()
+    create_agent_jobs_table_if_not_exists()
+    add_input_sent_column_to_agent_jobs()  # Temporary function to add input_sent column
+    create_transcripts_table_if_not_exists()
+    create_recommendations_table_if_not_exists()
+    _tables_initialized = True
+    print("=== DATABASE TABLES INITIALIZATION COMPLETE ===")
+ 
+ 
+ 
+========================================== 
+File: database_team_metrics.py 
+========================================== 
+ 
+"""
+Database Team Metrics - Database access functions for team metrics.
+
+This module contains database access functions for team metrics.
+Uses FastAPI dependencies for clean connection management and SQL injection protection.
+Copied exact logic, SQL statements, and functions from JiraDashboard-NEWUI project.
+"""
+
+from sqlalchemy import text
+from sqlalchemy.engine import Connection
+from typing import Dict, Any, List
+from datetime import datetime, date, timedelta
+import logging
+import config
+
+logger = logging.getLogger(__name__)
+
+
+def get_team_avg_sprint_metrics(team_name: str, sprint_count: int = 5, conn: Connection = None) -> Dict[str, float]:
+    """
+    Get average sprint metrics for a team over the last N closed sprints.
+    Uses get_sprint_metrics_by_team database function.
+    Copied exact logic from JiraDashboard-NEWUI project.
+    
+    Args:
+        team_name (str): Team name
+        sprint_count (int): Number of recent sprints to average (default: 5)
+        conn (Connection): Database connection from FastAPI dependency
+    
+    Returns:
+        dict: Dictionary with 'velocity', 'cycle_time', and 'predictability' values
+    """
+    try:
+        # SECURE: Parameterized query prevents SQL injection
+        sql_query = """
+            SELECT 
+                average_velocity_issue_count,
+                average_cycle_time_days,
+                overall_predictability_percent
+            FROM get_sprint_metrics_by_team(:sprint_count, :team_name);
+        """
+        
+        logger.info(f"Executing query to get average sprint metrics for team: {team_name}")
+        logger.info(f"Parameters: sprint_count={sprint_count}, team_name={team_name}")
+        
+        result = conn.execute(text(sql_query), {
+            "sprint_count": sprint_count, 
+            "team_name": team_name
+        })
+        row = result.fetchone()
+        
+        if row and row[0] is not None and row[1] is not None and row[2] is not None:
+            return {
+                'velocity': int(round(float(row[0]), 0)) if row[0] else 0,
+                'cycle_time': float(row[1]) if row[1] else 0.0,
+                'predictability': float(row[2]) if row[2] else 0.0
+            }
+        else:
+            return {'velocity': 0, 'cycle_time': 0.0, 'predictability': 0.0}
+            
+    except Exception as e:
+        logger.error(f"Error fetching average sprint metrics for team {team_name}: {e}")
+        raise e
+
+
+def get_team_count_in_progress(team_name: str, conn: Connection = None) -> Dict[str, Any]:
+    """
+    Get current work in progress (WIP) for a team with breakdown by issue type.
+    WIP = number of issues currently in progress, grouped by issue type.
+    Copied exact logic from JiraDashboard-NEWUI project.
+    
+    Args:
+        team_name (str): Team name
+        conn (Connection): Database connection from FastAPI dependency
+    
+    Returns:
+        dict: Dictionary with total count and breakdown by issue type
+    """
+    try:
+        # SECURE: Parameterized query prevents SQL injection
+        sql_query = """
+            SELECT 
+                issue_type,
+                COUNT(*) as type_count
+            FROM public.jira_issues
+            WHERE team_name = :team_name 
+            AND status_category = 'In Progress'
+            GROUP BY issue_type
+            ORDER BY type_count DESC;
+        """
+        
+        logger.info(f"Executing query to get count in progress for team: {team_name}")
+        logger.info(f"Parameters: team_name={team_name}")
+        
+        result = conn.execute(text(sql_query), {"team_name": team_name})
+        rows = result.fetchall()
+        
+        total_count = 0
+        count_by_type = {}
+        
+        for row in rows:
+            issue_type = row[0]
+            type_count = int(row[1])
+            count_by_type[issue_type] = type_count
+            total_count += type_count
+        
+        return {
+            'total_in_progress': total_count,
+            'count_by_type': count_by_type
+        }
+            
+    except Exception as e:
+        logger.error(f"Error fetching count in progress for team {team_name}: {e}")
+        raise e
+
+
+def get_team_current_sprint_completion(team_name: str, conn: Connection = None) -> float:
+    """
+    Get completion rate for a team (percentage of completed issues in current active sprint).
+    Uses get_team_active_sprint_metrics helper function.
+    Copied exact logic from JiraDashboard-NEWUI project.
+    
+    Args:
+        team_name (str): Team name
+        conn (Connection): Database connection from FastAPI dependency
+    
+    Returns:
+        float: Completion rate as percentage (0-100)
+    """
+    try:
+        # Get active sprint metrics using helper function
+        metrics = get_team_active_sprint_metrics(team_name, conn)
+        total = metrics.get('total_issues', 0)
+        completed = metrics.get('completed_issues', 0)
+        
+        if total > 0:
+            return round((completed / total) * 100)
+        else:
+            return 0.0
+            
+    except Exception as e:
+        logger.error(f"Error fetching current sprint completion for team {team_name}: {e}")
+        raise e
+
+
+def get_team_active_sprint_metrics(team_name: str, conn: Connection = None) -> Dict[str, Any]:
+    """
+    Get active sprint metrics for a team.
+    Helper function used by get_team_current_sprint_completion.
+    Copied exact logic from JiraDashboard-NEWUI project.
+    
+    Args:
+        team_name (str): Team name
+        conn (Connection): Database connection from FastAPI dependency
+    
+    Returns:
+        dict: Dictionary with sprint metrics
+    """
+    try:
+        # SECURE: Parameterized query prevents SQL injection
+        sql_query = """
+            SELECT 
+                COUNT(*) as total_issues,
+                COUNT(CASE WHEN status_category = 'Done' THEN 1 END) as completed_issues,
+                COUNT(CASE WHEN status_category != 'Done' THEN 1 END) as in_progress_issues
+            FROM public.jira_issues
+            WHERE team_name = :team_name 
+            AND current_sprint_id IN (
+                SELECT sprint_id FROM public.jira_sprints 
+                WHERE state = 'active'
+            );
+        """
+        
+        logger.info(f"Executing query to get active sprint metrics for team: {team_name}")
+        logger.info(f"Parameters: team_name={team_name}")
+        
+        result = conn.execute(text(sql_query), {"team_name": team_name})
+        row = result.fetchone()
+        
+        if row:
+            return {
+                'total_issues': int(row[0]) if row[0] else 0,
+                'completed_issues': int(row[1]) if row[1] else 0,
+                'in_progress_issues': int(row[2]) if row[2] else 0
+            }
+        else:
+            return {'total_issues': 0, 'completed_issues': 0, 'in_progress_issues': 0}
+            
+    except Exception as e:
+        logger.error(f"Error fetching active sprint metrics for team {team_name}: {e}")
+        raise e
+
+
+def get_sprints_with_total_issues_db(team_name: str, sprint_status: str = None, conn: Connection = None) -> List[Dict[str, Any]]:
+    """
+    Get sprints with their total issues count for a specific team.
+    Used for sprint list endpoint and sprint selection logic.
+    
+    Args:
+        team_name (str): Team name
+        sprint_status (str): Sprint status filter (optional: "active", "closed", or None for all)
+        conn (Connection): Database connection from FastAPI dependency
+    
+    Returns:
+        list: List of sprint dictionaries with sprint_id, name, and total_issues
+    """
+    try:
+        # SECURE: Parameterized query prevents SQL injection
+        sql_query = """
+            SELECT 
+                s.sprint_id, 
+                s.name,
+                COUNT(i.issue_id) as total_issues
+            FROM public.jira_sprints s
+            LEFT JOIN public.jira_issues i ON (
+                s.sprint_id = i.current_sprint_id AND i.team_name = :team_name
+                OR s.sprint_id = ANY(i.sprint_ids) AND i.team_name = :team_name
+            )
+            WHERE s.sprint_id IN (
+                SELECT DISTINCT current_sprint_id 
+                FROM public.jira_issues 
+                WHERE team_name = :team_name 
+                AND current_sprint_id IS NOT NULL
+                UNION
+                SELECT DISTINCT unnest(sprint_ids) as sprint_id
+                FROM public.jira_issues 
+                WHERE team_name = :team_name 
+                AND sprint_ids IS NOT NULL
+            )
+        """
+        
+        # Add sprint status filter if provided
+        if sprint_status:
+            sql_query += " AND s.state = :sprint_status"
+        
+        sql_query += """
+            GROUP BY s.sprint_id, s.name, s.end_date
+            ORDER BY s.end_date DESC
+            LIMIT 10;"""
+        
+        logger.info(f"Executing query to get sprints with total issues count for team: {team_name}")
+        logger.info(f"Parameters: team_name={team_name}, sprint_status={sprint_status}")
+        
+        # Prepare parameters
+        params = {"team_name": team_name}
+        if sprint_status:
+            params["sprint_status"] = sprint_status
+        
+        result = conn.execute(text(sql_query), params)
+        
+        sprints = []
+        for row in result:
+            sprints.append({
+                'sprint_id': row[0],
+                'name': row[1],
+                'total_issues': int(row[2]) if row[2] else 0
+            })
+        
+        return sprints
+            
+    except Exception as e:
+        logger.error(f"Error fetching active sprints with total issues: {e}")
+        raise e
+
+
+def get_closed_sprints_data_db(team_name: str, months: int = 3, conn: Connection = None) -> List[Dict[str, Any]]:
+    """
+    Get closed sprints data for a specific team with detailed metrics.
+    Uses the closed_sprint_summary view to get comprehensive sprint completion data.
+    
+    Args:
+        team_name (str): Team name to filter by
+        months (int): Number of months to look back (1, 2, 3, 4, 6, 9)
+        conn (Connection): Database connection from FastAPI dependency
+    
+    Returns:
+        list: List of closed sprint dictionaries with detailed metrics
+    """
+    try:
+        # Calculate start date based on months parameter
+        start_date = datetime.now().date() - timedelta(days=months * 30)
+        
+        # SECURE: Parameterized query prevents SQL injection
+        sql_query = """
+            SELECT 
+                sprint_name,
+                start_date,
+                end_date,
+                completed_percentage,
+                issues_at_start,
+                issues_added,
+                issues_done,
+                issues_remaining,
+                sprint_goal
+            FROM closed_sprint_summary
+            WHERE team_name = :team_name 
+            AND end_date >= :start_date
+            ORDER BY end_date DESC
+        """
+        
+        logger.info(f"Executing query to get closed sprints data for team: {team_name}")
+        logger.info(f"Parameters: team_name={team_name}, months={months}, start_date={start_date}")
+        
+        result = conn.execute(text(sql_query), {
+            "team_name": team_name,
+            "start_date": start_date.strftime("%Y-%m-%d")
+        })
+        
+        closed_sprints = []
+        for row in result:
+            closed_sprints.append({
+                'sprint_name': row[0],
+                'start_date': row[1],
+                'end_date': row[2],
+                'completed_percentage': float(row[3]) if row[3] else 0.0,
+                'issues_at_start': int(row[4]) if row[4] else 0,
+                'issues_added': int(row[5]) if row[5] else 0,
+                'issues_done': int(row[6]) if row[6] else 0,
+                'issues_remaining': int(row[7]) if row[7] else 0,
+                'sprint_goal': row[8] if row[8] else ""
+            })
+        
+        return closed_sprints
+            
+    except Exception as e:
+        logger.error(f"Error fetching closed sprints data for team {team_name}: {e}")
+        raise e
+
+
+def get_sprint_burndown_data_db(team_name: str, sprint_name: str, issue_type: str = "all", conn: Connection = None) -> List[Dict[str, Any]]:
+    """
+    Get sprint burndown data for a specific team and sprint.
+    Uses the get_sprint_burndown_data_for_team database function.
+    Copied exact logic from JiraDashboard-NEWUI project.
+    
+    Args:
+        team_name (str): Team name
+        sprint_name (str): Sprint name
+        issue_type (str): Issue type filter (default: "all")
+        conn (Connection): Database connection from FastAPI dependency
+    
+    Returns:
+        list: List of burndown data dictionaries
+    """
+    try:
+        # SECURE: Parameterized query prevents SQL injection
+        sql_query = """
+            SELECT * FROM get_sprint_burndown_data_for_team(:sprint_name, :issue_type, :team_name);
+        """
+        
+        logger.info(f"Executing query to get sprint burndown data for team: {team_name}, sprint: {sprint_name}")
+        logger.info(f"Parameters: sprint_name={sprint_name}, issue_type={issue_type}, team_name={team_name}")
+        
+        result = conn.execute(text(sql_query), {
+            "sprint_name": sprint_name,
+            "issue_type": issue_type,
+            "team_name": team_name
+        })
+        
+        burndown_data = []
+        for row in result:
+            burndown_data.append({
+                'snapshot_date': row[0],
+                'start_date': row[1],
+                'end_date': row[2],
+                'remaining_issues': int(row[3]) if row[3] else 0,
+                'ideal_remaining': int(row[4]) if row[4] else 0,
+                'total_issues': int(row[5]) if row[5] else 0,
+                'issues_added_on_day': int(row[6]) if row[6] else 0,
+                'issues_removed_on_day': int(row[7]) if row[7] else 0,
+                'issues_completed_on_day': int(row[8]) if row[8] else 0
+            })
+        
+        return burndown_data
+            
+    except Exception as e:
+        logger.error(f"Error fetching sprint burndown data for team {team_name}, sprint {sprint_name}: {e}")
+        raise e
+
+
+def get_sprint_burndown_data_db(team_name: str, sprint_name: str, issue_type: str = "all", conn: Connection = None) -> List[Dict[str, Any]]:
+    """
+    Get sprint burndown data for a specific team and sprint.
+    Uses the get_sprint_burndown_data_for_team database function.
+    Copied exact logic from JiraDashboard-NEWUI project.
+    
+    Args:
+        team_name (str): Team name
+        sprint_name (str): Sprint name
+        issue_type (str): Issue type filter (default: "all")
+        conn (Connection): Database connection from FastAPI dependency
+    
+    Returns:
+        list: List of dictionaries with burndown data
+    """
+    try:
+        # SECURE: Parameterized query prevents SQL injection
+        sql_query = """
+            SELECT * FROM public.get_sprint_burndown_data_for_team(:sprint_name, :issue_type, :team_name);
+        """
+        
+        logger.info(f"Executing query to get sprint burndown data for team: {team_name}, sprint: {sprint_name}")
+        logger.info(f"Parameters: sprint_name={sprint_name}, issue_type={issue_type}, team_name={team_name}")
+        
+        result = conn.execute(text(sql_query), {
+            'sprint_name': sprint_name,
+            'issue_type': issue_type,
+            'team_name': team_name
+        })
+        
+        burndown_data = []
+        for row in result:
+            burndown_data.append({
+                'snapshot_date': row.snapshot_date,
+                'start_date': row.sprint_start_date,
+                'end_date': row.sprint_end_date,
+                'remaining_issues': row.remaining_issues,
+                'ideal_remaining': row.ideal_remaining,
+                'total_issues': row.total_issues,
+                'issues_added_on_day': row.issues_added_on_day,
+                'issues_removed_on_day': row.issues_removed_on_day,
+                'issues_completed_on_day': row.issues_completed_on_day
+            })
+        
+        return burndown_data
+            
+    except Exception as e:
+        logger.error(f"Error fetching sprint burndown data for team {team_name}, sprint {sprint_name}: {e}")
+        raise e
+
+
+def get_issues_trend_data_db(team_name: str, months: int = 6, issue_type: str = "all", conn: Connection = None) -> List[Dict[str, Any]]:
+    """
+    Get issues created and resolved over time for a specific team.
+    Uses the issues_created_and_resolved_over_time view.
+    Returns all columns from the view (pass-through).
+    
+    Args:
+        team_name (str): Team name to filter by
+        months (int): Number of months to look back (1, 2, 3, 4, 6, 9, 12) - default: 6
+        issue_type (str): Issue type filter (default: "all")
+        conn (Connection): Database connection from FastAPI dependency
+    
+    Returns:
+        list: List of trend data dictionaries directly from the view
+    """
+    try:
+        # Calculate start date based on months parameter
+        start_date = datetime.now().date() - timedelta(days=months * 30)
+        
+        # SECURE: Parameterized query prevents SQL injection
+        # We use SELECT * to pass through all columns from the view
+        sql_query = """
+            SELECT *
+            FROM issues_created_and_resolved_over_time
+            WHERE team_name = :team_name 
+            AND report_month >= :start_date
+        """
+        
+        # Add issue type filter if not "all"
+        if issue_type and issue_type != "all":
+            sql_query += " AND issue_type = :issue_type"
+        
+        sql_query += " ORDER BY report_month DESC;"
+        
+        logger.info(f"Executing query to get issues trend data for team: {team_name}")
+        logger.info(f"Parameters: team_name={team_name}, months={months}, start_date={start_date}, issue_type={issue_type}")
+        
+        # Prepare parameters
+        params = {
+            "team_name": team_name,
+            "start_date": start_date.strftime("%Y-%m-%d")
+        }
+        
+        if issue_type and issue_type != "all":
+            params["issue_type"] = issue_type
+        
+        result = conn.execute(text(sql_query), params)
+        
+        # Convert rows to dictionaries - pass through all columns
+        trend_data = []
+        for row in result:
+            # Convert row to dictionary using row._mapping
+            row_dict = dict(row._mapping)
+            trend_data.append(row_dict)
+        
+        return trend_data
+            
+    except Exception as e:
+        logger.error(f"Error fetching issues trend data for team {team_name}: {e}")
+        raise e
+ 
+ 
+ 
+========================================== 
+File: main.py 
+========================================== 
+ 
+from fastapi import FastAPI, HTTPException, Request
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse, Response
+import os
+import logging
+import base64
+import time
+
+# Import service modules
+from teams_service import teams_router
+from recommendations_service import recommendations_router
+from team_ai_cards_service import team_ai_cards_router
+from team_metrics_service import team_metrics_router
+from settings_service import settings_router
+from pis_service import pis_router
+from agent_jobs_service import agent_jobs_router
+from security_logs_service import security_logs_router
+from pi_ai_cards_service import pi_ai_cards_router
+from transcripts_service import transcripts_router
+from prompts_service import prompts_router
+
+# Configure logging
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
+
+# Simple comment for testing commit and push
+
+app = FastAPI(
+    title="SparksAI Backend Services",
+    description="Backend API services for SparksAI - REST API endpoints for various services",
+    version="1.0.0",
+    docs_url="/docs",
+    redoc_url="/redoc"
+)
+
+# Add CORS middleware
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],  # Configure appropriately for production
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+# Add timing middleware to log request/response times
+@app.middleware("http")
+async def timing_middleware(request: Request, call_next):
+    start_time = time.time()
+    logger.info(f"REQUEST: {request.method} {request.url.path} - START")
+    
+    response = await call_next(request)
+    
+    end_time = time.time()
+    duration = end_time - start_time
+    logger.info(f"REQUEST: {request.method} {request.url.path} - END (Duration: {duration:.3f}s)")
+    
+    return response
+
+# Include service routers
+app.include_router(teams_router, prefix="/api/v1", tags=["teams"])
+app.include_router(recommendations_router, prefix="/api/v1", tags=["recommendations"])
+app.include_router(team_ai_cards_router, prefix="/api/v1", tags=["team-ai-cards"])
+app.include_router(team_metrics_router, prefix="/api/v1", tags=["team-metrics"])
+app.include_router(settings_router, prefix="/api/v1", tags=["settings"])
+app.include_router(pis_router, prefix="/api/v1", tags=["pis"])
+app.include_router(agent_jobs_router, prefix="/api/v1", tags=["agent-jobs"])
+app.include_router(security_logs_router, prefix="/api/v1", tags=["security-logs"])
+app.include_router(pi_ai_cards_router, prefix="/api/v1", tags=["pi-ai-cards"])
+app.include_router(transcripts_router, prefix="/api/v1", tags=["transcripts"])
+app.include_router(prompts_router, prefix="/api/v1", tags=["prompts"])
+
+@app.get("/")
+async def root():
+    """Root endpoint with API information"""
+    return {
+        "message": "SparksAI Backend Services API", 
+        "version": "1.0.0",
+        "docs": "/docs",
+        "health": "/health"
+    }
+
+@app.get("/health")
+async def health_check():
+    """Health check endpoint"""
+    return {"status": "healthy", "service": "SparksAI Backend"}
+
+@app.get("/favicon.ico")
+async def favicon():
+    """Dashboard favicon endpoint"""
+    # Create a simple dashboard icon (16x16 pixel favicon)
+    # This is a minimal SVG-based favicon representing a dashboard
+    favicon_svg = """
+    <svg width="16" height="16" viewBox="0 0 16 16" xmlns="http://www.w3.org/2000/svg">
+        <rect width="16" height="16" fill="#007bff"/>
+        <rect x="2" y="2" width="4" height="4" fill="white" rx="1"/>
+        <rect x="8" y="2" width="4" height="4" fill="white" rx="1"/>
+        <rect x="2" y="8" width="4" height="4" fill="white" rx="1"/>
+        <rect x="8" y="8" width="4" height="4" fill="white" rx="1"/>
+        <circle cx="14" cy="14" r="1.5" fill="white"/>
+    </svg>
+    """
+    
+    return Response(
+        content=favicon_svg,
+        media_type="image/svg+xml",
+        headers={"Cache-Control": "public, max-age=31536000"}
+    )
+
+# Global exception handler for consistent error responses
+@app.exception_handler(Exception)
+async def global_exception_handler(request, exc):
+    """Global exception handler for consistent error responses"""
+    logger.error(f"Unhandled exception: {exc}")
+    return JSONResponse(
+        status_code=500,
+        content={
+            "error": "Internal server error",
+            "message": "An unexpected error occurred",
+            "code": 500
+        }
+    )
+
+@app.exception_handler(HTTPException)
+async def http_exception_handler(request, exc):
+    """HTTP exception handler for consistent error responses"""
+    return JSONResponse(
+        status_code=exc.status_code,
+        content={
+            "error": exc.detail,
+            "code": exc.status_code
+        }
+    )
+
+if __name__ == "__main__":
+    import uvicorn
+    import sys
+    
+    # Check for port argument in command line first
+    port = None
+    if len(sys.argv) > 1:
+        for i, arg in enumerate(sys.argv):
+            if arg == "--port" and i + 1 < len(sys.argv):
+                try:
+                    port = int(sys.argv[i + 1])
+                    break
+                except ValueError:
+                    print(f"Invalid port number: {sys.argv[i + 1]}")
+                    sys.exit(1)
+    
+    # If no command line port, use environment variable, then default
+    if port is None:
+        port = int(os.getenv("PORT", 8000))
+    
+    # Use 1 worker by default (can override with WORKERS env var)
+    # Note: Multiple workers require app as import string (use: workers=1 for development)
+    workers = int(os.getenv("WORKERS", 1))
+    
+    print(f"Starting server on port {port} with {workers} worker(s)")
+    uvicorn.run(app, host="0.0.0.0", port=port, workers=workers)
+ 
+ 
+ 
+========================================== 
+File: pis_service.py 
+========================================== 
+ 
+"""
+PIs Service - REST API endpoints for PI-related operations.
+
+This service provides endpoints for managing and retrieving PI information.
+Uses FastAPI dependencies for clean connection management and SQL injection protection.
+"""
+
+from fastapi import APIRouter, HTTPException, Depends, Query
+from sqlalchemy import text
+from sqlalchemy.engine import Connection
+from typing import List, Dict, Any, Union
+import logging
+from database_connection import get_db_connection
+from database_pi import fetch_pi_predictability_data, fetch_pi_burndown_data, fetch_scope_changes_data
+import config
+
+logger = logging.getLogger(__name__)
+
+pis_router = APIRouter()
+
+@pis_router.get("/pis/getPis")
+async def get_pis(conn: Connection = Depends(get_db_connection)):
+    """
+    Get all PIs from pis table.
+    Uses parameterized queries to prevent SQL injection.
+    
+    Returns:
+        JSON response with list of PIs and count
+    """
+    try:
+        # SECURE: Parameterized query prevents SQL injection
+        query = text(f"""
+            SELECT * 
+            FROM {config.PIS_TABLE} 
+            ORDER BY pi_name
+        """)
+        
+        logger.info(f"Executing query to get all PIs from pis table")
+        
+        # Execute query with connection from dependency
+        result = conn.execute(query)
+        rows = result.fetchall()
+        
+        # Convert rows to list of dictionaries
+        pis = []
+        for row in rows:
+            pis.append({
+                "pi_name": row[0],
+                "start_date": row[1],
+                "end_date": row[2],
+                "planning_grace_days": row[3],
+                "prep_grace_days": row[4],
+                "updated_at": row[5]
+            })
+        
+        return {
+            "success": True,
+            "data": {
+                "pis": pis,
+                "count": len(pis)
+            },
+            "message": f"Retrieved {len(pis)} PIs"
+        }
+    
+    except Exception as e:
+        logger.error(f"Error fetching PIs: {e}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to fetch PIs: {str(e)}"
+        )
+
+
+@pis_router.get("/pis/predictability")
+async def get_pi_predictability(
+    pi_names: Union[str, List[str]] = Query(..., description="Single PI name or array of PI names (comma-separated)"),
+    team_name: str = Query(None, description="Single team name filter (or 'ALL SUMMARY' for summary)"),
+    conn: Connection = Depends(get_db_connection)
+):
+    """
+    Get PI predictability report data for specified PI(s).
+    
+    Supports multiple PI names (array or comma-separated) and single team name.
+    Returns all columns from get_pi_predictability_by_team database function.
+    
+    Parameters:
+        pi_names: Single PI name or array of PI names (comma-separated)
+        team_name: Optional single team name for filtering (use 'ALL SUMMARY' for aggregated view)
+    
+    Returns:
+        JSON response with PI predictability data (all columns)
+    """
+    try:
+        # Handle pi_names parameter - can be comma-separated string or already a list
+        if not pi_names:
+            raise HTTPException(
+                status_code=400,
+                detail="pi_names parameter is required"
+            )
+        
+        # Convert to list if it's a string
+        if isinstance(pi_names, str):
+            # Check if it's comma-separated
+            if ',' in pi_names:
+                pi_names = [name.strip() for name in pi_names.split(',')]
+            else:
+                pi_names = [pi_names]
+        
+        logger.info(f"Fetching PI predictability data for PIs: {pi_names}")
+        logger.info(f"Team filter: {team_name if team_name else 'None'}")
+        
+        # Call database function (logic copied from old project)
+        predictability_data = fetch_pi_predictability_data(
+            pi_names=pi_names,
+            team_name=team_name,
+            conn=conn
+        )
+        
+        return {
+            "success": True,
+            "data": {
+                "predictability_data": predictability_data,
+                "count": len(predictability_data),
+                "pi_names": pi_names,
+                "team_name": team_name
+            },
+            "message": f"Retrieved PI predictability data for {len(predictability_data)} records"
+        }
+    
+    except HTTPException:
+        # Re-raise HTTP exceptions (like the 400 error above)
+        raise
+    except Exception as e:
+        logger.error(f"Error fetching PI predictability data: {e}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to fetch PI predictability data: {str(e)}"
+        )
+
+
+@pis_router.get("/pis/burndown")
+async def get_pi_burndown(
+    pi: str = Query(..., description="PI name (mandatory)"),
+    project: str = Query(None, description="Project key filter"),
+    issue_type: str = Query(None, description="Issue type filter"),
+    team: str = Query(None, description="Team name filter"),
+    conn: Connection = Depends(get_db_connection)
+):
+    """
+    Get PI burndown data for a specific PI.
+    
+    Parameters:
+        pi: PI name (mandatory)
+        project: Project key filter (optional)
+        issue_type: Issue type filter (optional, defaults to 'all')
+        team: Team name filter (optional)
+    
+    Returns:
+        JSON response with PI burndown data
+    """
+    try:
+        # Validate pi parameter (mandatory)
+        if not pi:
+            raise HTTPException(
+                status_code=400,
+                detail="pi parameter is required"
+            )
+        
+        logger.info(f"Fetching PI burndown data for PI: {pi}")
+        logger.info(f"Filters: project={project}, issue_type={issue_type}, team={team}")
+        
+        # Call database function (logic copied from old project)
+        burndown_data = fetch_pi_burndown_data(
+            pi_name=pi,
+            project_keys=project,
+            issue_type=issue_type,
+            team_names=team,
+            conn=conn
+        )
+        
+        return {
+            "success": True,
+            "data": {
+                "burndown_data": burndown_data,
+                "count": len(burndown_data),
+                "pi": pi,
+                "project": project,
+                "issue_type": issue_type,
+                "team": team
+            },
+            "message": f"Retrieved PI burndown data for {len(burndown_data)} records"
+        }
+    
+    except HTTPException:
+        # Re-raise HTTP exceptions (like the 400 error above)
+        raise
+    except Exception as e:
+        logger.error(f"Error fetching PI burndown data: {e}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to fetch PI burndown data: {str(e)}"
+        )
+
+
+@pis_router.get("/pis/scope-changes")
+async def get_scope_changes(
+    quarter: Union[str, List[str]] = Query(..., description="Quarter/PI name(s) to get scope changes for (can be single or multiple)"),
+    conn: Connection = Depends(get_db_connection)
+):
+    """
+    Get scope changes data for specified quarters/PIs.
+    
+    Parameters:
+        quarter: Quarter/PI name(s) - can be a single value or multiple (e.g., quarter=2025-Q1&quarter=2025-Q2)
+    
+    Returns:
+        JSON response with scope changes data
+    """
+    try:
+        # Validate quarter parameter (mandatory)
+        if not quarter:
+            raise HTTPException(
+                status_code=400,
+                detail="quarter parameter is required"
+            )
+        
+        # Normalize quarter to a list
+        if isinstance(quarter, str):
+            quarters = [quarter]
+        else:
+            quarters = quarter
+        
+        # Validate we have at least one quarter
+        if not quarters or len(quarters) == 0:
+            raise HTTPException(
+                status_code=400,
+                detail="At least one quarter must be provided"
+            )
+        
+        logger.info(f"Fetching scope changes data for quarters: {quarters}")
+        
+        # Call database function (logic copied from old project)
+        scope_data = fetch_scope_changes_data(
+            quarters=quarters,
+            conn=conn
+        )
+        
+        return {
+            "success": True,
+            "data": {
+                "scope_data": scope_data,
+                "count": len(scope_data),
+                "quarters": quarters
+            },
+            "message": f"Retrieved scope changes data for {len(scope_data)} records"
+        }
+    
+    except HTTPException:
+        # Re-raise HTTP exceptions (like the 400 error above)
+        raise
+    except Exception as e:
+        logger.error(f"Error fetching scope changes data: {e}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to fetch scope changes data: {str(e)}"
+        )
+ 
+ 
+ 
+========================================== 
+File: pi_ai_cards_service.py 
+========================================== 
+ 
+"""
+PI AI Cards Service - REST API endpoints for PI AI summary card-related operations.
+
+This service provides endpoints for managing and retrieving PI AI summary card information.
+Uses FastAPI dependencies for clean connection management and SQL injection protection.
+"""
+
+from fastapi import APIRouter, HTTPException, Depends, Query
+from sqlalchemy import text
+from sqlalchemy.engine import Connection
+from typing import List, Dict, Any
+import logging
+import re
+from database_connection import get_db_connection
+import config
+
+logger = logging.getLogger(__name__)
+
+pi_ai_cards_router = APIRouter()
+
+def validate_pi_name(pi_name: str) -> str:
+    """
+    Validate and sanitize PI name to prevent SQL injection.
+    Only allows alphanumeric characters, spaces, hyphens, and underscores.
+    """
+    if not pi_name or not isinstance(pi_name, str):
+        raise HTTPException(status_code=400, detail="PI name is required and must be a string")
+    
+    # Remove any potentially dangerous characters
+    sanitized = re.sub(r'[^a-zA-Z0-9\s\-_]', '', pi_name.strip())
+    
+    if not sanitized:
+        raise HTTPException(status_code=400, detail="PI name contains invalid characters")
+    
+    if len(sanitized) > 100:  # Reasonable length limit
+        raise HTTPException(status_code=400, detail="PI name is too long (max 100 characters)")
+    
+    return sanitized
+
+def validate_limit(limit: int) -> int:
+    """
+    Validate limit parameter to prevent abuse.
+    """
+    if limit < 1:
+        raise HTTPException(status_code=400, detail="Limit must be at least 1")
+    
+    if limit > 50:  # Reasonable upper limit
+        raise HTTPException(status_code=400, detail="Limit cannot exceed 50")
+    
+    return limit
+
+@pi_ai_cards_router.get("/pi-ai-cards/getTopCards")
+async def get_pi_ai_cards(
+    pi: str = Query(..., description="PI name to get PI AI cards for"),
+    limit: int = Query(4, description="Number of PI AI cards to return (default: 4, max: 50)"),
+    conn: Connection = Depends(get_db_connection)
+):
+    """
+    Get PI AI summary cards for a specific PI.
+    
+    Returns the most recent + highest priority card for each type (max 1 per type).
+    Cards are ordered by:
+    1. Priority (Critical > High > Medium)
+    2. Date (newest first)
+    
+    Args:
+        pi: Name of the PI
+        limit: Number of PI AI cards to return (default: 4)
+    
+    Returns:
+        JSON response with PI AI cards list and metadata
+    """
+    try:
+        # Validate inputs
+        validated_pi_name = validate_pi_name(pi)
+        validated_limit = validate_limit(limit)
+        
+        # Get PI AI cards using direct SQL query (filter by pi field)
+        query = text(f"""
+            WITH ranked_cards AS (
+                SELECT *,
+                    ROW_NUMBER() OVER (
+                        PARTITION BY card_type 
+                        ORDER BY 
+                            CASE priority 
+                                WHEN 'Critical' THEN 1 
+                                WHEN 'High' THEN 2 
+                                WHEN 'Medium' THEN 3 
+                                ELSE 4 
+                            END,
+                            date DESC
+                    ) as rn
+                FROM {config.PI_AI_CARDS_TABLE}
+                WHERE pi = :pi_name
+            )
+            SELECT *
+            FROM ranked_cards
+            WHERE rn = 1
+            ORDER BY 
+                CASE priority 
+                    WHEN 'Critical' THEN 1 
+                    WHEN 'High' THEN 2 
+                    WHEN 'Medium' THEN 3 
+                    ELSE 4 
+                END,
+                date DESC
+            LIMIT :limit
+        """)
+        
+        logger.info(f"Executing query to get PI AI cards for PI '{validated_pi_name}'")
+        
+        result = conn.execute(query, {"pi_name": validated_pi_name, "limit": validated_limit})
+        rows = result.fetchall()
+        
+        # Convert rows to list of dictionaries
+        ai_cards = []
+        for row in rows:
+            card_dict = dict(row._mapping)
+            ai_cards.append(card_dict)
+        
+        return {
+            "success": True,
+            "data": {
+                "ai_cards": ai_cards,
+                "count": len(ai_cards),
+                "pi": validated_pi_name,
+                "limit": validated_limit
+            },
+            "message": f"Retrieved {len(ai_cards)} PI AI cards for PI '{validated_pi_name}'"
+        }
+    
+    except HTTPException:
+        # Re-raise HTTP exceptions (validation errors)
+        raise
+    except Exception as e:
+        logger.error(f"Error fetching PI AI cards for PI {pi}: {e}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to fetch PI AI cards: {str(e)}"
+        )
+
+@pi_ai_cards_router.get("/pi-ai-cards")
+async def get_pi_ai_cards_collection(conn: Connection = Depends(get_db_connection)):
+    """
+    Get the latest 100 PI AI summary cards from ai_summary table.
+    Uses parameterized queries to prevent SQL injection.
+    
+    Returns:
+        JSON response with list of PI AI cards and count
+    """
+    try:
+        # SECURE: Parameterized query prevents SQL injection
+        # Only return selected fields for the collection endpoint
+        query = text(f"""
+            SELECT 
+                id,
+                date,
+                team_name,
+                card_name,
+                card_type,
+                priority,
+                description,
+                source,
+                pi
+            FROM {config.PI_AI_CARDS_TABLE}
+            ORDER BY id DESC 
+            LIMIT 100
+        """)
+        
+        logger.info(f"Executing query to get latest 100 PI AI cards from {config.PI_AI_CARDS_TABLE}")
+        
+        # Execute query with connection from dependency
+        result = conn.execute(query)
+        rows = result.fetchall()
+        
+        # Convert rows to list of dictionaries
+        cards = []
+        for row in rows:
+            # Truncate description to first 200 characters with ellipsis when longer
+            description_text = row[6]
+            if isinstance(description_text, str) and len(description_text) > 200:
+                description_text = description_text[:200] + "..."
+
+            card_dict = {
+                "id": row[0],
+                "date": row[1],
+                "team_name": row[2],
+                "card_name": row[3],
+                "card_type": row[4],
+                "priority": row[5],
+                "description": description_text,
+                "source": row[7],
+                "pi": row[8]
+            }
+            cards.append(card_dict)
+        
+        return {
+            "success": True,
+            "data": {
+                "cards": cards,
+                "count": len(cards)
+            },
+            "message": f"Retrieved {len(cards)} PI AI summary cards"
+        }
+    
+    except Exception as e:
+        logger.error(f"Error fetching PI AI cards: {e}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to fetch PI AI cards: {str(e)}"
+        )
+
+@pi_ai_cards_router.get("/pi-ai-cards/{id}")
+async def get_pi_ai_card(id: int, conn: Connection = Depends(get_db_connection)):
+    """
+    Get a single PI AI summary card by ID from ai_summary table.
+    Uses parameterized queries to prevent SQL injection.
+    
+    Args:
+        id: The ID of the PI AI card to retrieve
+    
+    Returns:
+        JSON response with single PI AI card or 404 if not found
+    """
+    try:
+        # SECURE: Parameterized query prevents SQL injection
+        query = text(f"""
+            SELECT * 
+            FROM {config.PI_AI_CARDS_TABLE} 
+            WHERE id = :id
+        """)
+        
+        logger.info(f"Executing query to get PI AI card with ID {id} from {config.PI_AI_CARDS_TABLE}")
+        
+        # Execute query with connection from dependency
+        result = conn.execute(query, {"id": id})
+        row = result.fetchone()
+        
+        if not row:
+            raise HTTPException(
+                status_code=404,
+                detail=f"PI AI card with ID {id} not found"
+            )
+        
+        # Convert row to dictionary - get all fields from database
+        card = dict(row._mapping)
+        
+        return {
+            "success": True,
+            "data": {
+                "card": card
+            },
+            "message": f"Retrieved PI AI card with ID {id}"
+        }
+    
+    except HTTPException:
+        # Re-raise HTTP exceptions (like the 404 error above)
+        raise
+    except Exception as e:
+        logger.error(f"Error fetching PI AI card {id}: {e}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to fetch PI AI card: {str(e)}"
+        )
+ 
+ 
+ 
+========================================== 
+File: prompts_service.py 
+========================================== 
+ 
+"""
+Prompts Service - REST API endpoints for prompt-related operations.
+
+This service provides endpoints for managing and retrieving prompt information.
+Uses FastAPI dependencies for clean connection management and SQL injection protection.
+"""
+
+from fastapi import APIRouter, HTTPException, Depends, Query
+from sqlalchemy import text
+from sqlalchemy.engine import Connection
+from typing import List, Dict, Any, Optional
+from pydantic import BaseModel
+import logging
+import re
+from database_connection import get_db_connection
+import config
+
+logger = logging.getLogger(__name__)
+
+prompts_router = APIRouter()
+
+# Pydantic model for request body - used by both POST and PUT
+class PromptRequest(BaseModel):
+    email_address: str
+    prompt_name: str
+    prompt_description: str
+    prompt_type: str
+    prompt_active: bool = True
+
+def validate_prompt_name(prompt_name: str) -> str:
+    """
+    Validate and sanitize prompt name to prevent SQL injection.
+    Only allows alphanumeric characters, spaces, hyphens, and underscores.
+    """
+    if not prompt_name or not isinstance(prompt_name, str):
+        raise HTTPException(status_code=400, detail="Prompt name is required and must be a string")
+    
+    # Remove any potentially dangerous characters
+    sanitized = re.sub(r'[^a-zA-Z0-9\s\-_]', '', prompt_name.strip())
+    
+    if not sanitized:
+        raise HTTPException(status_code=400, detail="Prompt name contains invalid characters")
+    
+    if len(sanitized) > 255:  # Match database column limit
+        raise HTTPException(status_code=400, detail="Prompt name is too long (max 255 characters)")
+    
+    return sanitized
+
+def validate_email_address(email_address: str) -> str:
+    """
+    Validate and sanitize email address field to prevent SQL injection.
+    Accepts any text string (not validating email format).
+    """
+    if not email_address or not isinstance(email_address, str):
+        raise HTTPException(status_code=400, detail="Email address is required and must be a string")
+    
+    if len(email_address) > 255:  # Match database column limit
+        raise HTTPException(status_code=400, detail="Email address is too long (max 255 characters)")
+    
+    return email_address.strip()
+
+@prompts_router.get("/prompts")
+async def get_prompts(
+    email_address: Optional[str] = Query(None, description="Filter by email address"),
+    prompt_type: Optional[str] = Query(None, description="Filter by prompt type"),
+    active: Optional[bool] = Query(None, description="Filter by active status"),
+    search: Optional[str] = Query(None, description="Search in prompt names"),
+    limit: int = Query(100, ge=1, le=1000, description="Maximum number of prompts to return"),
+    offset: int = Query(0, ge=0, description="Number of prompts to skip"),
+    conn: Connection = Depends(get_db_connection)
+):
+    """
+    Get collection of prompts with optional filtering.
+    Returns truncated prompt_description (200 chars + "...") for collection view.
+    
+    Args:
+        email_address: Filter by specific email address
+        prompt_type: Filter by prompt type
+        active: Filter by active status
+        search: Search term for prompt names
+        limit: Maximum number of results (1-1000)
+        offset: Number of results to skip
+    
+    Returns:
+        JSON response with list of prompts and count
+    """
+    try:
+        # Build WHERE clause dynamically based on filters
+        where_conditions = []
+        params = {}
+        
+        if email_address:
+            validated_email = validate_email_address(email_address)
+            where_conditions.append("email_address = :email_address")
+            params["email_address"] = validated_email
+        
+        if prompt_type:
+            where_conditions.append("prompt_type = :prompt_type")
+            params["prompt_type"] = prompt_type
+        
+        if active is not None:
+            where_conditions.append("prompt_active = :active")
+            params["active"] = active
+        
+        if search:
+            where_conditions.append("prompt_name ILIKE :search")
+            params["search"] = f"%{search}%"
+        
+        where_clause = ""
+        if where_conditions:
+            where_clause = "WHERE " + " AND ".join(where_conditions)
+        
+        # SECURE: Parameterized query prevents SQL injection
+        query = text(f"""
+            SELECT 
+                email_address,
+                prompt_name,
+                CASE 
+                    WHEN LENGTH(prompt_description) > 200 
+                    THEN LEFT(prompt_description, 200) || '...'
+                    ELSE prompt_description
+                END as prompt_description,
+                prompt_type,
+                prompt_active,
+                created_at,
+                updated_at
+            FROM {config.PROMPTS_TABLE}
+            {where_clause}
+            ORDER BY updated_at DESC
+            LIMIT :limit OFFSET :offset
+        """)
+        
+        params["limit"] = limit
+        params["offset"] = offset
+        
+        logger.info(f"Executing query to get prompts from {config.PROMPTS_TABLE}")
+        
+        # Execute query with connection from dependency
+        result = conn.execute(query, params)
+        rows = result.fetchall()
+        
+        # Convert rows to list of dictionaries
+        prompts = []
+        for row in rows:
+            prompt_dict = {
+                "email_address": row[0],
+                "prompt_name": row[1],
+                "prompt_description": row[2],  # Already truncated in SQL
+                "prompt_type": row[3],
+                "prompt_active": row[4],
+                "created_at": row[5],
+                "updated_at": row[6]
+            }
+            prompts.append(prompt_dict)
+        
+        return {
+            "success": True,
+            "data": {
+                "prompts": prompts,
+                "count": len(prompts)
+            },
+            "message": f"Retrieved {len(prompts)} prompts"
+        }
+    
+    except HTTPException:
+        # Re-raise HTTP exceptions (like validation errors)
+        raise
+    except Exception as e:
+        logger.error(f"Error fetching prompts: {e}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to fetch prompts: {str(e)}"
+        )
+
+@prompts_router.get("/prompts/{email_address}/{prompt_name}")
+async def get_prompt(
+    email_address: str, 
+    prompt_name: str, 
+    conn: Connection = Depends(get_db_connection)
+):
+    """
+    Get a single prompt by email_address and prompt_name.
+    Returns full prompt_description (not truncated).
+    
+    Args:
+        email_address: The email address of the prompt owner
+        prompt_name: The name of the prompt
+    
+    Returns:
+        JSON response with single prompt or 404 if not found
+    """
+    try:
+        # Validate inputs
+        validated_email = validate_email_address(email_address)
+        validated_name = validate_prompt_name(prompt_name)
+        
+        # SECURE: Parameterized query prevents SQL injection
+        query = text(f"""
+            SELECT 
+                email_address,
+                prompt_name,
+                prompt_description,
+                prompt_type,
+                prompt_active,
+                created_at,
+                updated_at
+            FROM {config.PROMPTS_TABLE} 
+            WHERE email_address = :email_address AND prompt_name = :prompt_name
+        """)
+        
+        logger.info(f"Executing query to get prompt {validated_name} for {validated_email}")
+        
+        # Execute query with connection from dependency
+        result = conn.execute(query, {
+            "email_address": validated_email,
+            "prompt_name": validated_name
+        })
+        row = result.fetchone()
+        
+        if not row:
+            raise HTTPException(
+                status_code=404,
+                detail=f"Prompt '{prompt_name}' not found for email '{email_address}'"
+            )
+        
+        # Convert row to dictionary
+        prompt = {
+            "email_address": row[0],
+            "prompt_name": row[1],
+            "prompt_description": row[2],  # Full description
+            "prompt_type": row[3],
+            "prompt_active": row[4],
+            "created_at": row[5],
+            "updated_at": row[6]
+        }
+        
+        return {
+            "success": True,
+            "data": {
+                "prompt": prompt
+            },
+            "message": f"Retrieved prompt '{prompt_name}' for '{email_address}'"
+        }
+    
+    except HTTPException:
+        # Re-raise HTTP exceptions (like the 404 error above)
+        raise
+    except Exception as e:
+        logger.error(f"Error fetching prompt {prompt_name} for {email_address}: {e}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to fetch prompt: {str(e)}"
+        )
+
+@prompts_router.post("/prompts")
+async def create_prompt(
+    request: PromptRequest,
+    conn: Connection = Depends(get_db_connection)
+):
+    """
+    Create a new prompt.
+    
+    Args:
+        request: PromptRequest containing all required fields (email_address, prompt_name, prompt_description, prompt_type, prompt_active)
+    
+    Returns:
+        JSON response with created prompt
+    """
+    try:
+        # Validate inputs
+        validated_email = validate_email_address(request.email_address)
+        validated_name = validate_prompt_name(request.prompt_name)
+        
+        if not request.prompt_description or not isinstance(request.prompt_description, str):
+            raise HTTPException(status_code=400, detail="Prompt description is required and must be a string")
+        
+        if not request.prompt_type or not isinstance(request.prompt_type, str):
+            raise HTTPException(status_code=400, detail="Prompt type is required and must be a string")
+        
+        if len(request.prompt_type) > 100:
+            raise HTTPException(status_code=400, detail="Prompt type is too long (max 100 characters)")
+        
+        # SECURE: Parameterized query prevents SQL injection
+        query = text(f"""
+            INSERT INTO {config.PROMPTS_TABLE} 
+            (email_address, prompt_name, prompt_description, prompt_type, prompt_active, created_at, updated_at)
+            VALUES (:email_address, :prompt_name, :prompt_description, :prompt_type, :prompt_active, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+            RETURNING email_address, prompt_name, prompt_description, prompt_type, prompt_active, created_at, updated_at
+        """)
+        
+        logger.info(f"Creating prompt '{validated_name}' for '{validated_email}'")
+        
+        result = conn.execute(query, {
+            "email_address": validated_email,
+            "prompt_name": validated_name,
+            "prompt_description": request.prompt_description,
+            "prompt_type": request.prompt_type,
+            "prompt_active": request.prompt_active
+        })
+        
+        row = result.fetchone()
+        conn.commit()
+        
+        # Convert row to dictionary
+        prompt = {
+            "email_address": row[0],
+            "prompt_name": row[1],
+            "prompt_description": row[2],
+            "prompt_type": row[3],
+            "prompt_active": row[4],
+            "created_at": row[5],
+            "updated_at": row[6]
+        }
+        
+        return {
+            "success": True,
+            "data": {
+                "prompt": prompt
+            },
+            "message": f"Created prompt '{request.prompt_name}' for '{request.email_address}'"
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        # Check if it's a unique constraint violation
+        if "unique constraint" in str(e).lower() or "duplicate key" in str(e).lower():
+            raise HTTPException(
+                status_code=409,
+                detail=f"Prompt '{request.prompt_name}' already exists for email '{request.email_address}'"
+            )
+        logger.error(f"Error creating prompt: {e}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to create prompt: {str(e)}"
+        )
+
+@prompts_router.put("/prompts/{email_address}/{prompt_name}")
+async def update_prompt(
+    email_address: str,
+    prompt_name: str,
+    request: PromptRequest,
+    conn: Connection = Depends(get_db_connection)
+):
+    """
+    Update an existing prompt (full replacement - all fields required).
+    
+    Args:
+        email_address: Email address of the prompt owner (from path)
+        prompt_name: Name of the prompt (from path)
+        request: PromptRequest containing all required fields (email_address, prompt_name, prompt_description, prompt_type, prompt_active)
+                 Note: email_address and prompt_name in body should match path parameters
+    
+    Returns:
+        JSON response with updated prompt
+    """
+    try:
+        # Validate path parameters
+        validated_email = validate_email_address(email_address)
+        validated_name = validate_prompt_name(prompt_name)
+        
+        # Validate that body email_address and prompt_name match path parameters
+        validated_body_email = validate_email_address(request.email_address)
+        validated_body_name = validate_prompt_name(request.prompt_name)
+        
+        if validated_email != validated_body_email:
+            raise HTTPException(
+                status_code=400,
+                detail=f"email_address in path ({email_address}) does not match email_address in body ({request.email_address})"
+            )
+        
+        if validated_name != validated_body_name:
+            raise HTTPException(
+                status_code=400,
+                detail=f"prompt_name in path ({prompt_name}) does not match prompt_name in body ({request.prompt_name})"
+            )
+        
+        # Validate other fields
+        if not request.prompt_description or not isinstance(request.prompt_description, str):
+            raise HTTPException(status_code=400, detail="Prompt description is required and must be a string")
+        
+        if not request.prompt_type or not isinstance(request.prompt_type, str):
+            raise HTTPException(status_code=400, detail="Prompt type is required and must be a string")
+        
+        if len(request.prompt_type) > 100:
+            raise HTTPException(status_code=400, detail="Prompt type is too long (max 100 characters)")
+        
+        # SECURE: Parameterized query prevents SQL injection
+        # Full replacement - update all fields
+        query = text(f"""
+            UPDATE {config.PROMPTS_TABLE} 
+            SET prompt_description = :prompt_description,
+                prompt_type = :prompt_type,
+                prompt_active = :prompt_active,
+                updated_at = CURRENT_TIMESTAMP
+            WHERE email_address = :email_address AND prompt_name = :prompt_name
+            RETURNING email_address, prompt_name, prompt_description, prompt_type, prompt_active, created_at, updated_at
+        """)
+        
+        logger.info(f"Updating prompt '{validated_name}' for '{validated_email}'")
+        
+        result = conn.execute(query, {
+            "email_address": validated_email,
+            "prompt_name": validated_name,
+            "prompt_description": request.prompt_description,
+            "prompt_type": request.prompt_type,
+            "prompt_active": request.prompt_active
+        })
+        
+        row = result.fetchone()
+        
+        if not row:
+            raise HTTPException(
+                status_code=404,
+                detail=f"Prompt '{prompt_name}' not found for email '{email_address}'"
+            )
+        
+        conn.commit()
+        
+        # Convert row to dictionary
+        prompt = {
+            "email_address": row[0],
+            "prompt_name": row[1],
+            "prompt_description": row[2],
+            "prompt_type": row[3],
+            "prompt_active": row[4],
+            "created_at": row[5],
+            "updated_at": row[6]
+        }
+        
+        return {
+            "success": True,
+            "data": {
+                "prompt": prompt
+            },
+            "message": f"Updated prompt '{prompt_name}' for '{email_address}'"
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error updating prompt {prompt_name} for {email_address}: {e}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to update prompt: {str(e)}"
+        )
+
+@prompts_router.delete("/prompts/{email_address}/{prompt_name}")
+async def delete_prompt(
+    email_address: str,
+    prompt_name: str,
+    conn: Connection = Depends(get_db_connection)
+):
+    """
+    Delete a prompt permanently.
+    
+    Args:
+        email_address: Email address of the prompt owner
+        prompt_name: Name of the prompt
+    
+    Returns:
+        JSON response with success message
+    """
+    try:
+        # Validate inputs
+        validated_email = validate_email_address(email_address)
+        validated_name = validate_prompt_name(prompt_name)
+        
+        # SECURE: Parameterized query prevents SQL injection
+        query = text(f"""
+            DELETE FROM {config.PROMPTS_TABLE} 
+            WHERE email_address = :email_address AND prompt_name = :prompt_name
+            RETURNING email_address, prompt_name
+        """)
+        
+        logger.info(f"Deleting prompt '{validated_name}' for '{validated_email}'")
+        
+        result = conn.execute(query, {
+            "email_address": validated_email,
+            "prompt_name": validated_name
+        })
+        row = result.fetchone()
+        
+        if not row:
+            raise HTTPException(
+                status_code=404,
+                detail=f"Prompt '{prompt_name}' not found for email '{email_address}'"
+            )
+        
+        conn.commit()
+        
+        return {
+            "success": True,
+            "data": {
+                "deleted_prompt": {
+                    "email_address": row[0],
+                    "prompt_name": row[1]
+                }
+            },
+            "message": f"Deleted prompt '{prompt_name}' for '{email_address}'"
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error deleting prompt {prompt_name} for {email_address}: {e}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to delete prompt: {str(e)}"
+        )
+ 
+ 
+ 
+========================================== 
+File: recommendations_service.py 
+========================================== 
+ 
+# FILE: recommendations_service.py
+"""
+Recommendations Service - Provides REST API endpoints for team recommendations
+"""
+
+from fastapi import APIRouter, HTTPException, Depends, Query
+from sqlalchemy import text
+from sqlalchemy.engine import Connection
+from typing import List, Dict, Any, Optional
+import logging
+import re
+from database_connection import get_db_connection
+from database_general import get_top_ai_recommendations
+import config
+
+logger = logging.getLogger(__name__)
+
+recommendations_router = APIRouter()
+
+def validate_team_name(team_name: str) -> str:
+    """
+    Validate and sanitize team name to prevent SQL injection.
+    Only allows alphanumeric characters, spaces, hyphens, and underscores.
+    """
+    if not team_name or not isinstance(team_name, str):
+        raise HTTPException(status_code=400, detail="Team name is required and must be a string")
+    
+    # Remove any potentially dangerous characters
+    sanitized = re.sub(r'[^a-zA-Z0-9\s\-_]', '', team_name.strip())
+    
+    if not sanitized:
+        raise HTTPException(status_code=400, detail="Team name contains invalid characters")
+    
+    if len(sanitized) > 100:  # Reasonable length limit
+        raise HTTPException(status_code=400, detail="Team name is too long (max 100 characters)")
+    
+    return sanitized
+
+def validate_limit(limit: int) -> int:
+    """
+    Validate limit parameter to prevent abuse.
+    """
+    if limit < 1:
+        raise HTTPException(status_code=400, detail="Limit must be at least 1")
+    
+    if limit > 50:  # Reasonable upper limit
+        raise HTTPException(status_code=400, detail="Limit cannot exceed 50")
+    
+    return limit
+
+@recommendations_router.get("/recommendations/getTeamTop")
+async def get_top_recommendations(
+    team_name: str = Query(..., description="Team name to get recommendations for"),
+    limit: int = Query(4, description="Number of recommendations to return (default: 4, max: 50)"),
+    conn: Connection = Depends(get_db_connection)
+):
+    """
+    Get top recommendations for a specific team.
+    
+    Returns recommendations ordered by:
+    1. Date (newest first)
+    2. Priority (High > Medium > Low)
+    3. ID (descending)
+    
+    Args:
+        team_name: Name of the team
+        limit: Number of recommendations to return (default: 4)
+    
+    Returns:
+        JSON response with recommendations list and metadata
+    """
+    try:
+        # Validate inputs
+        validated_team_name = validate_team_name(team_name)
+        validated_limit = validate_limit(limit)
+        
+        # Get recommendations from database function
+        recommendations = get_top_ai_recommendations(validated_team_name, validated_limit, conn)
+        
+        return {
+            "success": True,
+            "data": {
+                "recommendations": recommendations,
+                "count": len(recommendations),
+                "team_name": validated_team_name,
+                "limit": validated_limit
+            },
+            "message": f"Retrieved {len(recommendations)} recommendations for team '{validated_team_name}'"
+        }
+    
+    except HTTPException:
+        # Re-raise HTTP exceptions (validation errors)
+        raise
+    except Exception as e:
+        logger.error(f"Error fetching recommendations for team {team_name}: {e}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to fetch recommendations: {str(e)}"
+        )
+
+@recommendations_router.get("/recommendations/getPITop")
+async def get_top_pi_recommendations(
+    pi: str = Query(..., description="PI name to get recommendations for"),
+    limit: int = Query(4, description="Number of recommendations to return (default: 4, max: 50)"),
+    conn: Connection = Depends(get_db_connection)
+):
+    """
+    Get top recommendations for a specific PI.
+    
+    Returns recommendations ordered by:
+    1. Date (newest first)
+    2. Priority (High > Medium > Low)
+    3. ID (descending)
+    
+    Args:
+        pi: Name of the PI
+        limit: Number of recommendations to return (default: 4)
+    
+    Returns:
+        JSON response with recommendations list and metadata
+    """
+    try:
+        # Validate inputs
+        validated_pi_name = validate_team_name(pi)  # Reuse team_name validation for PI name
+        validated_limit = validate_limit(limit)
+        
+        # Get recommendations from database function using PI name as team_name
+        recommendations = get_top_ai_recommendations(validated_pi_name, validated_limit, conn)
+        
+        return {
+            "success": True,
+            "data": {
+                "recommendations": recommendations,
+                "count": len(recommendations),
+                "pi": validated_pi_name,
+                "limit": validated_limit
+            },
+            "message": f"Retrieved {len(recommendations)} recommendations for PI '{validated_pi_name}'"
+        }
+    
+    except HTTPException:
+        # Re-raise HTTP exceptions (validation errors)
+        raise
+    except Exception as e:
+        logger.error(f"Error fetching recommendations for PI {pi}: {e}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to fetch recommendations: {str(e)}"
+        )
+
+ 
+ 
+ 
+========================================== 
+File: security_logs_service.py 
+========================================== 
+ 
+"""
+Security Logs Service - REST API endpoints for security log-related operations.
+
+This service provides endpoints for managing and retrieving security log information.
+Uses FastAPI dependencies for clean connection management and SQL injection protection.
+"""
+
+from fastapi import APIRouter, HTTPException, Depends
+from sqlalchemy import text
+from sqlalchemy.engine import Connection
+from typing import List, Dict, Any
+import logging
+from database_connection import get_db_connection
+import config
+
+logger = logging.getLogger(__name__)
+
+security_logs_router = APIRouter()
+
+@security_logs_router.get("/security-logs")
+async def get_security_logs(conn: Connection = Depends(get_db_connection)):
+    """
+    Get the latest 100 security logs from security_logs table.
+    Uses parameterized queries to prevent SQL injection.
+    
+    Returns:
+        JSON response with list of security logs and count
+    """
+    try:
+        # SECURE: Parameterized query prevents SQL injection
+        # Only return selected fields for the collection endpoint
+        query = text(f"""
+            SELECT 
+                id,
+                timestamp,
+                event_type,
+                email,
+                ip_address,
+                details,
+                severity
+            FROM {config.SECURITY_LOGS_TABLE}
+            ORDER BY id DESC 
+            LIMIT 100
+        """)
+        
+        logger.info(f"Executing query to get latest 100 security logs from {config.SECURITY_LOGS_TABLE}")
+        
+        # Execute query with connection from dependency
+        result = conn.execute(query)
+        rows = result.fetchall()
+        
+        # Convert rows to list of dictionaries
+        logs = []
+        for row in rows:
+            # Truncate details to first 200 characters with ellipsis when longer
+            details_text = row[5]
+            if isinstance(details_text, str) and len(details_text) > 200:
+                details_text = details_text[:200] + "..."
+
+            log_dict = {
+                "id": row[0],
+                "timestamp": row[1],
+                "event_type": row[2],
+                "email": row[3],
+                "ip_address": row[4],
+                "details": details_text,
+                "severity": row[6]
+            }
+            logs.append(log_dict)
+        
+        return {
+            "success": True,
+            "data": {
+                "logs": logs,
+                "count": len(logs)
+            },
+            "message": f"Retrieved {len(logs)} security logs"
+        }
+    
+    except Exception as e:
+        logger.error(f"Error fetching security logs: {e}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to fetch security logs: {str(e)}"
+        )
+
+@security_logs_router.get("/security-logs/{id}")
+async def get_security_log(id: int, conn: Connection = Depends(get_db_connection)):
+    """
+    Get a single security log by ID from security_logs table.
+    Uses parameterized queries to prevent SQL injection.
+    
+    Args:
+        id: The ID of the security log to retrieve
+    
+    Returns:
+        JSON response with single security log or 404 if not found
+    """
+    try:
+        # SECURE: Parameterized query prevents SQL injection
+        query = text(f"""
+            SELECT * 
+            FROM {config.SECURITY_LOGS_TABLE} 
+            WHERE id = :id
+        """)
+        
+        logger.info(f"Executing query to get security log with ID {id} from {config.SECURITY_LOGS_TABLE}")
+        
+        # Execute query with connection from dependency
+        result = conn.execute(query, {"id": id})
+        row = result.fetchone()
+        
+        if not row:
+            raise HTTPException(
+                status_code=404,
+                detail=f"Security log with ID {id} not found"
+            )
+        
+        # Convert row to dictionary - get all fields from database
+        log = dict(row._mapping)
+        
+        return {
+            "success": True,
+            "data": {
+                "log": log
+            },
+            "message": f"Retrieved security log with ID {id}"
+        }
+    
+    except HTTPException:
+        # Re-raise HTTP exceptions (like the 404 error above)
+        raise
+    except Exception as e:
+        logger.error(f"Error fetching security log {id}: {e}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to fetch security log: {str(e)}"
+        )
+ 
+ 
+ 
+========================================== 
+File: settings_service.py 
+========================================== 
+ 
+"""
+Settings Service - REST API endpoints for global settings.
+
+This service provides endpoints for retrieving global settings.
+Uses FastAPI dependencies for clean connection management and SQL injection protection.
+"""
+
+from fastapi import APIRouter, HTTPException, Depends
+from sqlalchemy.engine import Connection
+from typing import Dict, Any
+import logging
+from database_connection import get_db_connection
+from database_general import get_all_settings_db
+import config
+
+logger = logging.getLogger(__name__)
+
+settings_router = APIRouter()
+
+
+@settings_router.get("/settings/getAll")
+async def get_all_settings(conn: Connection = Depends(get_db_connection)):
+    """
+    Get all global settings from the database.
+
+    Returns all settings as key-value pairs, including full API keys.
+
+    Returns:
+        JSON response with settings dictionary and count
+    """
+    try:
+        # Get settings from database function
+        settings = get_all_settings_db(conn)
+        
+        return {
+            "success": True,
+            "data": {
+                "settings": settings,
+                "count": len(settings)
+            },
+            "message": f"Retrieved {len(settings)} settings"
+        }
+    
+    except Exception as e:
+        logger.error(f"Error fetching all settings: {e}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to fetch settings: {str(e)}"
+        )
+ 
+ 
+ 
+========================================== 
+File: teams_service.py 
+========================================== 
+ 
+"""
+Teams Service - REST API endpoints for team-related operations.
+
+This service provides endpoints for managing and retrieving team information.
+Uses FastAPI dependencies for clean connection management and SQL injection protection.
+"""
+
+from fastapi import APIRouter, HTTPException, Depends
+from sqlalchemy import text
+from sqlalchemy.engine import Connection
+from typing import List, Dict, Any
+import logging
+import re
+from database_connection import get_db_connection
+import config
+
+logger = logging.getLogger(__name__)
+
+teams_router = APIRouter()
+
+def validate_team_name(team_name: str) -> str:
+    """
+    Validate and sanitize team name to prevent SQL injection.
+    Only allows alphanumeric characters, spaces, hyphens, and underscores.
+    """
+    if not team_name or not isinstance(team_name, str):
+        raise HTTPException(status_code=400, detail="Team name is required and must be a string")
+    
+    # Remove any potentially dangerous characters
+    sanitized = re.sub(r'[^a-zA-Z0-9\s\-_]', '', team_name.strip())
+    
+    if not sanitized:
+        raise HTTPException(status_code=400, detail="Team name contains invalid characters")
+    
+    if len(sanitized) > 100:  # Reasonable length limit
+        raise HTTPException(status_code=400, detail="Team name is too long (max 100 characters)")
+    
+    return sanitized
+
+@teams_router.get("/teams/getNames")
+async def get_team_names(conn: Connection = Depends(get_db_connection)):
+    """
+    Get all distinct team names from jira_issues table.
+    Uses parameterized queries to prevent SQL injection.
+    
+    Returns:
+        JSON response with list of team names and count
+    """
+    try:
+        # SECURE: Parameterized query prevents SQL injection
+        query = text(f"""
+            SELECT DISTINCT team_name 
+            FROM {config.WORK_ITEMS_TABLE} 
+            WHERE team_name IS NOT NULL 
+            AND team_name != '' 
+            ORDER BY team_name
+        """)
+        
+        logger.info(f"Executing query to get distinct team names from work items table")
+        
+        # Execute query with connection from dependency
+        result = conn.execute(query)
+        rows = result.fetchall()
+        
+        # Extract team names from result
+        team_names = [row[0] for row in rows]
+        
+        return {
+            "success": True,
+            "data": {
+                "teams": team_names,
+                "count": len(team_names)
+            },
+            "message": f"Retrieved {len(team_names)} team names"
+        }
+    
+    except Exception as e:
+        logger.error(f"Error fetching team names: {e}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to fetch team names: {str(e)}"
+        )
+
+ 
+ 
+ 
+========================================== 
+File: team_ai_cards_service.py 
+========================================== 
+ 
+# FILE: team_ai_cards_service.py
+"""
+Team AI Cards Service - Provides REST API endpoints for team AI summary cards
+"""
+
+from fastapi import APIRouter, HTTPException, Depends, Query
+from sqlalchemy import text
+from sqlalchemy.engine import Connection
+from typing import List, Dict, Any, Optional
+import logging
+import re
+from database_connection import get_db_connection
+from database_general import get_top_ai_cards
+import config
+
+logger = logging.getLogger(__name__)
+
+team_ai_cards_router = APIRouter()
+
+def validate_team_name(team_name: str) -> str:
+    """
+    Validate and sanitize team name to prevent SQL injection.
+    Only allows alphanumeric characters, spaces, hyphens, and underscores.
+    """
+    if not team_name or not isinstance(team_name, str):
+        raise HTTPException(status_code=400, detail="Team name is required and must be a string")
+    
+    # Remove any potentially dangerous characters
+    sanitized = re.sub(r'[^a-zA-Z0-9\s\-_]', '', team_name.strip())
+    
+    if not sanitized:
+        raise HTTPException(status_code=400, detail="Team name contains invalid characters")
+    
+    if len(sanitized) > 100:  # Reasonable length limit
+        raise HTTPException(status_code=400, detail="Team name is too long (max 100 characters)")
+    
+    return sanitized
+
+def validate_limit(limit: int) -> int:
+    """
+    Validate limit parameter to prevent abuse.
+    """
+    if limit < 1:
+        raise HTTPException(status_code=400, detail="Limit must be at least 1")
+    
+    if limit > 50:  # Reasonable upper limit
+        raise HTTPException(status_code=400, detail="Limit cannot exceed 50")
+    
+    return limit
+
+@team_ai_cards_router.get("/team-ai-cards/getTopCards")
+async def get_team_ai_cards(
+    team_name: str = Query(..., description="Team name to get AI cards for"),
+    limit: int = Query(4, description="Number of AI cards to return (default: 4, max: 50)"),
+    conn: Connection = Depends(get_db_connection)
+):
+    """
+    Get team AI summary cards for a specific team.
+    
+    Returns the most recent + highest priority card for each type (max 1 per type).
+    Cards are ordered by:
+    1. Priority (Critical > High > Medium)
+    2. Date (newest first)
+    
+    Args:
+        team_name: Name of the team
+        limit: Number of AI cards to return (default: 4)
+    
+    Returns:
+        JSON response with AI cards list and metadata
+    """
+    try:
+        # Validate inputs
+        validated_team_name = validate_team_name(team_name)
+        validated_limit = validate_limit(limit)
+        
+        # Get AI cards from database function
+        ai_cards = get_top_ai_cards(validated_team_name, validated_limit, conn)
+        
+        return {
+            "success": True,
+            "data": {
+                "ai_cards": ai_cards,
+                "count": len(ai_cards),
+                "team_name": validated_team_name,
+                "limit": validated_limit
+            },
+            "message": f"Retrieved {len(ai_cards)} AI cards for team '{validated_team_name}'"
+        }
+    
+    except HTTPException:
+        # Re-raise HTTP exceptions (validation errors)
+        raise
+    except Exception as e:
+        logger.error(f"Error fetching AI cards for team {team_name}: {e}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to fetch AI cards: {str(e)}"
+        )
+
+@team_ai_cards_router.get("/team-ai-cards")
+async def get_team_ai_cards_collection(conn: Connection = Depends(get_db_connection)):
+    """
+    Get the latest 100 team AI summary cards from team_ai_summary_cards table.
+    Uses parameterized queries to prevent SQL injection.
+    
+    Returns:
+        JSON response with list of team AI cards and count
+    """
+    try:
+        # SECURE: Parameterized query prevents SQL injection
+        # Only return selected fields for the collection endpoint
+        query = text(f"""
+            SELECT 
+                id,
+                date,
+                team_name,
+                card_name,
+                priority,
+                description,
+                source_job_id
+            FROM {config.TEAM_AI_CARDS_TABLE}
+            ORDER BY id DESC 
+            LIMIT 100
+        """)
+        
+        logger.info(f"Executing query to get latest 100 team AI cards from {config.TEAM_AI_CARDS_TABLE}")
+        
+        # Execute query with connection from dependency
+        result = conn.execute(query)
+        rows = result.fetchall()
+        
+        # Convert rows to list of dictionaries
+        cards = []
+        for row in rows:
+            # Truncate description to first 200 characters with ellipsis when longer
+            description_text = row[5]
+            if isinstance(description_text, str) and len(description_text) > 200:
+                description_text = description_text[:200] + "..."
+
+            card_dict = {
+                "id": row[0],
+                "date": row[1],
+                "team_name": row[2],
+                "card_name": row[3],
+                "priority": row[4],
+                "description": description_text,
+                "source_job_id": row[6]
+            }
+            cards.append(card_dict)
+        
+        return {
+            "success": True,
+            "data": {
+                "cards": cards,
+                "count": len(cards)
+            },
+            "message": f"Retrieved {len(cards)} team AI summary cards"
+        }
+    
+    except Exception as e:
+        logger.error(f"Error fetching team AI cards: {e}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to fetch team AI cards: {str(e)}"
+        )
+
+@team_ai_cards_router.get("/team-ai-cards/{id}")
+async def get_team_ai_card(id: int, conn: Connection = Depends(get_db_connection)):
+    """
+    Get a single team AI summary card by ID from team_ai_summary_cards table.
+    Uses parameterized queries to prevent SQL injection.
+    
+    Args:
+        id: The ID of the team AI card to retrieve
+    
+    Returns:
+        JSON response with single team AI card or 404 if not found
+    """
+    try:
+        # SECURE: Parameterized query prevents SQL injection
+        query = text(f"""
+            SELECT * 
+            FROM {config.TEAM_AI_CARDS_TABLE} 
+            WHERE id = :id
+        """)
+        
+        logger.info(f"Executing query to get team AI card with ID {id} from {config.TEAM_AI_CARDS_TABLE}")
+        
+        # Execute query with connection from dependency
+        result = conn.execute(query, {"id": id})
+        row = result.fetchone()
+        
+        if not row:
+            raise HTTPException(
+                status_code=404,
+                detail=f"Team AI card with ID {id} not found"
+            )
+        
+        # Convert row to dictionary - get all fields from database
+        card = dict(row._mapping)
+        
+        return {
+            "success": True,
+            "data": {
+                "card": card
+            },
+            "message": f"Retrieved team AI card with ID {id}"
+        }
+    
+    except HTTPException:
+        # Re-raise HTTP exceptions (like the 404 error above)
+        raise
+    except Exception as e:
+        logger.error(f"Error fetching team AI card {id}: {e}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to fetch team AI card: {str(e)}"
+        )
+
+ 
+ 
+ 
+========================================== 
+File: team_metrics_service.py 
+========================================== 
+ 
+"""
+Team Metrics Service - REST API endpoints for team metrics.
+
+This service provides endpoints for retrieving team metrics.
+Uses FastAPI dependencies for clean connection management and SQL injection protection.
+"""
+
+from fastapi import APIRouter, HTTPException, Depends, Query
+from sqlalchemy.engine import Connection
+from typing import Dict, Any
+import logging
+import re
+from database_connection import get_db_connection
+from database_team_metrics import (
+    get_team_avg_sprint_metrics,
+    get_team_count_in_progress,
+    get_team_current_sprint_completion,
+    get_sprints_with_total_issues_db,
+    get_sprint_burndown_data_db,
+    get_closed_sprints_data_db,
+    get_issues_trend_data_db
+)
+import config
+
+logger = logging.getLogger(__name__)
+
+team_metrics_router = APIRouter()
+
+
+def validate_team_name(team_name: str) -> str:
+    """
+    Validate and sanitize team name to prevent SQL injection.
+    Only allows alphanumeric characters, spaces, hyphens, and underscores.
+    """
+    if not team_name or not isinstance(team_name, str):
+        raise HTTPException(status_code=400, detail="Team name is required and must be a string")
+    
+    # Remove any potentially dangerous characters
+    sanitized = re.sub(r'[^a-zA-Z0-9\s\-_]', '', team_name.strip())
+    
+    if not sanitized:
+        raise HTTPException(status_code=400, detail="Team name contains invalid characters")
+    
+    if len(sanitized) > 100:  # Reasonable length limit
+        raise HTTPException(status_code=400, detail="Team name is too long (max 100 characters)")
+    
+    return sanitized
+
+
+def validate_sprint_count(sprint_count: int) -> int:
+    """
+    Validate and sanitize sprint count.
+    """
+    if not isinstance(sprint_count, int) or sprint_count <= 0:
+        raise HTTPException(status_code=400, detail="Sprint count must be a positive integer")
+    if sprint_count > 20:  # Reasonable max limit
+        raise HTTPException(status_code=400, detail="Sprint count cannot exceed 20")
+    return sprint_count
+
+
+@team_metrics_router.get("/team-metrics/get-avg-sprint-metrics")
+async def get_avg_sprint_metrics(
+    team_name: str = Query(..., description="Team name to get metrics for"),
+    sprint_count: int = Query(5, description="Number of sprints to average (default: 5, max: 20)", ge=1, le=20),
+    conn: Connection = Depends(get_db_connection)
+):
+    """
+    Get average sprint metrics for a specific team.
+    
+    Returns velocity, cycle time, and predictability metrics averaged over the last N sprints.
+    
+    Args:
+        team_name: Name of the team
+        sprint_count: Number of recent sprints to average (default: 5)
+    
+    Returns:
+        JSON response with velocity, cycle_time, and predictability metrics
+    """
+    try:
+        # Validate inputs
+        validated_team_name = validate_team_name(team_name)
+        validated_sprint_count = validate_sprint_count(sprint_count)
+        
+        # Get metrics from database function
+        metrics = get_team_avg_sprint_metrics(validated_team_name, validated_sprint_count, conn)
+        
+        return {
+            "success": True,
+            "data": {
+                "velocity": metrics['velocity'],
+                "cycle_time": metrics['cycle_time'],
+                "predictability": metrics['predictability'],
+                "team_name": validated_team_name,
+                "sprint_count": validated_sprint_count
+            },
+            "message": f"Retrieved average sprint metrics for team '{validated_team_name}'"
+        }
+    
+    except HTTPException:
+        raise  # Re-raise FastAPI HTTPExceptions
+    except Exception as e:
+        logger.error(f"Error fetching average sprint metrics for team {validated_team_name}: {e}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to fetch average sprint metrics: {str(e)}"
+        )
+
+
+@team_metrics_router.get("/team-metrics/count-in-progress")
+async def get_count_in_progress(
+    team_name: str = Query(..., description="Team name to get count for"),
+    conn: Connection = Depends(get_db_connection)
+):
+    """
+    Get count of issues currently in progress for a specific team with breakdown by issue type.
+    
+    Returns the number of issues with status_category = 'In Progress', grouped by issue type.
+    Only includes issue types that have at least one issue in progress.
+    
+    Args:
+        team_name: Name of the team
+    
+    Returns:
+        JSON response with total count and breakdown by issue type
+    """
+    try:
+        # Validate inputs
+        validated_team_name = validate_team_name(team_name)
+        
+        # Get count breakdown from database function
+        count_data = get_team_count_in_progress(validated_team_name, conn)
+        
+        return {
+            "success": True,
+            "data": {
+                "total_in_progress": count_data['total_in_progress'],
+                "count_by_type": count_data['count_by_type'],
+                "team_name": validated_team_name
+            },
+            "message": f"Retrieved count in progress for team '{validated_team_name}'"
+        }
+    
+    except HTTPException:
+        raise  # Re-raise FastAPI HTTPExceptions
+    except Exception as e:
+        logger.error(f"Error fetching count in progress for team {validated_team_name}: {e}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to fetch count in progress: {str(e)}"
+        )
+
+
+@team_metrics_router.get("/team-metrics/current-sprint-completion")
+async def get_current_sprint_completion(
+    team_name: str = Query(..., description="Team name to get completion rate for"),
+    conn: Connection = Depends(get_db_connection)
+):
+    """
+    Get current sprint completion rate for a specific team.
+    
+    Returns the percentage of completed issues in the current active sprint.
+    
+    Args:
+        team_name: Name of the team
+    
+    Returns:
+        JSON response with completion percentage
+    """
+    try:
+        # Validate inputs
+        validated_team_name = validate_team_name(team_name)
+        
+        # Get completion rate from database function
+        completion_rate = get_team_current_sprint_completion(validated_team_name, conn)
+        
+        return {
+            "success": True,
+            "data": {
+                "completion_rate": completion_rate,
+                "team_name": validated_team_name
+            },
+            "message": f"Retrieved current sprint completion rate for team '{validated_team_name}'"
+        }
+    
+    except HTTPException:
+        raise  # Re-raise FastAPI HTTPExceptions
+    except Exception as e:
+        logger.error(f"Error fetching current sprint completion for team {validated_team_name}: {e}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to fetch current sprint completion: {str(e)}"
+        )
+
+
+@team_metrics_router.get("/team-metrics/sprint-burndown")
+async def get_sprint_burndown_data(
+    team_name: str = Query(..., description="Team name to get burndown data for"),
+    issue_type: str = Query("all", description="Issue type filter (default: 'all')"),
+    sprint_name: str = Query(None, description="Sprint name (optional, will auto-select ACTIVE Sprint if not provided)"),
+    conn: Connection = Depends(get_db_connection)
+):
+    """
+    Get sprint burndown data for a specific team.
+
+    If no sprint_name is provided, automatically selects the ACTIVE sprint with the maximum total issues.
+
+    Args:
+        team_name: Name of the team
+        issue_type: Issue type filter (default: "all")
+        sprint_name: Sprint name (optional, auto-selected if not provided)
+
+    Returns:
+        JSON response with burndown data and metadata
+    """
+    try:
+        # Validate inputs
+        validated_team_name = validate_team_name(team_name)
+        
+        # Validate issue_type
+        if not isinstance(issue_type, str):
+            raise HTTPException(status_code=400, detail="Issue type must be a string")
+        if issue_type.strip() == "":
+            issue_type = "all"
+        
+        # Sprint selection logic (API service decides)
+        selected_sprint_name = sprint_name
+        selected_sprint_id = None
+        
+        if not selected_sprint_name:
+            # Get active sprints and select the one with max total issues
+            sprints = get_sprints_with_total_issues_db(validated_team_name, "active", conn)
+            if sprints:
+                # Select sprint with maximum total_issues
+                selected_sprint = max(sprints, key=lambda x: x['total_issues'])
+                selected_sprint_name = selected_sprint['name']
+                selected_sprint_id = selected_sprint['sprint_id']
+                logger.info(f"Auto-selected sprint '{selected_sprint_name}' (ID: {selected_sprint_id}) with {selected_sprint['total_issues']} total issues")
+            else:
+                return {
+                    "success": False,
+                    "data": {
+                        "burndown_data": [],
+                        "team_name": validated_team_name,
+                        "sprint_id": None,
+                        "sprint_name": None,
+                        "issue_type": issue_type,
+                        "total_issues_in_sprint": 0
+                    },
+                    "message": "No active sprints found"
+                }
+        else:
+            # If sprint_name was provided, we don't need to search for sprint_id
+            # We'll get it from the burndown data or set it to None
+            logger.info(f"Using provided sprint name: '{selected_sprint_name}'")
+        
+        # Get burndown data for selected sprint
+        burndown_data = get_sprint_burndown_data_db(validated_team_name, selected_sprint_name, issue_type, conn)
+        
+        # Calculate total issues in sprint and extract start/end dates from burndown data
+        total_issues_in_sprint = 0
+        start_date = None
+        end_date = None
+        
+        if burndown_data:
+            total_issues_in_sprint = burndown_data[0].get('total_issues', 0)
+            start_date = burndown_data[0].get('start_date')
+            end_date = burndown_data[0].get('end_date')
+        
+        return {
+            "success": True,
+            "data": {
+                "sprint_id": selected_sprint_id,
+                "sprint_name": selected_sprint_name,
+                "start_date": start_date,
+                "end_date": end_date,
+                "burndown_data": burndown_data,
+                "team_name": validated_team_name,
+                "issue_type": issue_type,
+                "total_issues_in_sprint": total_issues_in_sprint
+            },
+            "message": f"Retrieved sprint burndown data for team '{validated_team_name}' and sprint '{selected_sprint_name}'"
+        }
+    
+    except HTTPException:
+        raise # Re-raise FastAPI HTTPExceptions
+    except Exception as e:
+        logger.error(f"Error fetching sprint burndown data for team {validated_team_name}: {e}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to fetch sprint burndown data: {str(e)}"
+        )
+
+
+@team_metrics_router.get("/team-metrics/get-sprints")
+async def get_sprints(
+    team_name: str = Query(..., description="Team name to get sprints for"),
+    sprint_status: str = Query(None, description="Sprint status filter (optional: 'active', 'closed', or leave empty for all)"),
+    conn: Connection = Depends(get_db_connection)
+):
+    """
+    Get list of sprints for a specific team with total issues count.
+
+    Args:
+        team_name: Name of the team
+        sprint_status: Sprint status filter (optional: "active", "closed", or None for all)
+
+    Returns:
+        JSON response with sprints list and metadata
+    """
+    try:
+        # Validate inputs
+        validated_team_name = validate_team_name(team_name)
+        
+        # Validate sprint_status if provided
+        if sprint_status and sprint_status not in ["active", "closed"]:
+            raise HTTPException(status_code=400, detail="Sprint status must be 'active' or 'closed'")
+        
+        # Get sprints from database function
+        sprints = get_sprints_with_total_issues_db(validated_team_name, sprint_status, conn)
+        
+        return {
+            "success": True,
+            "data": {
+                "team_name": validated_team_name,
+                "sprint_status": sprint_status,
+                "sprints": sprints,
+                "count": len(sprints)
+            },
+            "message": f"Retrieved {len(sprints)} sprints for team '{validated_team_name}'"
+        }
+    
+    except HTTPException:
+        raise # Re-raise FastAPI HTTPExceptions
+    except Exception as e:
+        logger.error(f"Error fetching sprints for team {validated_team_name}: {e}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to fetch sprints: {str(e)}"
+        )
+
+
+@team_metrics_router.get("/team-metrics/closed-sprints")
+async def get_closed_sprints(
+    team_name: str = Query(..., description="Team name to get closed sprints for"),
+    months: int = Query(3, description="Number of months to look back (1, 2, 3, 4, 6, 9)", ge=1, le=12),
+    conn: Connection = Depends(get_db_connection)
+):
+    """
+    Get closed sprints data for a specific team with detailed completion metrics.
+    
+    This endpoint retrieves comprehensive sprint completion data including:
+    - Sprint name, start/end dates, and sprint goals
+    - Completion percentages and issue counts
+    - Issues planned, added, done, and remaining
+    
+    Parameters:
+    - team_name: Name of the team (required)
+    - months: Number of months to look back (optional, default: 3)
+      Valid values: 1, 2, 3, 4, 6, 9
+      Examples:
+        - months=1: Last 1 month
+        - months=3: Last 3 months (default)
+        - months=6: Last 6 months
+        - months=9: Last 9 months
+    
+    Returns:
+        JSON response with closed sprints list and metadata
+    """
+    try:
+        # Validate inputs
+        validated_team_name = validate_team_name(team_name)
+        
+        # Validate months parameter
+        if months not in [1, 2, 3, 4, 6, 9]:
+            raise HTTPException(
+                status_code=400, 
+                detail="Months parameter must be one of: 1, 2, 3, 4, 6, 9"
+            )
+        
+        # Get closed sprints from database function
+        closed_sprints = get_closed_sprints_data_db(validated_team_name, months, conn)
+        
+        return {
+            "success": True,
+            "data": {
+                "team_name": validated_team_name,
+                "months": months,
+                "closed_sprints": closed_sprints,
+                "count": len(closed_sprints)
+            },
+            "message": f"Retrieved {len(closed_sprints)} closed sprints for team '{validated_team_name}' (last {months} months)"
+        }
+    
+    except HTTPException:
+        raise # Re-raise FastAPI HTTPExceptions
+    except Exception as e:
+        logger.error(f"Error fetching closed sprints for team {validated_team_name}: {e}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to fetch closed sprints: {str(e)}"
+        )
+
+
+@team_metrics_router.get("/team-metrics/issues-trend")
+async def get_issues_trend(
+    team_name: str = Query(..., description="Team name to get trend data for"),
+    months: int = Query(6, description="Number of months to look back (1, 2, 3, 4, 6, 9, 12)", ge=1, le=12),
+    issue_type: str = Query("all", description="Issue type filter (default: 'all')"),
+    conn: Connection = Depends(get_db_connection)
+):
+    """
+    Get issues created and resolved over time for a specific team.
+    
+    This endpoint retrieves trend data showing issues created, resolved, and cumulative open issues over time.
+    Returns all columns from the issues_created_and_resolved_over_time view.
+    
+    Parameters:
+    - team_name: Name of the team (required)
+    - months: Number of months to look back (optional, default: 6)
+      Valid values: 1, 2, 3, 4, 6, 9, 12
+      Note: Only values 1, 2, 3, 4, 6, 9 are accepted (will validate in code)
+    - issue_type: Issue type filter (optional, default: 'all')
+      Examples: 'Bug', 'Story', 'Task', 'all'
+    
+    Returns:
+        JSON response with trend data list and metadata
+    """
+    try:
+        # Validate inputs
+        validated_team_name = validate_team_name(team_name)
+        
+        # Validate months parameter (same validation as closed sprints)
+        if months not in [1, 2, 3, 4, 6, 9]:
+            raise HTTPException(
+                status_code=400, 
+                detail="Months parameter must be one of: 1, 2, 3, 4, 6, 9"
+            )
+        
+        # Validate issue_type
+        if not isinstance(issue_type, str):
+            raise HTTPException(status_code=400, detail="Issue type must be a string")
+        if issue_type.strip() == "":
+            issue_type = "all"
+        
+        # Get issues trend data from database function
+        trend_data = get_issues_trend_data_db(validated_team_name, months, issue_type, conn)
+        
+        return {
+            "success": True,
+            "data": {
+                "team_name": validated_team_name,
+                "months": months,
+                "issue_type": issue_type,
+                "trend_data": trend_data,
+                "count": len(trend_data)
+            },
+            "message": f"Retrieved issues trend data for team '{validated_team_name}' (last {months} months)"
+        }
+    
+    except HTTPException:
+        raise # Re-raise FastAPI HTTPExceptions
+    except Exception as e:
+        logger.error(f"Error fetching issues trend data for team {validated_team_name}: {e}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to fetch issues trend data: {str(e)}"
+        )
+ 
+ 
+ 
+========================================== 
+File: transcripts_service.py 
+========================================== 
+ 
+"""
+Transcripts Service - REST API endpoints for transcript-related operations.
+
+This service provides endpoints for managing and retrieving transcript information.
+Uses FastAPI dependencies for clean connection management and SQL injection protection.
+"""
+
+from fastapi import APIRouter, HTTPException, Depends, UploadFile, File, Form
+from sqlalchemy import text
+from sqlalchemy.engine import Connection
+from typing import List, Dict, Any, Optional
+import logging
+from database_connection import get_db_connection
+import config
+
+logger = logging.getLogger(__name__)
+
+transcripts_router = APIRouter()
+
+@transcripts_router.get("/transcripts")
+async def get_transcripts(conn: Connection = Depends(get_db_connection)):
+    """
+    Get the latest 100 transcripts from transcripts table.
+    Uses parameterized queries to prevent SQL injection.
+    
+    Returns:
+        JSON response with list of transcripts and count
+    """
+    try:
+        # SECURE: Parameterized query prevents SQL injection
+        # Only return selected fields for the collection endpoint
+        query = text(f"""
+            SELECT 
+                id,
+                transcript_date,
+                team_name,
+                type,
+                file_name,
+                origin,
+                pi,
+                created_at,
+                updated_at
+            FROM {config.TRANSCRIPTS_TABLE}
+            ORDER BY id DESC 
+            LIMIT 100
+        """)
+        
+        logger.info(f"Executing query to get latest 100 transcripts from {config.TRANSCRIPTS_TABLE}")
+        
+        # Execute query with connection from dependency
+        result = conn.execute(query)
+        rows = result.fetchall()
+        
+        # Convert rows to list of dictionaries
+        transcripts = []
+        for row in rows:
+            # Truncate raw_text to first 200 characters with ellipsis when longer
+            raw_text_content = row[5]
+            if isinstance(raw_text_content, str) and len(raw_text_content) > 200:
+                raw_text_content = raw_text_content[:200] + "..."
+
+            transcript_dict = {
+                "id": row[0],
+                "transcript_date_time": row[1],
+                "team_name": row[2],
+                "type": row[3],
+                "file_name": row[4],
+                "raw_text": raw_text_content,
+                "origin": row[6]
+            }
+            transcripts.append(transcript_dict)
+        
+        return {
+            "success": True,
+            "data": {
+                "transcripts": transcripts,
+                "count": len(transcripts)
+            },
+            "message": f"Retrieved {len(transcripts)} transcripts"
+        }
+    
+    except Exception as e:
+        logger.error(f"Error fetching transcripts: {e}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to fetch transcripts: {str(e)}"
+        )
+
+@transcripts_router.get("/transcripts/{id}")
+async def get_transcript(id: int, conn: Connection = Depends(get_db_connection)):
+    """
+    Get a single transcript by ID from transcripts table.
+    Uses parameterized queries to prevent SQL injection.
+    
+    Args:
+        id: The ID of the transcript to retrieve
+    
+    Returns:
+        JSON response with single transcript or 404 if not found
+    """
+    try:
+        # SECURE: Parameterized query prevents SQL injection
+        query = text(f"""
+            SELECT * 
+            FROM {config.TRANSCRIPTS_TABLE} 
+            WHERE id = :id
+        """)
+        
+        logger.info(f"Executing query to get transcript with ID {id} from {config.TRANSCRIPTS_TABLE}")
+        
+        # Execute query with connection from dependency
+        result = conn.execute(query, {"id": id})
+        row = result.fetchone()
+        
+        if not row:
+            raise HTTPException(
+                status_code=404,
+                detail=f"Transcript with ID {id} not found"
+            )
+        
+        # Convert row to dictionary - get all fields from database
+        transcript = dict(row._mapping)
+        
+        return {
+            "success": True,
+            "data": {
+                "transcript": transcript
+            },
+            "message": f"Retrieved transcript with ID {id}"
+        }
+    
+    except HTTPException:
+        # Re-raise HTTP exceptions (like the 404 error above)
+        raise
+    except Exception as e:
+        logger.error(f"Error fetching transcript {id}: {e}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to fetch transcript: {str(e)}"
+        )
+
+
+@transcripts_router.post("/transcripts/upload-team")
+async def upload_team_transcript(
+    raw_data: UploadFile = File(...),
+    file_name: Optional[str] = Form(None),
+    team_name: Optional[str] = Form(None),
+    type: Optional[str] = Form(None),
+    origin: Optional[str] = Form(None),
+    transcript_date: Optional[str] = Form(None),
+    conn: Connection = Depends(get_db_connection)
+):
+    """
+    Upload a team transcript file to the database.
+    
+    Args:
+        raw_data: The uploaded file content
+        file_name: Optional custom file name (defaults to uploaded filename)
+        team_name: Optional team name
+        type: Optional transcript type
+        origin: Optional origin information
+        transcript_date: Optional transcript date (defaults to current date)
+        conn: Database connection dependency
+    
+    Returns:
+        Dict containing the uploaded transcript information
+    """
+    try:
+        # Check file size (limit to 2MB)
+        MAX_FILE_SIZE = 2 * 1024 * 1024  # 2MB
+        file_content = await raw_data.read()
+        
+        if len(file_content) > MAX_FILE_SIZE:
+            raise HTTPException(
+                status_code=413,
+                detail=f"File too large. Maximum size allowed is {MAX_FILE_SIZE / (1024*1024):.1f}MB"
+            )
+        
+        # Convert file content to text
+        try:
+            raw_text = file_content.decode('utf-8')
+        except UnicodeDecodeError:
+            raise HTTPException(
+                status_code=400,
+                detail="File must be a valid text file (UTF-8 encoded)"
+            )
+        
+        # Insert or update transcript into database (UPSERT)
+        query = text(f"""
+            INSERT INTO {config.TRANSCRIPTS_TABLE} 
+            (transcript_date, team_name, type, file_name, raw_text, origin, pi, created_at, updated_at)
+            VALUES (:transcript_date, :team_name, :type, :file_name, :raw_text, :origin, :pi, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+            ON CONFLICT ON CONSTRAINT unique_team_transcript
+            DO UPDATE SET 
+                type = EXCLUDED.type,
+                file_name = EXCLUDED.file_name,
+                raw_text = EXCLUDED.raw_text,
+                origin = EXCLUDED.origin,
+                updated_at = CURRENT_TIMESTAMP
+            RETURNING id, transcript_date, team_name, type, file_name, origin, pi, created_at, updated_at
+        """)
+        
+        # Use provided file_name or fallback to uploaded filename
+        final_file_name = file_name if file_name else raw_data.filename
+        
+        # Use provided transcript_date or fallback to current date
+        final_date = transcript_date if transcript_date else "CURRENT_DATE"
+        
+        logger.info(f"Uploading transcript file: {final_file_name}")
+        
+        result = conn.execute(query, {
+            "transcript_date": final_date,
+            "team_name": team_name,
+            "type": type,
+            "file_name": final_file_name,
+            "raw_text": raw_text,
+            "origin": origin,
+            "pi": None  # Team transcripts don't have PI
+        })
+        
+        row = result.fetchone()
+        conn.commit()
+        
+        return {
+            "id": row[0],
+            "transcript_date": row[1],
+            "team_name": row[2],
+            "type": row[3],
+            "file_name": row[4],
+            "origin": row[5],
+            "pi": row[6],
+            "created_at": row[7],
+            "updated_at": row[8],
+            "file_size": len(file_content)
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error uploading team transcript: {e}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to upload team transcript: {str(e)}"
+        )
+
+
+@transcripts_router.post("/transcripts/upload-pi")
+async def upload_pi_transcript(
+    raw_data: UploadFile = File(...),
+    pi: str = Form(...),
+    file_name: Optional[str] = Form(None),
+    type: Optional[str] = Form(None),
+    origin: Optional[str] = Form(None),
+    transcript_date: Optional[str] = Form(None),
+    conn: Connection = Depends(get_db_connection)
+):
+    """
+    Upload a PI transcript file to the database.
+    
+    Args:
+        raw_data: The uploaded file content
+        pi: PI name (required)
+        file_name: Optional custom file name (defaults to uploaded filename)
+        type: Optional transcript type
+        origin: Optional origin information
+        transcript_date: Optional transcript date (defaults to current date)
+        conn: Database connection dependency
+    
+    Returns:
+        Dict containing the uploaded transcript information
+    """
+    try:
+        # Check file size (limit to 2MB)
+        MAX_FILE_SIZE = 2 * 1024 * 1024  # 2MB
+        file_content = await raw_data.read()
+        
+        if len(file_content) > MAX_FILE_SIZE:
+            raise HTTPException(
+                status_code=413,
+                detail=f"File too large. Maximum size allowed is {MAX_FILE_SIZE / (1024*1024):.1f}MB"
+            )
+        
+        # Convert file content to text
+        try:
+            raw_text = file_content.decode('utf-8')
+        except UnicodeDecodeError:
+            raise HTTPException(
+                status_code=400,
+                detail="File must be a valid text file (UTF-8 encoded)"
+            )
+        
+        # Insert or update transcript into database (UPSERT)
+        query = text(f"""
+            INSERT INTO {config.TRANSCRIPTS_TABLE} 
+            (transcript_date, team_name, type, file_name, raw_text, origin, pi, created_at, updated_at)
+            VALUES (:transcript_date, :team_name, :type, :file_name, :raw_text, :origin, :pi, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+            ON CONFLICT ON CONSTRAINT unique_pi_transcript
+            DO UPDATE SET 
+                type = EXCLUDED.type,
+                file_name = EXCLUDED.file_name,
+                raw_text = EXCLUDED.raw_text,
+                origin = EXCLUDED.origin,
+                updated_at = CURRENT_TIMESTAMP
+            RETURNING id, transcript_date, team_name, type, file_name, origin, pi, created_at, updated_at
+        """)
+        
+        # Use provided file_name or fallback to uploaded filename
+        final_file_name = file_name if file_name else raw_data.filename
+        
+        # Use provided transcript_date or fallback to current date
+        final_date = transcript_date if transcript_date else "CURRENT_DATE"
+        
+        logger.info(f"Uploading PI transcript file: {final_file_name} for PI: {pi}")
+        
+        result = conn.execute(query, {
+            "transcript_date": final_date,
+            "team_name": None,  # PI transcripts don't have team
+            "type": type,
+            "file_name": final_file_name,
+            "raw_text": raw_text,
+            "origin": origin,
+            "pi": pi  # Required for PI transcripts
+        })
+        
+        row = result.fetchone()
+        conn.commit()
+        
+        return {
+            "id": row[0],
+            "transcript_date": row[1],
+            "team_name": row[2],
+            "type": row[3],
+            "file_name": row[4],
+            "origin": row[5],
+            "pi": row[6],
+            "created_at": row[7],
+            "updated_at": row[8],
+            "file_size": len(file_content)
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error uploading PI transcript: {e}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to upload PI transcript: {str(e)}"
+        )
+ 
+ 
