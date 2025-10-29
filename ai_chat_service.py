@@ -110,7 +110,7 @@ def get_or_create_chat_history(
     insert_query = text(f"""
         INSERT INTO {config.CHAT_HISTORY_TABLE}
         (id, username, team, pi, chat_type, history_json)
-        VALUES (:id, :username, :team, :pi, :chat_type, :history_json::jsonb)
+        VALUES (:id, :username, :team, :pi, :chat_type, CAST(:history_json AS jsonb))
         RETURNING id
     """)
     
@@ -189,7 +189,7 @@ def update_chat_history(
         # Update database
         update_query = text(f"""
             UPDATE {config.CHAT_HISTORY_TABLE}
-            SET history_json = :history_json::jsonb
+            SET history_json = CAST(:history_json AS jsonb)
             WHERE id = :conversation_id
         """)
         
@@ -304,13 +304,22 @@ async def ai_chat(
         logger.info(f"  chat_type: {request.chat_type}")
         logger.info("=" * 60)
         
+        # Normalize chat_type to a string for downstream usage
+        chat_type_str = None
+        if request.chat_type is not None:
+            try:
+                # If ChatType enum, use its value; otherwise assume it's already a string
+                chat_type_str = request.chat_type.value  # type: ignore[attr-defined]
+            except AttributeError:
+                chat_type_str = str(request.chat_type)
+
         # 1. Get or create chat history
         conversation_id, history_json = get_or_create_chat_history(
             conversation_id=request.conversation_id,
             username=request.username,
             team=request.selected_team,
             pi=request.selected_pi,
-            chat_type=request.chat_type.value if request.chat_type else None,
+            chat_type=chat_type_str,
             conn=conn
         )
         
@@ -325,7 +334,7 @@ async def ai_chat(
             username=request.username,
             selected_team=request.selected_team,
             selected_pi=request.selected_pi,
-            chat_type=request.chat_type.value if request.chat_type else None
+            chat_type=chat_type_str
         )
         
         if not llm_response.get("success"):
@@ -355,8 +364,8 @@ async def ai_chat(
             input_params["selected_team"] = request.selected_team
         if request.selected_pi:
             input_params["selected_pi"] = request.selected_pi
-        if request.chat_type:
-            input_params["chat_type"] = request.chat_type
+        if chat_type_str:
+            input_params["chat_type"] = chat_type_str
         if request.recommendation_id:
             input_params["recommendation_id"] = request.recommendation_id
         if request.insights_id:

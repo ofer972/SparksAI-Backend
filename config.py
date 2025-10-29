@@ -1,6 +1,10 @@
 # FILE: config.py
 # Central configuration file for SparksAI Backend Services
 import os
+from dotenv import load_dotenv
+
+# Load environment variables from .env file (for local development)
+load_dotenv()
 
 # --- API Configuration ---
 API_VERSION = "v1"
