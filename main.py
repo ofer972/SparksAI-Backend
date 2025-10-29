@@ -17,6 +17,7 @@ from agent_jobs_service import agent_jobs_router
 from security_logs_service import security_logs_router
 from pi_ai_cards_service import pi_ai_cards_router
 from transcripts_service import transcripts_router
+from prompts_service import prompts_router
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -66,6 +67,7 @@ app.include_router(agent_jobs_router, prefix="/api/v1", tags=["agent-jobs"])
 app.include_router(security_logs_router, prefix="/api/v1", tags=["security-logs"])
 app.include_router(pi_ai_cards_router, prefix="/api/v1", tags=["pi-ai-cards"])
 app.include_router(transcripts_router, prefix="/api/v1", tags=["transcripts"])
+app.include_router(prompts_router, prefix="/api/v1", tags=["prompts"])
 
 @app.get("/")
 async def root():

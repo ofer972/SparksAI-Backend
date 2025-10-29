@@ -20,6 +20,7 @@ SECURITY_LOGS_TABLE = "security_logs"  # Security logs table
 PI_AI_CARDS_TABLE = "ai_summary"  # PI AI cards table
 TRANSCRIPTS_TABLE = "transcripts"  # Transcripts table
 AI_SUMMARY_TABLE = "ai_summary"  # AI summary table
+PROMPTS_TABLE = "prompts"  # Prompts table
 
 # --- Service Configuration ---
 # Teams Service
@@ -42,6 +43,8 @@ SECURITY_LOGS_SERVICE_PREFIX = "/security-logs"
 PI_AI_CARDS_SERVICE_PREFIX = "/pi-ai-cards"
 # Transcripts Service
 TRANSCRIPTS_SERVICE_PREFIX = "/transcripts"
+# Prompts Service
+PROMPTS_SERVICE_PREFIX = "/prompts"
 
 # --- Error Handling Configuration ---
 DEFAULT_ERROR_MESSAGE = "An unexpected error occurred"

@@ -103,20 +103,22 @@ def create_prompts_table_if_not_exists(engine=None) -> bool:
                 print("Creating prompts table...")
                 create_table_sql = """
                 CREATE TABLE public.prompts (
-                    id SERIAL PRIMARY KEY,
-                    prompt_name VARCHAR(255) NOT NULL UNIQUE,
-                    prompt_text TEXT NOT NULL,
+                    email_address VARCHAR(255) NOT NULL,
+                    prompt_name VARCHAR(255) NOT NULL,
+                    prompt_description TEXT NULL,
                     prompt_type VARCHAR(100) NOT NULL,
-                    is_active BOOLEAN DEFAULT TRUE,
-                    created_by VARCHAR(255),
-                    created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
-                    updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
-                    FOREIGN KEY (created_by) REFERENCES public.users(email_address)
+                    prompt_active BOOLEAN DEFAULT TRUE NULL,
+                    created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP NULL,
+                    updated_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP NULL,
+                    CONSTRAINT prompts_pkey PRIMARY KEY (email_address, prompt_name)
                 );
                 
-                CREATE INDEX idx_prompts_name ON public.prompts(prompt_name);
+                ALTER TABLE public.prompts ADD CONSTRAINT prompts_email_address_fkey 
+                FOREIGN KEY (email_address) REFERENCES public.users(email_address) ON DELETE CASCADE;
+                
                 CREATE INDEX idx_prompts_type ON public.prompts(prompt_type);
-                CREATE INDEX idx_prompts_active ON public.prompts(is_active);
+                CREATE INDEX idx_prompts_active ON public.prompts(prompt_active);
+                CREATE INDEX idx_prompts_created ON public.prompts(created_at DESC);
                 """
                 conn.execute(text(create_table_sql))
                 conn.commit()
@@ -684,9 +686,9 @@ def insert_test_data_for_prompts():
     try:
         with engine.connect() as conn:
             insert_sql = """
-            INSERT INTO public.prompts (prompt_name, prompt_text, prompt_type, is_active) 
-            VALUES ('test_prompt', 'This is a test prompt', 'general', TRUE)
-            ON CONFLICT (prompt_name) DO NOTHING;
+            INSERT INTO public.prompts (email_address, prompt_name, prompt_description, prompt_type, prompt_active) 
+            VALUES ('admin@example.com', 'test_prompt', 'This is a test prompt', 'general', TRUE)
+            ON CONFLICT (email_address, prompt_name) DO NOTHING;
             """
             conn.execute(text(insert_sql))
             conn.commit()
