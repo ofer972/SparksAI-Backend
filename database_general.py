@@ -184,3 +184,109 @@ def get_all_settings_db(conn: Connection = None) -> Dict[str, str]:
         raise e
 
 
+def set_setting_db(
+    setting_key: str,
+    setting_value: str,
+    updated_by: str = 'admin',
+    conn: Connection = None
+) -> bool:
+    """
+    Set a single global setting in the database using UPSERT.
+    
+    Args:
+        setting_key (str): The setting key to set
+        setting_value (str): The value to set
+        updated_by (str): Email of user making the change (default: 'admin')
+        conn (Connection): Database connection from FastAPI dependency
+        
+    Returns:
+        bool: True if successful, False otherwise
+    """
+    try:
+        # SECURE: Parameterized query prevents SQL injection
+        # Use UPSERT (INSERT ... ON CONFLICT UPDATE)
+        upsert_sql = """
+        INSERT INTO public.global_settings 
+        (setting_key, setting_value, updated_at, updated_by)
+        VALUES (:key, :value, CURRENT_TIMESTAMP, :updated_by)
+        ON CONFLICT (setting_key) 
+        DO UPDATE SET 
+            setting_value = EXCLUDED.setting_value,
+            updated_at = CURRENT_TIMESTAMP,
+            updated_by = EXCLUDED.updated_by
+        """
+        
+        logger.info(f"Setting global setting '{setting_key}' by {updated_by}")
+        
+        result = conn.execute(text(upsert_sql), {
+            'key': setting_key,
+            'value': setting_value,
+            'updated_by': updated_by
+        })
+        conn.commit()
+        
+        logger.info(f"Successfully set global setting '{setting_key}'")
+        return True
+        
+    except Exception as e:
+        logger.error(f"Error setting global setting '{setting_key}': {e}")
+        conn.rollback()
+        raise e
+
+
+def set_settings_batch_db(
+    settings: Dict[str, str],
+    updated_by: str = 'admin',
+    conn: Connection = None
+) -> Dict[str, bool]:
+    """
+    Set multiple global settings in a batch using UPSERT.
+    
+    Args:
+        settings (Dict[str, str]): Dictionary of setting_key: setting_value pairs
+        updated_by (str): Email of user making the change (default: 'admin')
+        conn (Connection): Database connection from FastAPI dependency
+        
+    Returns:
+        Dict[str, bool]: Dictionary of setting_key: success_status pairs
+    """
+    results = {}
+    
+    try:
+        # SECURE: Parameterized query prevents SQL injection
+        upsert_sql = """
+        INSERT INTO public.global_settings 
+        (setting_key, setting_value, updated_at, updated_by)
+        VALUES (:key, :value, CURRENT_TIMESTAMP, :updated_by)
+        ON CONFLICT (setting_key) 
+        DO UPDATE SET 
+            setting_value = EXCLUDED.setting_value,
+            updated_at = CURRENT_TIMESTAMP,
+            updated_by = EXCLUDED.updated_by
+        """
+        
+        logger.info(f"Setting {len(settings)} global settings by {updated_by}")
+        
+        for setting_key, setting_value in settings.items():
+            try:
+                conn.execute(text(upsert_sql), {
+                    'key': setting_key,
+                    'value': setting_value,
+                    'updated_by': updated_by
+                })
+                results[setting_key] = True
+                logger.debug(f"Successfully set global setting '{setting_key}'")
+            except Exception as e:
+                logger.error(f"Error setting global setting '{setting_key}': {e}")
+                results[setting_key] = False
+        
+        conn.commit()
+        logger.info(f"Batch update completed: {sum(results.values())}/{len(settings)} successful")
+        return results
+        
+    except Exception as e:
+        logger.error(f"Error in batch settings update: {e}")
+        conn.rollback()
+        raise e
+
+
