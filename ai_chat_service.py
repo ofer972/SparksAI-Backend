@@ -16,6 +16,7 @@ import uuid
 import json
 import httpx
 from database_connection import get_db_connection
+from database_general import get_team_ai_card_by_id
 import config
 
 logger = logging.getLogger(__name__)
@@ -219,7 +220,8 @@ async def call_llm_service(
     username: Optional[str],
     selected_team: Optional[str],
     selected_pi: Optional[str],
-    chat_type: Optional[str]
+    chat_type: Optional[str],
+    conversation_context: Optional[str] = None
 ) -> Dict[str, Any]:
     """
     Call LLM service with minimal payload.
@@ -232,6 +234,7 @@ async def call_llm_service(
         selected_team: Team name
         selected_pi: PI name
         chat_type: Chat type
+        conversation_context: Optional additional context to include (e.g., for Team_insights)
         
     Returns:
         LLM service response dict
@@ -245,10 +248,16 @@ async def call_llm_service(
         "username": username,
         "selected_team": selected_team,
         "selected_pi": selected_pi,
-        "chat_type": chat_type
+        "chat_type": chat_type,
+        "conversation_context": conversation_context
     }
     
     logger.info(f"Calling LLM service: {llm_service_url}")
+    if conversation_context:
+        logger.info(f"Conversation context included: {len(conversation_context)} chars")
+        logger.debug(f"Conversation context preview: {conversation_context[:200]}...")
+    else:
+        logger.info("No conversation context provided")
     logger.debug(f"Payload: {payload}")
     
     try:
@@ -326,7 +335,58 @@ async def ai_chat(
         logger.info(f"Conversation ID: {conversation_id}")
         logger.info(f"History messages count: {len(history_json.get('messages', []))}")
         
-        # 2. Call LLM service
+        # 2. Handle Team_insights chat type - fetch card data and build context
+        conversation_context = None
+        if chat_type_str == "Team_insights":
+            # Validate insights_id is provided
+            if not request.insights_id:
+                raise HTTPException(
+                    status_code=400,
+                    detail="insights_id is required when chat_type is Team_insights"
+                )
+            
+            try:
+                # Convert insights_id to int
+                insights_id_int = int(request.insights_id)
+                
+                # Fetch team AI card using shared helper function
+                logger.info(f"Fetching team AI card with ID: {insights_id_int}")
+                card = get_team_ai_card_by_id(insights_id_int, conn)
+                
+                if not card:
+                    raise HTTPException(
+                        status_code=404,
+                        detail=f"Team AI card with ID {insights_id_int} not found"
+                    )
+                
+                # Extract full_information from card
+                full_information = card.get('full_information', '')
+                
+                if not full_information:
+                    logger.warning(f"Team AI card {insights_id_int} has empty full_information field")
+                    conversation_context = None
+                else:
+                    # Build context text (same as old project)
+                    conversation_context = "This is previous discussion we have in a different chat. Read this information as I want to ask follow up questions.\n\n"
+                    conversation_context += full_information
+                    
+                    logger.info(f"Built conversation context from team AI card {insights_id_int} (length: {len(conversation_context)} chars)")
+                    
+            except ValueError:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Invalid insights_id format: {request.insights_id}. Must be an integer."
+                )
+            except HTTPException:
+                raise
+            except Exception as e:
+                logger.error(f"Error fetching team AI card for Team_insights: {e}")
+                raise HTTPException(
+                    status_code=500,
+                    detail=f"Failed to fetch team AI card: {str(e)}"
+                )
+        
+        # 3. Call LLM service
         llm_response = await call_llm_service(
             conversation_id=conversation_id,
             question=request.question,
@@ -334,7 +394,8 @@ async def ai_chat(
             username=request.username,
             selected_team=request.selected_team,
             selected_pi=request.selected_pi,
-            chat_type=chat_type_str
+            chat_type=chat_type_str,
+            conversation_context=conversation_context
         )
         
         if not llm_response.get("success"):
@@ -345,7 +406,7 @@ async def ai_chat(
         
         ai_response = llm_response.get("response", "")
         
-        # 3. Update chat history with new exchange
+        # 4. Update chat history with new exchange
         update_chat_history(
             conversation_id=conversation_id,
             user_message=request.question,
@@ -353,7 +414,7 @@ async def ai_chat(
             conn=conn
         )
         
-        # 4. Prepare response
+        # 5. Prepare response
         input_params = {
             "conversation_id": conversation_id,
             "question": request.question

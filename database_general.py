@@ -7,7 +7,7 @@ Uses FastAPI dependencies for clean connection management and SQL injection prot
 
 from sqlalchemy import text
 from sqlalchemy.engine import Connection
-from typing import List, Dict, Any
+from typing import List, Dict, Any, Optional
 import logging
 import config
 
@@ -146,6 +146,42 @@ def get_top_ai_cards(team_name: str, limit: int = 4, conn: Connection = None) ->
             
     except Exception as e:
         logger.error(f"Error fetching top AI cards for team {team_name}: {e}")
+        raise e
+
+
+def get_team_ai_card_by_id(card_id: int, conn: Connection = None) -> Optional[Dict[str, Any]]:
+    """
+    Get a single team AI summary card by ID from team_ai_summary_cards table.
+    Uses parameterized queries to prevent SQL injection.
+    
+    Args:
+        card_id (int): The ID of the team AI card to retrieve
+        conn (Connection): Database connection from FastAPI dependency
+        
+    Returns:
+        dict: Team AI card dictionary or None if not found
+    """
+    try:
+        # SECURE: Parameterized query prevents SQL injection
+        query = text(f"""
+            SELECT * 
+            FROM {config.TEAM_AI_CARDS_TABLE} 
+            WHERE id = :id
+        """)
+        
+        logger.info(f"Executing query to get team AI card with ID {card_id} from {config.TEAM_AI_CARDS_TABLE}")
+        
+        result = conn.execute(query, {"id": card_id})
+        row = result.fetchone()
+        
+        if not row:
+            return None
+        
+        # Convert row to dictionary - get all fields from database
+        return dict(row._mapping)
+        
+    except Exception as e:
+        logger.error(f"Error fetching team AI card {card_id}: {e}")
         raise e
 
 

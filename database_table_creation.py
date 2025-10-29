@@ -19,6 +19,11 @@ _tables_initialized = False
 
 def create_users_table_if_not_exists(engine=None) -> bool:
     """Create users table if it doesn't exist"""
+    # Skip if tables are already initialized (no need to check again)
+    global _tables_initialized
+    if _tables_initialized:
+        return True
+    
     # Use the same connection pattern as other functions for consistency
     import database_connection
     
@@ -78,6 +83,11 @@ def create_users_table_if_not_exists(engine=None) -> bool:
 
 def create_prompts_table_if_not_exists(engine=None) -> bool:
     """Create prompts table if it doesn't exist"""
+    # Skip if tables are already initialized (no need to check again)
+    global _tables_initialized
+    if _tables_initialized:
+        return True
+    
     import database_connection
     
     if engine is None:
@@ -139,6 +149,11 @@ def create_prompts_table_if_not_exists(engine=None) -> bool:
 
 def create_security_logs_table_if_not_exists(engine=None) -> bool:
     """Create security_logs table if it doesn't exist"""
+    # Skip if tables are already initialized (no need to check again)
+    global _tables_initialized
+    if _tables_initialized:
+        return True
+    
     import database_connection
     
     if engine is None:
@@ -197,6 +212,11 @@ def create_security_logs_table_if_not_exists(engine=None) -> bool:
 
 def create_global_settings_table_if_not_exists(engine=None) -> bool:
     """Create global_settings table if it doesn't exist"""
+    # Skip if tables are already initialized (no need to check again)
+    global _tables_initialized
+    if _tables_initialized:
+        return True
+    
     import database_connection
     
     if engine is None:
@@ -253,6 +273,11 @@ def create_global_settings_table_if_not_exists(engine=None) -> bool:
 
 def create_agent_jobs_table_if_not_exists(engine=None) -> bool:
     """Create agent_jobs table if it doesn't exist"""
+    # Skip if tables are already initialized (no need to check again)
+    global _tables_initialized
+    if _tables_initialized:
+        return True
+    
     import database_connection
     
     if engine is None:
@@ -316,6 +341,11 @@ def create_agent_jobs_table_if_not_exists(engine=None) -> bool:
 
 def create_team_ai_summary_cards_table_if_not_exists(engine=None) -> bool:
     """Create team_ai_summary_cards table if it doesn't exist"""
+    # Skip if tables are already initialized (no need to check again)
+    global _tables_initialized
+    if _tables_initialized:
+        return True
+    
     import database_connection
     
     if engine is None:
@@ -379,6 +409,11 @@ def create_team_ai_summary_cards_table_if_not_exists(engine=None) -> bool:
 
 def create_pi_ai_summary_cards_table_if_not_exists(engine=None) -> bool:
     """Create pi_ai_summary_cards table if it doesn't exist"""
+    # Skip if tables are already initialized (no need to check again)
+    global _tables_initialized
+    if _tables_initialized:
+        return True
+    
     import database_connection
     
     if engine is None:
@@ -437,6 +472,11 @@ def create_pi_ai_summary_cards_table_if_not_exists(engine=None) -> bool:
 
 def create_ai_summary_table_if_not_exists(engine=None) -> bool:
     """Create ai_summary table if it doesn't exist"""
+    # Skip if tables are already initialized (no need to check again)
+    global _tables_initialized
+    if _tables_initialized:
+        return True
+    
     import database_connection
     
     if engine is None:
@@ -498,6 +538,11 @@ def create_ai_summary_table_if_not_exists(engine=None) -> bool:
 
 def create_transcripts_table_if_not_exists(engine=None) -> bool:
     """Create transcripts table if it doesn't exist"""
+    # Skip if tables are already initialized (no need to check again)
+    global _tables_initialized
+    if _tables_initialized:
+        return True
+    
     import database_connection
     
     if engine is None:
@@ -559,6 +604,11 @@ def create_transcripts_table_if_not_exists(engine=None) -> bool:
 
 def create_recommendations_table_if_not_exists(engine=None) -> bool:
     """Create recommendations table if it doesn't exist"""
+    # Skip if tables are already initialized (no need to check again)
+    global _tables_initialized
+    if _tables_initialized:
+        return True
+    
     import database_connection
     
     if engine is None:
@@ -618,6 +668,11 @@ def create_recommendations_table_if_not_exists(engine=None) -> bool:
 
 def create_chat_history_table_if_not_exists(engine=None) -> bool:
     """Create chat_history table if it doesn't exist"""
+    # Skip if tables are already initialized (no need to check again)
+    global _tables_initialized
+    if _tables_initialized:
+        return True
+    
     import database_connection
     
     if engine is None:
@@ -675,6 +730,11 @@ def create_chat_history_table_if_not_exists(engine=None) -> bool:
 
 def add_input_sent_column_to_agent_jobs(engine=None) -> bool:
     """Temporary function to add input_sent column to agent_jobs table"""
+    # Skip if tables are already initialized (no need to check again)
+    global _tables_initialized
+    if _tables_initialized:
+        return True
+    
     import database_connection
     
     if engine is None:

@@ -10,7 +10,7 @@ from typing import List, Dict, Any, Optional
 import logging
 import re
 from database_connection import get_db_connection
-from database_general import get_top_ai_cards
+from database_general import get_top_ai_cards, get_team_ai_card_by_id
 import config
 
 logger = logging.getLogger(__name__)
@@ -178,27 +178,14 @@ async def get_team_ai_card(id: int, conn: Connection = Depends(get_db_connection
         JSON response with single team AI card or 404 if not found
     """
     try:
-        # SECURE: Parameterized query prevents SQL injection
-        query = text(f"""
-            SELECT * 
-            FROM {config.TEAM_AI_CARDS_TABLE} 
-            WHERE id = :id
-        """)
+        # Use shared helper function from database_general
+        card = get_team_ai_card_by_id(id, conn)
         
-        logger.info(f"Executing query to get team AI card with ID {id} from {config.TEAM_AI_CARDS_TABLE}")
-        
-        # Execute query with connection from dependency
-        result = conn.execute(query, {"id": id})
-        row = result.fetchone()
-        
-        if not row:
+        if not card:
             raise HTTPException(
                 status_code=404,
                 detail=f"Team AI card with ID {id} not found"
             )
-        
-        # Convert row to dictionary - get all fields from database
-        card = dict(row._mapping)
         
         return {
             "success": True,
