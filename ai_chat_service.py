@@ -16,7 +16,7 @@ import uuid
 import json
 import httpx
 from database_connection import get_db_connection
-from database_general import get_team_ai_card_by_id
+from database_general import get_team_ai_card_by_id, get_recommendation_by_id
 import config
 
 logger = logging.getLogger(__name__)
@@ -384,6 +384,59 @@ async def ai_chat(
                 raise HTTPException(
                     status_code=500,
                     detail=f"Failed to fetch team AI card: {str(e)}"
+                )
+        
+        # 2.5. Handle Recommendation_reason chat type - fetch recommendation data and build context
+        elif chat_type_str == "Recommendation_reason":
+            # Validate recommendation_id is provided
+            if not request.recommendation_id:
+                raise HTTPException(
+                    status_code=400,
+                    detail="recommendation_id is required when chat_type is Recommendation_reason"
+                )
+            
+            try:
+                # Convert recommendation_id to int
+                recommendation_id_int = int(request.recommendation_id)
+                
+                # Fetch recommendation using shared helper function
+                logger.info(f"Fetching recommendation with ID: {recommendation_id_int}")
+                recommendation = get_recommendation_by_id(recommendation_id_int, conn)
+                
+                if not recommendation:
+                    raise HTTPException(
+                        status_code=404,
+                        detail=f"Recommendation with ID {recommendation_id_int} not found"
+                    )
+                
+                # Extract action_text and full_information from recommendation
+                action_text = recommendation.get('action_text', '')
+                full_information = recommendation.get('full_information', '')
+                
+                if not action_text or not full_information:
+                    logger.warning(f"Recommendation {recommendation_id_int} has empty action_text or full_information field")
+                    conversation_context = None
+                else:
+                    # Build context text (same format as old project)
+                    conversation_context = "This is previous discussion we have in a different chat. Read this information as I want to ask follow up questions.\n\n"
+                    conversation_context += f"Please explain the reason for recommendation --> \"{action_text}\"\n\n"
+                    conversation_context += "Explain in a brief and short description the reason for recommendation\n\n"
+                    conversation_context += full_information
+                    
+                    logger.info(f"Built conversation context from recommendation {recommendation_id_int} (length: {len(conversation_context)} chars)")
+                    
+            except ValueError:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Invalid recommendation_id format: {request.recommendation_id}. Must be an integer."
+                )
+            except HTTPException:
+                raise
+            except Exception as e:
+                logger.error(f"Error fetching recommendation for Recommendation_reason: {e}")
+                raise HTTPException(
+                    status_code=500,
+                    detail=f"Failed to fetch recommendation: {str(e)}"
                 )
         
         # 3. Call LLM service

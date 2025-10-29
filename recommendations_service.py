@@ -10,7 +10,7 @@ from typing import List, Dict, Any, Optional
 import logging
 import re
 from database_connection import get_db_connection
-from database_general import get_top_ai_recommendations
+from database_general import get_top_ai_recommendations, get_recommendation_by_id
 import config
 
 logger = logging.getLogger(__name__)
@@ -146,5 +146,45 @@ async def get_top_pi_recommendations(
         raise HTTPException(
             status_code=500,
             detail=f"Failed to fetch recommendations: {str(e)}"
+        )
+
+@recommendations_router.get("/recommendations/{id}")
+async def get_recommendation(id: int, conn: Connection = Depends(get_db_connection)):
+    """
+    Get a single recommendation by ID from recommendations table.
+    Uses parameterized queries to prevent SQL injection.
+    
+    Args:
+        id: The ID of the recommendation to retrieve
+    
+    Returns:
+        JSON response with single recommendation or 404 if not found
+    """
+    try:
+        # Use shared helper function from database_general
+        recommendation = get_recommendation_by_id(id, conn)
+        
+        if not recommendation:
+            raise HTTPException(
+                status_code=404,
+                detail=f"Recommendation with ID {id} not found"
+            )
+        
+        return {
+            "success": True,
+            "data": {
+                "recommendation": recommendation
+            },
+            "message": f"Retrieved recommendation with ID {id}"
+        }
+    
+    except HTTPException:
+        # Re-raise HTTP exceptions (like the 404 error above)
+        raise
+    except Exception as e:
+        logger.error(f"Error fetching recommendation {id}: {e}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to fetch recommendation: {str(e)}"
         )
 

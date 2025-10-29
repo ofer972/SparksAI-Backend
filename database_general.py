@@ -185,6 +185,42 @@ def get_team_ai_card_by_id(card_id: int, conn: Connection = None) -> Optional[Di
         raise e
 
 
+def get_recommendation_by_id(recommendation_id: int, conn: Connection = None) -> Optional[Dict[str, Any]]:
+    """
+    Get a single recommendation by ID from recommendations table.
+    Uses parameterized queries to prevent SQL injection.
+    
+    Args:
+        recommendation_id (int): The ID of the recommendation to retrieve
+        conn (Connection): Database connection from FastAPI dependency
+        
+    Returns:
+        dict: Recommendation dictionary or None if not found
+    """
+    try:
+        # SECURE: Parameterized query prevents SQL injection
+        query = text(f"""
+            SELECT * 
+            FROM {config.RECOMMENDATIONS_TABLE} 
+            WHERE id = :id
+        """)
+        
+        logger.info(f"Executing query to get recommendation with ID {recommendation_id} from {config.RECOMMENDATIONS_TABLE}")
+        
+        result = conn.execute(query, {"id": recommendation_id})
+        row = result.fetchone()
+        
+        if not row:
+            return None
+        
+        # Convert row to dictionary - get all fields from database
+        return dict(row._mapping)
+        
+    except Exception as e:
+        logger.error(f"Error fetching recommendation {recommendation_id}: {e}")
+        raise e
+
+
 def get_all_settings_db(conn: Connection = None) -> Dict[str, str]:
     """
     Get all global settings from the database.
