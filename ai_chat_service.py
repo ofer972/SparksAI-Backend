@@ -23,6 +23,9 @@ logger = logging.getLogger(__name__)
 
 ai_chat_router = APIRouter()
 
+# System message constant for all AI chat interactions
+SYSTEM_MESSAGE = "You are AI assistant specialized in Agile, Scrum, Scaled Agile. All your answers should be brief with no more than 3 paragraphs with concrete and specific information based on the content provided"
+
 
 class ChatType(str, Enum):
     """Enumeration of chat type options"""
@@ -221,7 +224,8 @@ async def call_llm_service(
     selected_team: Optional[str],
     selected_pi: Optional[str],
     chat_type: Optional[str],
-    conversation_context: Optional[str] = None
+    conversation_context: Optional[str] = None,
+    system_message: Optional[str] = None
 ) -> Dict[str, Any]:
     """
     Call LLM service with minimal payload.
@@ -235,6 +239,7 @@ async def call_llm_service(
         selected_pi: PI name
         chat_type: Chat type
         conversation_context: Optional additional context to include (e.g., for Team_insights)
+        system_message: Optional system message to set AI behavior/context (controlled by backend)
         
     Returns:
         LLM service response dict
@@ -249,7 +254,8 @@ async def call_llm_service(
         "selected_team": selected_team,
         "selected_pi": selected_pi,
         "chat_type": chat_type,
-        "conversation_context": conversation_context
+        "conversation_context": conversation_context,
+        "system_message": system_message
     }
     
     logger.info(f"Calling LLM service: {llm_service_url}")
@@ -258,6 +264,10 @@ async def call_llm_service(
         logger.debug(f"Conversation context preview: {conversation_context[:200]}...")
     else:
         logger.info("No conversation context provided")
+    if system_message:
+        logger.info(f"System message included: {len(system_message)} chars")
+    else:
+        logger.info("No system message provided")
     logger.debug(f"Payload: {payload}")
     
     try:
@@ -448,7 +458,8 @@ async def ai_chat(
             selected_team=request.selected_team,
             selected_pi=request.selected_pi,
             chat_type=chat_type_str,
-            conversation_context=conversation_context
+            conversation_context=conversation_context,
+            system_message=SYSTEM_MESSAGE
         )
         
         if not llm_response.get("success"):
