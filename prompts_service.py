@@ -9,6 +9,7 @@ from fastapi import APIRouter, HTTPException, Depends, Query
 from sqlalchemy import text
 from sqlalchemy.engine import Connection
 from typing import List, Dict, Any, Optional
+from pydantic import BaseModel
 import logging
 import re
 from database_connection import get_db_connection
@@ -17,6 +18,14 @@ import config
 logger = logging.getLogger(__name__)
 
 prompts_router = APIRouter()
+
+# Pydantic model for request body - used by both POST and PUT
+class PromptRequest(BaseModel):
+    email_address: str
+    prompt_name: str
+    prompt_description: str
+    prompt_type: str
+    prompt_active: bool = True
 
 def validate_prompt_name(prompt_name: str) -> str:
     """
@@ -245,38 +254,30 @@ async def get_prompt(
 
 @prompts_router.post("/prompts")
 async def create_prompt(
-    email_address: str,
-    prompt_name: str,
-    prompt_description: str,
-    prompt_type: str,
-    prompt_active: bool = True,
+    request: PromptRequest,
     conn: Connection = Depends(get_db_connection)
 ):
     """
     Create a new prompt.
     
     Args:
-        email_address: Email address of the prompt owner
-        prompt_name: Name of the prompt
-        prompt_description: Description/content of the prompt
-        prompt_type: Type/category of the prompt
-        prompt_active: Whether the prompt is active (default: True)
+        request: PromptRequest containing all required fields (email_address, prompt_name, prompt_description, prompt_type, prompt_active)
     
     Returns:
         JSON response with created prompt
     """
     try:
         # Validate inputs
-        validated_email = validate_email_address(email_address)
-        validated_name = validate_prompt_name(prompt_name)
+        validated_email = validate_email_address(request.email_address)
+        validated_name = validate_prompt_name(request.prompt_name)
         
-        if not prompt_description or not isinstance(prompt_description, str):
+        if not request.prompt_description or not isinstance(request.prompt_description, str):
             raise HTTPException(status_code=400, detail="Prompt description is required and must be a string")
         
-        if not prompt_type or not isinstance(prompt_type, str):
+        if not request.prompt_type or not isinstance(request.prompt_type, str):
             raise HTTPException(status_code=400, detail="Prompt type is required and must be a string")
         
-        if len(prompt_type) > 100:
+        if len(request.prompt_type) > 100:
             raise HTTPException(status_code=400, detail="Prompt type is too long (max 100 characters)")
         
         # SECURE: Parameterized query prevents SQL injection
@@ -292,9 +293,9 @@ async def create_prompt(
         result = conn.execute(query, {
             "email_address": validated_email,
             "prompt_name": validated_name,
-            "prompt_description": prompt_description,
-            "prompt_type": prompt_type,
-            "prompt_active": prompt_active
+            "prompt_description": request.prompt_description,
+            "prompt_type": request.prompt_type,
+            "prompt_active": request.prompt_active
         })
         
         row = result.fetchone()
@@ -316,7 +317,7 @@ async def create_prompt(
             "data": {
                 "prompt": prompt
             },
-            "message": f"Created prompt '{prompt_name}' for '{email_address}'"
+            "message": f"Created prompt '{request.prompt_name}' for '{request.email_address}'"
         }
         
     except HTTPException:
@@ -326,7 +327,7 @@ async def create_prompt(
         if "unique constraint" in str(e).lower() or "duplicate key" in str(e).lower():
             raise HTTPException(
                 status_code=409,
-                detail=f"Prompt '{prompt_name}' already exists for email '{email_address}'"
+                detail=f"Prompt '{request.prompt_name}' already exists for email '{request.email_address}'"
             )
         logger.error(f"Error creating prompt: {e}")
         raise HTTPException(
@@ -338,75 +339,74 @@ async def create_prompt(
 async def update_prompt(
     email_address: str,
     prompt_name: str,
-    prompt_description: Optional[str] = None,
-    prompt_type: Optional[str] = None,
-    prompt_active: Optional[bool] = None,
+    request: PromptRequest,
     conn: Connection = Depends(get_db_connection)
 ):
     """
-    Update an existing prompt.
+    Update an existing prompt (full replacement - all fields required).
     
     Args:
-        email_address: Email address of the prompt owner
-        prompt_name: Name of the prompt
-        prompt_description: New description/content (optional)
-        prompt_type: New type/category (optional)
-        prompt_active: New active status (optional)
+        email_address: Email address of the prompt owner (from path)
+        prompt_name: Name of the prompt (from path)
+        request: PromptRequest containing all required fields (email_address, prompt_name, prompt_description, prompt_type, prompt_active)
+                 Note: email_address and prompt_name in body should match path parameters
     
     Returns:
         JSON response with updated prompt
     """
     try:
-        # Validate inputs
+        # Validate path parameters
         validated_email = validate_email_address(email_address)
         validated_name = validate_prompt_name(prompt_name)
         
-        # Validate optional fields if provided
-        if prompt_description is not None and not isinstance(prompt_description, str):
-            raise HTTPException(status_code=400, detail="Prompt description must be a string")
+        # Validate that body email_address and prompt_name match path parameters
+        validated_body_email = validate_email_address(request.email_address)
+        validated_body_name = validate_prompt_name(request.prompt_name)
         
-        if prompt_type is not None:
-            if not isinstance(prompt_type, str):
-                raise HTTPException(status_code=400, detail="Prompt type must be a string")
-            if len(prompt_type) > 100:
-                raise HTTPException(status_code=400, detail="Prompt type is too long (max 100 characters)")
+        if validated_email != validated_body_email:
+            raise HTTPException(
+                status_code=400,
+                detail=f"email_address in path ({email_address}) does not match email_address in body ({request.email_address})"
+            )
         
-        # Build SET clause dynamically based on provided fields
-        set_clauses = []
-        params = {
-            "email_address": validated_email,
-            "prompt_name": validated_name
-        }
+        if validated_name != validated_body_name:
+            raise HTTPException(
+                status_code=400,
+                detail=f"prompt_name in path ({prompt_name}) does not match prompt_name in body ({request.prompt_name})"
+            )
         
-        if prompt_description is not None:
-            set_clauses.append("prompt_description = :prompt_description")
-            params["prompt_description"] = prompt_description
+        # Validate other fields
+        if not request.prompt_description or not isinstance(request.prompt_description, str):
+            raise HTTPException(status_code=400, detail="Prompt description is required and must be a string")
         
-        if prompt_type is not None:
-            set_clauses.append("prompt_type = :prompt_type")
-            params["prompt_type"] = prompt_type
+        if not request.prompt_type or not isinstance(request.prompt_type, str):
+            raise HTTPException(status_code=400, detail="Prompt type is required and must be a string")
         
-        if prompt_active is not None:
-            set_clauses.append("prompt_active = :prompt_active")
-            params["prompt_active"] = prompt_active
-        
-        if not set_clauses:
-            raise HTTPException(status_code=400, detail="At least one field must be provided for update")
-        
-        # Always update the updated_at timestamp
-        set_clauses.append("updated_at = CURRENT_TIMESTAMP")
+        if len(request.prompt_type) > 100:
+            raise HTTPException(status_code=400, detail="Prompt type is too long (max 100 characters)")
         
         # SECURE: Parameterized query prevents SQL injection
+        # Full replacement - update all fields
         query = text(f"""
             UPDATE {config.PROMPTS_TABLE} 
-            SET {', '.join(set_clauses)}
+            SET prompt_description = :prompt_description,
+                prompt_type = :prompt_type,
+                prompt_active = :prompt_active,
+                updated_at = CURRENT_TIMESTAMP
             WHERE email_address = :email_address AND prompt_name = :prompt_name
             RETURNING email_address, prompt_name, prompt_description, prompt_type, prompt_active, created_at, updated_at
         """)
         
         logger.info(f"Updating prompt '{validated_name}' for '{validated_email}'")
         
-        result = conn.execute(query, params)
+        result = conn.execute(query, {
+            "email_address": validated_email,
+            "prompt_name": validated_name,
+            "prompt_description": request.prompt_description,
+            "prompt_type": request.prompt_type,
+            "prompt_active": request.prompt_active
+        })
+        
         row = result.fetchone()
         
         if not row:
