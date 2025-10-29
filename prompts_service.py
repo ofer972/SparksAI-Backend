@@ -39,16 +39,11 @@ def validate_prompt_name(prompt_name: str) -> str:
 
 def validate_email_address(email_address: str) -> str:
     """
-    Validate and sanitize email address to prevent SQL injection.
-    Basic email validation.
+    Validate and sanitize email address field to prevent SQL injection.
+    Accepts any text string (not validating email format).
     """
     if not email_address or not isinstance(email_address, str):
         raise HTTPException(status_code=400, detail="Email address is required and must be a string")
-    
-    # Basic email validation
-    email_pattern = r'^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$'
-    if not re.match(email_pattern, email_address.strip()):
-        raise HTTPException(status_code=400, detail="Invalid email address format")
     
     if len(email_address) > 255:  # Match database column limit
         raise HTTPException(status_code=400, detail="Email address is too long (max 255 characters)")
