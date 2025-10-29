@@ -5,10 +5,10 @@ This service provides endpoints for managing and retrieving transcript informati
 Uses FastAPI dependencies for clean connection management and SQL injection protection.
 """
 
-from fastapi import APIRouter, HTTPException, Depends
+from fastapi import APIRouter, HTTPException, Depends, UploadFile, File, Form
 from sqlalchemy import text
 from sqlalchemy.engine import Connection
-from typing import List, Dict, Any
+from typing import List, Dict, Any, Optional
 import logging
 from database_connection import get_db_connection
 import config
@@ -36,8 +36,9 @@ async def get_transcripts(conn: Connection = Depends(get_db_connection)):
                 team_name,
                 type,
                 file_name,
-                raw_text,
-                origin
+                origin,
+                created_at,
+                updated_at
             FROM {config.TRANSCRIPTS_TABLE}
             ORDER BY id DESC 
             LIMIT 100
@@ -135,4 +136,89 @@ async def get_transcript(id: int, conn: Connection = Depends(get_db_connection))
         raise HTTPException(
             status_code=500,
             detail=f"Failed to fetch transcript: {str(e)}"
+        )
+
+
+@transcripts_router.post("/transcripts/upload")
+async def upload_transcript(
+    raw_data: UploadFile = File(...),
+    team_name: Optional[str] = Form(None),
+    type: Optional[str] = Form(None),
+    origin: Optional[str] = Form(None),
+    conn: Connection = Depends(get_db_connection)
+):
+    """
+    Upload a transcript file to the database.
+    
+    Args:
+        raw_data: The uploaded file content
+        team_name: Optional team name
+        type: Optional transcript type
+        origin: Optional origin information
+        conn: Database connection dependency
+    
+    Returns:
+        Dict containing the uploaded transcript information
+    """
+    try:
+        # Check file size (limit to 2MB)
+        MAX_FILE_SIZE = 2 * 1024 * 1024  # 2MB
+        file_content = await raw_data.read()
+        
+        if len(file_content) > MAX_FILE_SIZE:
+            raise HTTPException(
+                status_code=413,
+                detail=f"File too large. Maximum size allowed is {MAX_FILE_SIZE / (1024*1024):.1f}MB"
+            )
+        
+        # Convert file content to text
+        try:
+            raw_text = file_content.decode('utf-8')
+        except UnicodeDecodeError:
+            raise HTTPException(
+                status_code=400,
+                detail="File must be a valid text file (UTF-8 encoded)"
+            )
+        
+        # Insert transcript into database
+        query = text(f"""
+            INSERT INTO {config.TRANSCRIPTS_TABLE} 
+            (transcript_date_time, team_name, type, file_name, raw_text, origin, created_at, updated_at)
+            VALUES (:transcript_date_time, :team_name, :type, :file_name, :raw_text, :origin, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+            RETURNING id, transcript_date_time, team_name, type, file_name, origin, created_at, updated_at
+        """)
+        
+        logger.info(f"Uploading transcript file: {raw_data.filename}")
+        
+        result = conn.execute(query, {
+            "transcript_date_time": None,  # Can be set later if needed
+            "team_name": team_name,
+            "type": type,
+            "file_name": raw_data.filename,
+            "raw_text": raw_text,
+            "origin": origin
+        })
+        
+        row = result.fetchone()
+        conn.commit()
+        
+        return {
+            "id": row[0],
+            "transcript_date_time": row[1],
+            "team_name": row[2],
+            "type": row[3],
+            "file_name": row[4],
+            "origin": row[5],
+            "created_at": row[6],
+            "updated_at": row[7],
+            "file_size": len(file_content)
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error uploading transcript: {e}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to upload transcript: {str(e)}"
         )

@@ -522,19 +522,17 @@ def create_transcripts_table_if_not_exists(engine=None) -> bool:
                 create_table_sql = """
                 CREATE TABLE public.transcripts (
                     id SERIAL PRIMARY KEY,
-                    transcript_name VARCHAR(255) NOT NULL,
-                    transcript_content TEXT NOT NULL,
-                    transcript_type VARCHAR(100) NOT NULL,
+                    transcript_date_time TIMESTAMP WITH TIME ZONE,
                     team_name VARCHAR(255),
-                    uploaded_by VARCHAR(255),
-                    file_size INTEGER,
+                    type VARCHAR(50),
+                    file_name VARCHAR(255),
+                    raw_text TEXT,
+                    origin VARCHAR(500),
                     created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
-                    updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
-                    FOREIGN KEY (uploaded_by) REFERENCES public.users(email_address)
+                    updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
                 );
                 
-                CREATE INDEX idx_transcripts_name ON public.transcripts(transcript_name);
-                CREATE INDEX idx_transcripts_type ON public.transcripts(transcript_type);
+                CREATE INDEX idx_transcripts_type ON public.transcripts(type);
                 CREATE INDEX idx_transcripts_team ON public.transcripts(team_name);
                 CREATE INDEX idx_transcripts_created ON public.transcripts(created_at DESC);
                 """
