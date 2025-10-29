@@ -522,7 +522,7 @@ def create_transcripts_table_if_not_exists(engine=None) -> bool:
                 create_table_sql = """
                 CREATE TABLE public.transcripts (
                     id SERIAL PRIMARY KEY,
-                    transcript_date_time TIMESTAMP WITH TIME ZONE,
+                    transcript_date DATE,
                     team_name VARCHAR(255),
                     type VARCHAR(50),
                     file_name VARCHAR(255),
@@ -536,6 +536,7 @@ def create_transcripts_table_if_not_exists(engine=None) -> bool:
                 CREATE INDEX idx_transcripts_type ON public.transcripts(type);
                 CREATE INDEX idx_transcripts_team ON public.transcripts(team_name);
                 CREATE INDEX idx_transcripts_pi ON public.transcripts(pi);
+                CREATE INDEX idx_transcripts_date ON public.transcripts(transcript_date DESC);
                 CREATE INDEX idx_transcripts_created ON public.transcripts(created_at DESC);
                 """
                 conn.execute(text(create_table_sql))

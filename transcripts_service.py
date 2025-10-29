@@ -32,11 +32,12 @@ async def get_transcripts(conn: Connection = Depends(get_db_connection)):
         query = text(f"""
             SELECT 
                 id,
-                transcript_date_time,
+                transcript_date,
                 team_name,
                 type,
                 file_name,
                 origin,
+                pi,
                 created_at,
                 updated_at
             FROM {config.TRANSCRIPTS_TABLE}
@@ -146,7 +147,7 @@ async def upload_team_transcript(
     team_name: Optional[str] = Form(None),
     type: Optional[str] = Form(None),
     origin: Optional[str] = Form(None),
-    transcript_date_time: Optional[str] = Form(None),
+    transcript_date: Optional[str] = Form(None),
     conn: Connection = Depends(get_db_connection)
 ):
     """
@@ -158,7 +159,7 @@ async def upload_team_transcript(
         team_name: Optional team name
         type: Optional transcript type
         origin: Optional origin information
-        transcript_date_time: Optional transcript date/time (defaults to current timestamp)
+        transcript_date: Optional transcript date (defaults to current date)
         conn: Database connection dependency
     
     Returns:
@@ -187,21 +188,21 @@ async def upload_team_transcript(
         # Insert transcript into database
         query = text(f"""
             INSERT INTO {config.TRANSCRIPTS_TABLE} 
-            (transcript_date_time, team_name, type, file_name, raw_text, origin, pi, created_at, updated_at)
-            VALUES (:transcript_date_time, :team_name, :type, :file_name, :raw_text, :origin, :pi, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
-            RETURNING id, transcript_date_time, team_name, type, file_name, origin, pi, created_at, updated_at
+            (transcript_date, team_name, type, file_name, raw_text, origin, pi, created_at, updated_at)
+            VALUES (:transcript_date, :team_name, :type, :file_name, :raw_text, :origin, :pi, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+            RETURNING id, transcript_date, team_name, type, file_name, origin, pi, created_at, updated_at
         """)
         
         # Use provided file_name or fallback to uploaded filename
         final_file_name = file_name if file_name else raw_data.filename
         
-        # Use provided transcript_date_time or fallback to current timestamp
-        final_date_time = transcript_date_time if transcript_date_time else "CURRENT_TIMESTAMP"
+        # Use provided transcript_date or fallback to current date
+        final_date = transcript_date if transcript_date else "CURRENT_DATE"
         
         logger.info(f"Uploading transcript file: {final_file_name}")
         
         result = conn.execute(query, {
-            "transcript_date_time": final_date_time,
+            "transcript_date": final_date,
             "team_name": team_name,
             "type": type,
             "file_name": final_file_name,
@@ -215,7 +216,7 @@ async def upload_team_transcript(
         
         return {
             "id": row[0],
-            "transcript_date_time": row[1],
+            "transcript_date": row[1],
             "team_name": row[2],
             "type": row[3],
             "file_name": row[4],
@@ -243,7 +244,7 @@ async def upload_pi_transcript(
     file_name: Optional[str] = Form(None),
     type: Optional[str] = Form(None),
     origin: Optional[str] = Form(None),
-    transcript_date_time: Optional[str] = Form(None),
+    transcript_date: Optional[str] = Form(None),
     conn: Connection = Depends(get_db_connection)
 ):
     """
@@ -255,7 +256,7 @@ async def upload_pi_transcript(
         file_name: Optional custom file name (defaults to uploaded filename)
         type: Optional transcript type
         origin: Optional origin information
-        transcript_date_time: Optional transcript date/time (defaults to current timestamp)
+        transcript_date: Optional transcript date (defaults to current date)
         conn: Database connection dependency
     
     Returns:
@@ -284,21 +285,21 @@ async def upload_pi_transcript(
         # Insert transcript into database
         query = text(f"""
             INSERT INTO {config.TRANSCRIPTS_TABLE} 
-            (transcript_date_time, team_name, type, file_name, raw_text, origin, pi, created_at, updated_at)
-            VALUES (:transcript_date_time, :team_name, :type, :file_name, :raw_text, :origin, :pi, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
-            RETURNING id, transcript_date_time, team_name, type, file_name, origin, pi, created_at, updated_at
+            (transcript_date, team_name, type, file_name, raw_text, origin, pi, created_at, updated_at)
+            VALUES (:transcript_date, :team_name, :type, :file_name, :raw_text, :origin, :pi, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+            RETURNING id, transcript_date, team_name, type, file_name, origin, pi, created_at, updated_at
         """)
         
         # Use provided file_name or fallback to uploaded filename
         final_file_name = file_name if file_name else raw_data.filename
         
-        # Use provided transcript_date_time or fallback to current timestamp
-        final_date_time = transcript_date_time if transcript_date_time else "CURRENT_TIMESTAMP"
+        # Use provided transcript_date or fallback to current date
+        final_date = transcript_date if transcript_date else "CURRENT_DATE"
         
         logger.info(f"Uploading PI transcript file: {final_file_name} for PI: {pi}")
         
         result = conn.execute(query, {
-            "transcript_date_time": final_date_time,
+            "transcript_date": final_date,
             "team_name": None,  # PI transcripts don't have team
             "type": type,
             "file_name": final_file_name,
@@ -312,7 +313,7 @@ async def upload_pi_transcript(
         
         return {
             "id": row[0],
-            "transcript_date_time": row[1],
+            "transcript_date": row[1],
             "team_name": row[2],
             "type": row[3],
             "file_name": row[4],
