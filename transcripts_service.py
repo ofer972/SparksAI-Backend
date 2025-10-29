@@ -139,19 +139,21 @@ async def get_transcript(id: int, conn: Connection = Depends(get_db_connection))
         )
 
 
-@transcripts_router.post("/transcripts/upload")
-async def upload_transcript(
+@transcripts_router.post("/transcripts/upload-team")
+async def upload_team_transcript(
     raw_data: UploadFile = File(...),
+    file_name: Optional[str] = Form(None),
     team_name: Optional[str] = Form(None),
     type: Optional[str] = Form(None),
     origin: Optional[str] = Form(None),
     conn: Connection = Depends(get_db_connection)
 ):
     """
-    Upload a transcript file to the database.
+    Upload a team transcript file to the database.
     
     Args:
         raw_data: The uploaded file content
+        file_name: Optional custom file name (defaults to uploaded filename)
         team_name: Optional team name
         type: Optional transcript type
         origin: Optional origin information
@@ -183,20 +185,24 @@ async def upload_transcript(
         # Insert transcript into database
         query = text(f"""
             INSERT INTO {config.TRANSCRIPTS_TABLE} 
-            (transcript_date_time, team_name, type, file_name, raw_text, origin, created_at, updated_at)
-            VALUES (:transcript_date_time, :team_name, :type, :file_name, :raw_text, :origin, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
-            RETURNING id, transcript_date_time, team_name, type, file_name, origin, created_at, updated_at
+            (transcript_date_time, team_name, type, file_name, raw_text, origin, pi, created_at, updated_at)
+            VALUES (:transcript_date_time, :team_name, :type, :file_name, :raw_text, :origin, :pi, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+            RETURNING id, transcript_date_time, team_name, type, file_name, origin, pi, created_at, updated_at
         """)
         
-        logger.info(f"Uploading transcript file: {raw_data.filename}")
+        # Use provided file_name or fallback to uploaded filename
+        final_file_name = file_name if file_name else raw_data.filename
+        
+        logger.info(f"Uploading transcript file: {final_file_name}")
         
         result = conn.execute(query, {
             "transcript_date_time": None,  # Can be set later if needed
             "team_name": team_name,
             "type": type,
-            "file_name": raw_data.filename,
+            "file_name": final_file_name,
             "raw_text": raw_text,
-            "origin": origin
+            "origin": origin,
+            "pi": None  # Team transcripts don't have PI
         })
         
         row = result.fetchone()
@@ -209,16 +215,109 @@ async def upload_transcript(
             "type": row[3],
             "file_name": row[4],
             "origin": row[5],
-            "created_at": row[6],
-            "updated_at": row[7],
+            "pi": row[6],
+            "created_at": row[7],
+            "updated_at": row[8],
             "file_size": len(file_content)
         }
         
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"Error uploading transcript: {e}")
+        logger.error(f"Error uploading team transcript: {e}")
         raise HTTPException(
             status_code=500,
-            detail=f"Failed to upload transcript: {str(e)}"
+            detail=f"Failed to upload team transcript: {str(e)}"
+        )
+
+
+@transcripts_router.post("/transcripts/upload-pi")
+async def upload_pi_transcript(
+    raw_data: UploadFile = File(...),
+    pi: str = Form(...),
+    file_name: Optional[str] = Form(None),
+    type: Optional[str] = Form(None),
+    origin: Optional[str] = Form(None),
+    conn: Connection = Depends(get_db_connection)
+):
+    """
+    Upload a PI transcript file to the database.
+    
+    Args:
+        raw_data: The uploaded file content
+        pi: PI name (required)
+        file_name: Optional custom file name (defaults to uploaded filename)
+        type: Optional transcript type
+        origin: Optional origin information
+        conn: Database connection dependency
+    
+    Returns:
+        Dict containing the uploaded transcript information
+    """
+    try:
+        # Check file size (limit to 2MB)
+        MAX_FILE_SIZE = 2 * 1024 * 1024  # 2MB
+        file_content = await raw_data.read()
+        
+        if len(file_content) > MAX_FILE_SIZE:
+            raise HTTPException(
+                status_code=413,
+                detail=f"File too large. Maximum size allowed is {MAX_FILE_SIZE / (1024*1024):.1f}MB"
+            )
+        
+        # Convert file content to text
+        try:
+            raw_text = file_content.decode('utf-8')
+        except UnicodeDecodeError:
+            raise HTTPException(
+                status_code=400,
+                detail="File must be a valid text file (UTF-8 encoded)"
+            )
+        
+        # Insert transcript into database
+        query = text(f"""
+            INSERT INTO {config.TRANSCRIPTS_TABLE} 
+            (transcript_date_time, team_name, type, file_name, raw_text, origin, pi, created_at, updated_at)
+            VALUES (:transcript_date_time, :team_name, :type, :file_name, :raw_text, :origin, :pi, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+            RETURNING id, transcript_date_time, team_name, type, file_name, origin, pi, created_at, updated_at
+        """)
+        
+        # Use provided file_name or fallback to uploaded filename
+        final_file_name = file_name if file_name else raw_data.filename
+        
+        logger.info(f"Uploading PI transcript file: {final_file_name} for PI: {pi}")
+        
+        result = conn.execute(query, {
+            "transcript_date_time": None,  # Can be set later if needed
+            "team_name": None,  # PI transcripts don't have team
+            "type": type,
+            "file_name": final_file_name,
+            "raw_text": raw_text,
+            "origin": origin,
+            "pi": pi  # Required for PI transcripts
+        })
+        
+        row = result.fetchone()
+        conn.commit()
+        
+        return {
+            "id": row[0],
+            "transcript_date_time": row[1],
+            "team_name": row[2],
+            "type": row[3],
+            "file_name": row[4],
+            "origin": row[5],
+            "pi": row[6],
+            "created_at": row[7],
+            "updated_at": row[8],
+            "file_size": len(file_content)
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error uploading PI transcript: {e}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to upload PI transcript: {str(e)}"
         )
