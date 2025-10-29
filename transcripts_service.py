@@ -146,6 +146,7 @@ async def upload_team_transcript(
     team_name: Optional[str] = Form(None),
     type: Optional[str] = Form(None),
     origin: Optional[str] = Form(None),
+    transcript_date_time: Optional[str] = Form(None),
     conn: Connection = Depends(get_db_connection)
 ):
     """
@@ -157,6 +158,7 @@ async def upload_team_transcript(
         team_name: Optional team name
         type: Optional transcript type
         origin: Optional origin information
+        transcript_date_time: Optional transcript date/time (defaults to current timestamp)
         conn: Database connection dependency
     
     Returns:
@@ -193,10 +195,13 @@ async def upload_team_transcript(
         # Use provided file_name or fallback to uploaded filename
         final_file_name = file_name if file_name else raw_data.filename
         
+        # Use provided transcript_date_time or fallback to current timestamp
+        final_date_time = transcript_date_time if transcript_date_time else "CURRENT_TIMESTAMP"
+        
         logger.info(f"Uploading transcript file: {final_file_name}")
         
         result = conn.execute(query, {
-            "transcript_date_time": None,  # Can be set later if needed
+            "transcript_date_time": final_date_time,
             "team_name": team_name,
             "type": type,
             "file_name": final_file_name,
@@ -238,6 +243,7 @@ async def upload_pi_transcript(
     file_name: Optional[str] = Form(None),
     type: Optional[str] = Form(None),
     origin: Optional[str] = Form(None),
+    transcript_date_time: Optional[str] = Form(None),
     conn: Connection = Depends(get_db_connection)
 ):
     """
@@ -249,6 +255,7 @@ async def upload_pi_transcript(
         file_name: Optional custom file name (defaults to uploaded filename)
         type: Optional transcript type
         origin: Optional origin information
+        transcript_date_time: Optional transcript date/time (defaults to current timestamp)
         conn: Database connection dependency
     
     Returns:
@@ -285,10 +292,13 @@ async def upload_pi_transcript(
         # Use provided file_name or fallback to uploaded filename
         final_file_name = file_name if file_name else raw_data.filename
         
+        # Use provided transcript_date_time or fallback to current timestamp
+        final_date_time = transcript_date_time if transcript_date_time else "CURRENT_TIMESTAMP"
+        
         logger.info(f"Uploading PI transcript file: {final_file_name} for PI: {pi}")
         
         result = conn.execute(query, {
-            "transcript_date_time": None,  # Can be set later if needed
+            "transcript_date_time": final_date_time,
             "team_name": None,  # PI transcripts don't have team
             "type": type,
             "file_name": final_file_name,
