@@ -27,7 +27,7 @@ class ChatType(str, Enum):
     DIRECT_CHAT = "Direct_chat"
     TEAM_INSIGHTS = "Team_insights"
     PI_INSIGHTS = "PI_insights"
-    RECOMMENDATION_REASON = "recommendation_reason"
+    RECOMMENDATION_REASON = "Recommendation_reason"
 
 
 class AIChatRequest(BaseModel):
