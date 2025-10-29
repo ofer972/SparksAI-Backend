@@ -530,7 +530,9 @@ def create_transcripts_table_if_not_exists(engine=None) -> bool:
                     origin VARCHAR(500),
                     pi VARCHAR(255),
                     created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
-                    updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+                    updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+                    CONSTRAINT unique_team_transcript UNIQUE (transcript_date, team_name),
+                    CONSTRAINT unique_pi_transcript UNIQUE (transcript_date, pi)
                 );
                 
                 CREATE INDEX idx_transcripts_type ON public.transcripts(type);

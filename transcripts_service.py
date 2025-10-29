@@ -185,11 +185,18 @@ async def upload_team_transcript(
                 detail="File must be a valid text file (UTF-8 encoded)"
             )
         
-        # Insert transcript into database
+        # Insert or update transcript into database (UPSERT)
         query = text(f"""
             INSERT INTO {config.TRANSCRIPTS_TABLE} 
             (transcript_date, team_name, type, file_name, raw_text, origin, pi, created_at, updated_at)
             VALUES (:transcript_date, :team_name, :type, :file_name, :raw_text, :origin, :pi, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+            ON CONFLICT ON CONSTRAINT unique_team_transcript
+            DO UPDATE SET 
+                type = EXCLUDED.type,
+                file_name = EXCLUDED.file_name,
+                raw_text = EXCLUDED.raw_text,
+                origin = EXCLUDED.origin,
+                updated_at = CURRENT_TIMESTAMP
             RETURNING id, transcript_date, team_name, type, file_name, origin, pi, created_at, updated_at
         """)
         
@@ -282,11 +289,18 @@ async def upload_pi_transcript(
                 detail="File must be a valid text file (UTF-8 encoded)"
             )
         
-        # Insert transcript into database
+        # Insert or update transcript into database (UPSERT)
         query = text(f"""
             INSERT INTO {config.TRANSCRIPTS_TABLE} 
             (transcript_date, team_name, type, file_name, raw_text, origin, pi, created_at, updated_at)
             VALUES (:transcript_date, :team_name, :type, :file_name, :raw_text, :origin, :pi, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+            ON CONFLICT ON CONSTRAINT unique_pi_transcript
+            DO UPDATE SET 
+                type = EXCLUDED.type,
+                file_name = EXCLUDED.file_name,
+                raw_text = EXCLUDED.raw_text,
+                origin = EXCLUDED.origin,
+                updated_at = CURRENT_TIMESTAMP
             RETURNING id, transcript_date, team_name, type, file_name, origin, pi, created_at, updated_at
         """)
         
