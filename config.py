@@ -45,6 +45,8 @@ PI_AI_CARDS_SERVICE_PREFIX = "/pi-ai-cards"
 TRANSCRIPTS_SERVICE_PREFIX = "/transcripts"
 # Prompts Service
 PROMPTS_SERVICE_PREFIX = "/prompts"
+# AI Chat Service
+AI_CHAT_SERVICE_PREFIX = "/ai-chat"
 
 # --- Error Handling Configuration ---
 DEFAULT_ERROR_MESSAGE = "An unexpected error occurred"
