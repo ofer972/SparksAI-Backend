@@ -61,6 +61,20 @@ async def ai_chat(
         JSON response with mock AI answer and all input parameters
     """
     try:
+        # DEBUG: Print all incoming parameters
+        logger.info("=" * 60)
+        logger.info("AI CHAT SERVICE - DEBUG: Incoming Request Parameters")
+        logger.info("=" * 60)
+        logger.info(f"  conversation_id: {request.conversation_id}")
+        logger.info(f"  question: {request.question}")
+        logger.info(f"  username: {request.username}")
+        logger.info(f"  selected_team: {request.selected_team}")
+        logger.info(f"  selected_pi: {request.selected_pi}")
+        logger.info(f"  chat_type: {request.chat_type}")
+        logger.info(f"  recommendation_id: {request.recommendation_id}")
+        logger.info(f"  insights_id: {request.insights_id}")
+        logger.info("=" * 60)
+        
         # Generate conversation_id if empty or None
         conversation_id = request.conversation_id
         if not conversation_id or (isinstance(conversation_id, str) and conversation_id.strip() == ""):
@@ -93,6 +107,21 @@ async def ai_chat(
             selected_team=request.selected_team,
             selected_pi=request.selected_pi
         )
+        
+        # DEBUG: Print final processed parameters
+        logger.info("=" * 60)
+        logger.info("AI CHAT SERVICE - DEBUG: Processed Parameters")
+        logger.info("=" * 60)
+        logger.info(f"  conversation_id (final): {conversation_id}")
+        logger.info(f"  question: {request.question}")
+        logger.info(f"  username: {request.username}")
+        logger.info(f"  selected_team: {request.selected_team}")
+        logger.info(f"  selected_pi: {request.selected_pi}")
+        logger.info(f"  chat_type: {request.chat_type}")
+        logger.info(f"  recommendation_id: {request.recommendation_id}")
+        logger.info(f"  insights_id: {request.insights_id}")
+        logger.info(f"  input_parameters: {input_params}")
+        logger.info("=" * 60)
         
         logger.info(f"AI chat request processed - Conversation ID: {conversation_id}, Chat Type: {request.chat_type}")
         
