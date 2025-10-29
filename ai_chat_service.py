@@ -1,17 +1,20 @@
 """
 AI Chat Service - REST API endpoints for AI chat interactions.
 
-This service provides endpoints for AI chat functionality that will eventually
-connect to an LLM service. For now, it returns mock responses.
+This service provides endpoints for AI chat functionality that connects
+to the LLM service for OpenAI/Gemini API calls.
 """
 
 from fastapi import APIRouter, HTTPException, Depends
 from pydantic import BaseModel, Field
 from sqlalchemy.engine import Connection
-from typing import Optional
+from sqlalchemy import text
+from typing import Optional, Dict, Any, Tuple
 from enum import Enum
 import logging
-import random
+import uuid
+import json
+import httpx
 from database_connection import get_db_connection
 import config
 
@@ -45,25 +48,253 @@ class AIChatRequest(BaseModel):
         use_enum_values = True
 
 
+def get_or_create_chat_history(
+    conversation_id: Optional[str],
+    username: Optional[str],
+    team: Optional[str],
+    pi: Optional[str],
+    chat_type: Optional[str],
+    conn: Connection
+) -> Tuple[str, Dict[str, Any]]:
+    """
+    Get existing chat history or create new chat history row.
+    
+    Args:
+        conversation_id: Existing conversation ID (UUID)
+        username: Username (required for new conversations)
+        team: Team name (required for new conversations)
+        pi: PI name (required for new conversations)
+        chat_type: Chat type (required for new conversations)
+        conn: Database connection
+        
+    Returns:
+        Tuple of (conversation_id as string, history_json dict)
+    """
+    # Provide defaults for required fields
+    username = username or "unknown"
+    team = team or "unknown"
+    pi = pi or "unknown"
+    chat_type = chat_type or "Direct_chat"
+    
+    # If conversation_id provided, try to fetch existing history
+    if conversation_id:
+        try:
+            # Validate UUID format
+            uuid.UUID(conversation_id)
+            
+            query = text(f"""
+                SELECT id, history_json
+                FROM {config.CHAT_HISTORY_TABLE}
+                WHERE id = :conversation_id
+            """)
+            
+            result = conn.execute(query, {"conversation_id": conversation_id})
+            row = result.fetchone()
+            
+            if row:
+                history_json = row[1] if row[1] is not None else {"messages": []}
+                # Ensure history_json has messages key
+                if not isinstance(history_json, dict):
+                    history_json = {"messages": []}
+                if "messages" not in history_json:
+                    history_json["messages"] = []
+                return str(row[0]), history_json
+        except (ValueError, Exception) as e:
+            logger.warning(f"Error fetching chat history for conversation_id {conversation_id}: {e}")
+            # If fetch fails, create new conversation
+    
+    # Create new chat history row
+    new_conversation_id = str(uuid.uuid4())
+    history_json = {"messages": []}
+    
+    insert_query = text(f"""
+        INSERT INTO {config.CHAT_HISTORY_TABLE}
+        (id, username, team, pi, chat_type, history_json)
+        VALUES (:id, :username, :team, :pi, :chat_type, :history_json::jsonb)
+        RETURNING id
+    """)
+    
+    try:
+        conn.execute(insert_query, {
+            "id": new_conversation_id,
+            "username": username,
+            "team": team,
+            "pi": pi,
+            "chat_type": chat_type,
+            "history_json": json.dumps(history_json)
+        })
+        conn.commit()
+        logger.info(f"Created new chat history with conversation_id: {new_conversation_id}")
+    except Exception as e:
+        logger.error(f"Error creating chat history: {e}")
+        conn.rollback()
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to create chat history: {str(e)}"
+        )
+    
+    return new_conversation_id, history_json
+
+
+def update_chat_history(
+    conversation_id: str,
+    user_message: str,
+    assistant_response: str,
+    conn: Connection
+) -> None:
+    """
+    Update chat history with new user message and assistant response.
+    
+    Args:
+        conversation_id: Conversation ID (UUID)
+        user_message: User's question
+        assistant_response: Assistant's response
+        conn: Database connection
+    """
+    try:
+        # Fetch current history
+        query = text(f"""
+            SELECT history_json
+            FROM {config.CHAT_HISTORY_TABLE}
+            WHERE id = :conversation_id
+        """)
+        
+        result = conn.execute(query, {"conversation_id": conversation_id})
+        row = result.fetchone()
+        
+        if not row:
+            logger.error(f"Chat history not found for conversation_id: {conversation_id}")
+            raise HTTPException(
+                status_code=404,
+                detail=f"Chat history not found for conversation_id: {conversation_id}"
+            )
+        
+        # Get current history
+        history_json = row[0] if row[0] is not None else {"messages": []}
+        if not isinstance(history_json, dict):
+            history_json = {"messages": []}
+        if "messages" not in history_json:
+            history_json["messages"] = []
+        
+        # Add new messages
+        history_json["messages"].append({
+            "role": "user",
+            "content": user_message
+        })
+        history_json["messages"].append({
+            "role": "assistant",
+            "content": assistant_response
+        })
+        
+        # Update database
+        update_query = text(f"""
+            UPDATE {config.CHAT_HISTORY_TABLE}
+            SET history_json = :history_json::jsonb
+            WHERE id = :conversation_id
+        """)
+        
+        conn.execute(update_query, {
+            "conversation_id": conversation_id,
+            "history_json": json.dumps(history_json)
+        })
+        conn.commit()
+        
+        logger.info(f"Updated chat history for conversation_id: {conversation_id}")
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error updating chat history: {e}")
+        conn.rollback()
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to update chat history: {str(e)}"
+        )
+
+
+async def call_llm_service(
+    conversation_id: str,
+    question: str,
+    history_json: Dict[str, Any],
+    username: Optional[str],
+    selected_team: Optional[str],
+    selected_pi: Optional[str],
+    chat_type: Optional[str]
+) -> Dict[str, Any]:
+    """
+    Call LLM service with minimal payload.
+    
+    Args:
+        conversation_id: Conversation ID
+        question: User's question
+        history_json: Chat history JSON
+        username: Username
+        selected_team: Team name
+        selected_pi: PI name
+        chat_type: Chat type
+        
+    Returns:
+        LLM service response dict
+    """
+    llm_service_url = f"{config.LLM_SERVICE_URL}/chat"
+    
+    payload = {
+        "conversation_id": conversation_id,
+        "question": question,
+        "history_json": history_json,
+        "username": username,
+        "selected_team": selected_team,
+        "selected_pi": selected_pi,
+        "chat_type": chat_type
+    }
+    
+    logger.info(f"Calling LLM service: {llm_service_url}")
+    logger.debug(f"Payload: {payload}")
+    
+    try:
+        async with httpx.AsyncClient(timeout=60.0) as client:
+            response = await client.post(llm_service_url, json=payload)
+            response.raise_for_status()
+            return response.json()
+    except httpx.HTTPError as e:
+        logger.error(f"HTTP error calling LLM service: {e}")
+        raise HTTPException(
+            status_code=502,
+            detail=f"LLM service error: {str(e)}"
+        )
+    except Exception as e:
+        logger.error(f"Error calling LLM service: {e}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to call LLM service: {str(e)}"
+        )
+
+
 @ai_chat_router.post("/ai-chat")
 async def ai_chat(
     request: AIChatRequest,
     conn: Connection = Depends(get_db_connection)
 ):
     """
-    AI Chat endpoint that will eventually connect to LLM service.
-    For now, returns a mock response with all input parameters echoed back.
+    AI Chat endpoint that connects to LLM service.
     
     Args:
         request: AIChatRequest containing all optional parameters
         
     Returns:
-        JSON response with mock AI answer and all input parameters
+        JSON response with AI answer and conversation details
     """
     try:
-        # DEBUG: Print all incoming parameters
+        # Validate that question is provided
+        if not request.question or not request.question.strip():
+            raise HTTPException(
+                status_code=400,
+                detail="Question is required"
+            )
+        
+        # DEBUG: Log incoming parameters
         logger.info("=" * 60)
-        logger.info("AI CHAT SERVICE - DEBUG: Incoming Request Parameters")
+        logger.info("AI CHAT SERVICE - Incoming Request")
         logger.info("=" * 60)
         logger.info(f"  conversation_id: {request.conversation_id}")
         logger.info(f"  question: {request.question}")
@@ -71,66 +302,77 @@ async def ai_chat(
         logger.info(f"  selected_team: {request.selected_team}")
         logger.info(f"  selected_pi: {request.selected_pi}")
         logger.info(f"  chat_type: {request.chat_type}")
-        logger.info(f"  recommendation_id: {request.recommendation_id}")
-        logger.info(f"  insights_id: {request.insights_id}")
         logger.info("=" * 60)
         
-        # Generate conversation_id if empty or None
-        conversation_id = request.conversation_id
-        if not conversation_id or (isinstance(conversation_id, str) and conversation_id.strip() == ""):
-            # Generate a random number as conversation_id
-            conversation_id = str(random.randint(100000, 999999))
-            logger.info(f"Generated new conversation_id: {conversation_id}")
-        
-        # Prepare input parameters dictionary (only include provided fields)
-        input_params = {}
-        input_params["conversation_id"] = conversation_id
-        if request.question is not None:
-            input_params["question"] = request.question
-        if request.username is not None:
-            input_params["username"] = request.username
-        if request.selected_team is not None:
-            input_params["selected_team"] = request.selected_team
-        if request.selected_pi is not None:
-            input_params["selected_pi"] = request.selected_pi
-        if request.chat_type is not None:
-            input_params["chat_type"] = request.chat_type
-        if request.recommendation_id is not None:
-            input_params["recommendation_id"] = request.recommendation_id
-        if request.insights_id is not None:
-            input_params["insights_id"] = request.insights_id
-        
-        # Generate mock AI response based on chat type and question
-        mock_response = _generate_mock_response(
-            chat_type=request.chat_type,
-            question=request.question,
-            selected_team=request.selected_team,
-            selected_pi=request.selected_pi
+        # 1. Get or create chat history
+        conversation_id, history_json = get_or_create_chat_history(
+            conversation_id=request.conversation_id,
+            username=request.username,
+            team=request.selected_team,
+            pi=request.selected_pi,
+            chat_type=request.chat_type.value if request.chat_type else None,
+            conn=conn
         )
         
-        # DEBUG: Print final processed parameters
-        logger.info("=" * 60)
-        logger.info("AI CHAT SERVICE - DEBUG: Processed Parameters")
-        logger.info("=" * 60)
-        logger.info(f"  conversation_id (final): {conversation_id}")
-        logger.info(f"  question: {request.question}")
-        logger.info(f"  username: {request.username}")
-        logger.info(f"  selected_team: {request.selected_team}")
-        logger.info(f"  selected_pi: {request.selected_pi}")
-        logger.info(f"  chat_type: {request.chat_type}")
-        logger.info(f"  recommendation_id: {request.recommendation_id}")
-        logger.info(f"  insights_id: {request.insights_id}")
-        logger.info(f"  input_parameters: {input_params}")
-        logger.info("=" * 60)
+        logger.info(f"Conversation ID: {conversation_id}")
+        logger.info(f"History messages count: {len(history_json.get('messages', []))}")
         
-        logger.info(f"AI chat request processed - Conversation ID: {conversation_id}, Chat Type: {request.chat_type}")
+        # 2. Call LLM service
+        llm_response = await call_llm_service(
+            conversation_id=conversation_id,
+            question=request.question,
+            history_json=history_json,
+            username=request.username,
+            selected_team=request.selected_team,
+            selected_pi=request.selected_pi,
+            chat_type=request.chat_type.value if request.chat_type else None
+        )
+        
+        if not llm_response.get("success"):
+            raise HTTPException(
+                status_code=502,
+                detail=f"LLM service returned error: {llm_response.get('detail', 'Unknown error')}"
+            )
+        
+        ai_response = llm_response.get("response", "")
+        
+        # 3. Update chat history with new exchange
+        update_chat_history(
+            conversation_id=conversation_id,
+            user_message=request.question,
+            assistant_response=ai_response,
+            conn=conn
+        )
+        
+        # 4. Prepare response
+        input_params = {
+            "conversation_id": conversation_id,
+            "question": request.question
+        }
+        if request.username:
+            input_params["username"] = request.username
+        if request.selected_team:
+            input_params["selected_team"] = request.selected_team
+        if request.selected_pi:
+            input_params["selected_pi"] = request.selected_pi
+        if request.chat_type:
+            input_params["chat_type"] = request.chat_type
+        if request.recommendation_id:
+            input_params["recommendation_id"] = request.recommendation_id
+        if request.insights_id:
+            input_params["insights_id"] = request.insights_id
+        
+        logger.info(f"AI chat request processed successfully - Conversation ID: {conversation_id}")
         
         return {
             "success": True,
             "data": {
                 "conversation_id": conversation_id,
-                "response": mock_response,
-                "input_parameters": input_params
+                "response": ai_response,
+                "input_parameters": input_params,
+                "provider": llm_response.get("provider"),
+                "model": llm_response.get("model"),
+                "tokens_used": llm_response.get("tokens_used")
             },
             "message": "AI chat response generated successfully"
         }
@@ -140,74 +382,9 @@ async def ai_chat(
         raise
     except Exception as e:
         logger.error(f"Error processing AI chat request: {e}")
+        import traceback
+        traceback.print_exc()
         raise HTTPException(
             status_code=500,
             detail=f"Failed to process AI chat request: {str(e)}"
         )
-
-
-def _generate_mock_response(
-    chat_type: Optional[ChatType] = None,
-    question: Optional[str] = None,
-    selected_team: Optional[str] = None,
-    selected_pi: Optional[str] = None
-) -> str:
-    """
-    Generate a mock AI response based on the chat type and context.
-    
-    Args:
-        chat_type: Type of chat conversation
-        question: User's question
-        selected_team: Selected team name
-        selected_pi: Selected PI name
-        
-    Returns:
-        Mock AI response string
-    """
-    # Base response
-    base_response = "This is a mock AI response. The LLM service integration will be implemented soon."
-    
-    # Context-specific responses based on chat type
-    if chat_type:
-        if chat_type == ChatType.PI_DASHBOARD:
-            context = f"regarding the PI Dashboard"
-            if selected_pi:
-                context += f" for {selected_pi}"
-            return f"Based on the PI Dashboard analysis{(' for ' + selected_pi) if selected_pi else ''}, " \
-                   f"here are the key insights. {base_response}"
-        
-        elif chat_type == ChatType.TEAM_DASHBOARD:
-            context = f"regarding the Team Dashboard"
-            if selected_team:
-                context += f" for {selected_team}"
-            return f"Based on the Team Dashboard analysis{(' for ' + selected_team) if selected_team else ''}, " \
-                   f"here are the team metrics and performance indicators. {base_response}"
-        
-        elif chat_type == ChatType.DIRECT_CHAT:
-            return f"In response to your question: '{question}' {base_response}" if question else \
-                   f"Direct chat response. {base_response}"
-        
-        elif chat_type == ChatType.TEAM_INSIGHTS:
-            context = f"Team insights"
-            if selected_team:
-                context += f" for {selected_team}"
-            return f"Based on the team insights{(' for ' + selected_team) if selected_team else ''}, " \
-                   f"here are the key findings and recommendations. {base_response}"
-        
-        elif chat_type == ChatType.PI_INSIGHTS:
-            context = f"PI insights"
-            if selected_pi:
-                context += f" for {selected_pi}"
-            return f"Based on the PI insights{(' for ' + selected_pi) if selected_pi else ''}, " \
-                   f"here are the performance indicators and trends. {base_response}"
-        
-        elif chat_type == ChatType.RECOMMENDATION_REASON:
-            return f"Here's the reasoning behind the recommendation. " \
-                   f"Based on the analysis, this recommendation was generated to address specific metrics. {base_response}"
-    
-    # Default response if no chat type specified
-    if question:
-        return f"Regarding your question: '{question}', {base_response}"
-    
-    return base_response
-

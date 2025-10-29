@@ -1,5 +1,6 @@
 # FILE: config.py
 # Central configuration file for SparksAI Backend Services
+import os
 
 # --- API Configuration ---
 API_VERSION = "v1"
@@ -21,6 +22,7 @@ PI_AI_CARDS_TABLE = "ai_summary"  # PI AI cards table
 TRANSCRIPTS_TABLE = "transcripts"  # Transcripts table
 AI_SUMMARY_TABLE = "ai_summary"  # AI summary table
 PROMPTS_TABLE = "prompts"  # Prompts table
+CHAT_HISTORY_TABLE = "chat_history"  # Chat history table
 
 # --- Service Configuration ---
 # Teams Service
@@ -64,3 +66,6 @@ CORS_HEADERS = ["*"]
 # --- Server Configuration ---
 DEFAULT_PORT = 8000
 DEFAULT_HOST = "0.0.0.0"
+
+# --- LLM Service Configuration ---
+LLM_SERVICE_URL = os.getenv("LLM_SERVICE_URL", "http://localhost:8001")

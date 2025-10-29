@@ -616,6 +616,63 @@ def create_recommendations_table_if_not_exists(engine=None) -> bool:
         return False
 
 
+def create_chat_history_table_if_not_exists(engine=None) -> bool:
+    """Create chat_history table if it doesn't exist"""
+    import database_connection
+    
+    if engine is None:
+        engine = database_connection.get_db_engine()
+    if engine is None:
+        print("Warning: Database engine not available, cannot create chat_history table")
+        return False
+    
+    try:
+        with engine.connect() as conn:
+            # Check if table exists
+            check_table_sql = """
+            SELECT EXISTS (
+                SELECT FROM information_schema.tables 
+                WHERE table_schema = 'public' 
+                AND table_name = 'chat_history'
+            );
+            """
+            result = conn.execute(text(check_table_sql))
+            table_exists = result.scalar()
+            
+            if not table_exists:
+                print("Creating chat_history table...")
+                create_table_sql = """
+                CREATE TABLE public.chat_history (
+                    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+                    username VARCHAR(255) NOT NULL,
+                    team VARCHAR(255) NOT NULL,
+                    pi VARCHAR(255) NOT NULL,
+                    chat_type VARCHAR(50) NOT NULL,
+                    start_timestamp TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+                    history_json JSONB
+                );
+                
+                CREATE INDEX idx_chat_history_username ON public.chat_history(username);
+                CREATE INDEX idx_chat_history_team ON public.chat_history(team);
+                CREATE INDEX idx_chat_history_pi ON public.chat_history(pi);
+                CREATE INDEX idx_chat_history_chat_type ON public.chat_history(chat_type);
+                CREATE INDEX idx_chat_history_timestamp ON public.chat_history(start_timestamp DESC);
+                CREATE INDEX idx_chat_history_username_timestamp ON public.chat_history(username, start_timestamp DESC);
+                """
+                conn.execute(text(create_table_sql))
+                conn.commit()
+                print("Chat history table created successfully")
+            else:
+                print("Chat history table already exists")
+            
+            return True
+            
+    except Exception as e:
+        print(f"Error creating chat_history table: {e}")
+        traceback.print_exc()
+        return False
+
+
 def add_input_sent_column_to_agent_jobs(engine=None) -> bool:
     """Temporary function to add input_sent column to agent_jobs table"""
     import database_connection
@@ -754,6 +811,7 @@ def initialize_database_tables_with_engine(engine) -> None:
     add_input_sent_column_to_agent_jobs(engine)
     create_transcripts_table_if_not_exists(engine)
     create_recommendations_table_if_not_exists(engine)
+    create_chat_history_table_if_not_exists(engine)
     _tables_initialized = True
     print("=== DATABASE TABLES INITIALIZATION COMPLETE ===")
 
@@ -776,5 +834,6 @@ def initialize_database_tables() -> None:
     add_input_sent_column_to_agent_jobs()  # Temporary function to add input_sent column
     create_transcripts_table_if_not_exists()
     create_recommendations_table_if_not_exists()
+    create_chat_history_table_if_not_exists()
     _tables_initialized = True
     print("=== DATABASE TABLES INITIALIZATION COMPLETE ===")

@@ -6,3 +6,4 @@ python-dotenv
 pydantic
 annotated-types
 python-multipart
+httpx
