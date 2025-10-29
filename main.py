@@ -14,8 +14,6 @@ from team_metrics_service import team_metrics_router
 from settings_service import settings_router
 from pis_service import pis_router
 from agent_jobs_service import agent_jobs_router
-from agent_job_creation_service import agent_job_creation_router
-from agent_job_cancellation_service import agent_job_cancellation_router
 from security_logs_service import security_logs_router
 from pi_ai_cards_service import pi_ai_cards_router
 from transcripts_service import transcripts_router
@@ -65,8 +63,6 @@ app.include_router(team_metrics_router, prefix="/api/v1", tags=["team-metrics"])
 app.include_router(settings_router, prefix="/api/v1", tags=["settings"])
 app.include_router(pis_router, prefix="/api/v1", tags=["pis"])
 app.include_router(agent_jobs_router, prefix="/api/v1", tags=["agent-jobs"])
-app.include_router(agent_job_creation_router, prefix="/api/v1", tags=["agent-jobs"])
-app.include_router(agent_job_cancellation_router, prefix="/api/v1", tags=["agent-jobs"])
 app.include_router(security_logs_router, prefix="/api/v1", tags=["security-logs"])
 app.include_router(pi_ai_cards_router, prefix="/api/v1", tags=["pi-ai-cards"])
 app.include_router(transcripts_router, prefix="/api/v1", tags=["transcripts"])
