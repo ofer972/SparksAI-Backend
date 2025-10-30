@@ -481,6 +481,41 @@ async def ai_chat(
         else:
             logger.info("chat_type not provided; using default system message")
 
+        # 2.9. On initial call, persist initial system/context snapshot into chat history
+        try:
+            is_initial_call = not history_json.get('messages')
+            if is_initial_call:
+                if 'initial_request_system_message' not in history_json:
+                    history_json['initial_request_system_message'] = system_message
+                if 'initial_request_conversation_context' not in history_json:
+                    history_json['initial_request_conversation_context'] = conversation_context
+
+                # Also seed initial messages so follow-ups carry full context
+                history_json.setdefault('messages', [])
+                if system_message:
+                    history_json['messages'].append({
+                        'role': 'system',
+                        'content': system_message
+                    })
+                if conversation_context:
+                    history_json['messages'].append({
+                        'role': 'user',
+                        'content': conversation_context
+                    })
+                snapshot_update_query = text(f"""
+                    UPDATE {config.CHAT_HISTORY_TABLE}
+                    SET history_json = CAST(:history_json AS jsonb)
+                    WHERE id = :conversation_id
+                """)
+                conn.execute(snapshot_update_query, {
+                    'conversation_id': int(conversation_id),
+                    'history_json': json.dumps(history_json)
+                })
+                conn.commit()
+                logger.info("Stored initial system/context and seeded messages in chat history")
+        except Exception as e:
+            logger.warning(f"Failed to store initial request snapshot: {e}")
+
         # 3. Call LLM service
         llm_response = await call_llm_service(
             conversation_id=conversation_id,
