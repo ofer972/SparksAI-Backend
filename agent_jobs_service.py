@@ -8,7 +8,7 @@ Uses FastAPI dependencies for clean connection management and SQL injection prot
 from fastapi import APIRouter, HTTPException, Depends
 from sqlalchemy import text
 from sqlalchemy.engine import Connection
-from typing import List, Dict, Any
+from typing import List, Dict, Any, Optional
 import logging
 from pydantic import BaseModel
 from database_connection import get_db_connection
@@ -387,3 +387,94 @@ async def cancel_agent_job(
             status_code=500,
             detail=f"Failed to cancel job: {str(e)}"
         )
+
+
+# -----------------------
+# Update Agent Job
+# -----------------------
+
+class AgentJobUpdateRequest(BaseModel):
+    status: Optional[str] = None
+    claimed_by: Optional[str] = None
+    claimed_at: Optional[str] = None  # ISO-8601 string; stored as timestamp by DB
+    job_data: Optional[str] = None
+    input_sent: Optional[str] = None
+    result: Optional[str] = None
+    error: Optional[str] = None
+
+
+@agent_jobs_router.patch("/agent-jobs/{job_id}")
+async def update_agent_job(
+    job_id: int,
+    request: AgentJobUpdateRequest,
+    conn: Connection = Depends(get_db_connection)
+):
+    """
+    Update selected fields of an agent job.
+
+    Allowed fields: status, claimed_by, claimed_at, job_data, input_sent, result, error
+    """
+    try:
+        updates = request.model_dump(exclude_unset=True)
+        if not updates:
+            raise HTTPException(status_code=400, detail="No updatable fields provided")
+
+        allowed = {"status", "claimed_by", "claimed_at", "job_data", "input_sent", "result", "error"}
+        filtered = {k: v for k, v in updates.items() if k in allowed}
+        if not filtered:
+            raise HTTPException(status_code=400, detail="No valid fields to update")
+
+        set_clauses = ", ".join([f"{k} = :{k}" for k in filtered.keys()])
+        params = dict(filtered)
+        params["job_id"] = job_id
+
+        # Special rule: claiming is only allowed from pending
+        status_value = filtered.get("status")
+        if status_value is not None and status_value in ("claimed", "Claimed"):
+            # Conditional update: only when current status is pending/Pending
+            claimed_update_query = text(f"""
+                UPDATE {config.AGENT_JOBS_TABLE}
+                SET {set_clauses}, updated_at = CURRENT_TIMESTAMP
+                WHERE job_id = :job_id
+                AND status IN ('pending','Pending')
+                RETURNING job_id, job_type, team_name, pi, status, claimed_by, claimed_at, job_data, input_sent, result, error, created_at, updated_at
+            """)
+            result = conn.execute(claimed_update_query, params)
+            row = result.fetchone()
+            conn.commit()
+
+            if not row:
+                # Determine whether it's not found vs. conflict due to status
+                exists_query = text(f"SELECT status FROM {config.AGENT_JOBS_TABLE} WHERE job_id = :job_id")
+                exists_row = conn.execute(exists_query, {"job_id": job_id}).fetchone()
+                if not exists_row:
+                    raise HTTPException(status_code=404, detail=f"Job {job_id} not found")
+                # Found but not pending -> conflict
+                raise HTTPException(status_code=409, detail="Job can be claimed only from pending status")
+        else:
+            # Regular update path
+            update_query = text(f"""
+                UPDATE {config.AGENT_JOBS_TABLE}
+                SET {set_clauses}, updated_at = CURRENT_TIMESTAMP
+                WHERE job_id = :job_id
+                RETURNING job_id, job_type, team_name, pi, status, claimed_by, claimed_at, job_data, input_sent, result, error, created_at, updated_at
+            """)
+            result = conn.execute(update_query, params)
+            row = result.fetchone()
+            conn.commit()
+
+            if not row:
+                raise HTTPException(status_code=404, detail=f"Job {job_id} not found")
+
+        job = dict(row._mapping)
+        return {
+            "success": True,
+            "data": {"job": job},
+            "message": f"Job {job_id} updated successfully"
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error updating agent job {job_id}: {e}")
+        conn.rollback()
+        raise HTTPException(status_code=500, detail=f"Failed to update agent job: {str(e)}")
