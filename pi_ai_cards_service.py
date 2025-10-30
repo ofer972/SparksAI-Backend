@@ -6,13 +6,19 @@ Uses FastAPI dependencies for clean connection management and SQL injection prot
 """
 
 from fastapi import APIRouter, HTTPException, Depends, Query
+from pydantic import BaseModel
 from sqlalchemy import text
 from sqlalchemy.engine import Connection
-from typing import List, Dict, Any
+from typing import List, Dict, Any, Optional
 import logging
 import re
 from database_connection import get_db_connection
-from database_general import get_pi_ai_card_by_id
+from database_general import (
+    get_pi_ai_card_by_id,
+    create_ai_card,
+    update_ai_card_by_id,
+    delete_ai_card_by_id,
+)
 import config
 
 logger = logging.getLogger(__name__)
@@ -248,3 +254,113 @@ async def get_pi_ai_card(id: int, conn: Connection = Depends(get_db_connection))
             status_code=500,
             detail=f"Failed to fetch PI AI card: {str(e)}"
         )
+
+
+# -----------------------
+# Create/Update/Delete
+# -----------------------
+
+class PIAICardCreateRequest(BaseModel):
+    pi: str
+    card_name: str
+    card_type: str
+    description: str
+    team_name: Optional[str] = None
+    date: Optional[str] = None
+    priority: Optional[str] = None
+    source: Optional[str] = None
+    source_job_id: Optional[int] = None
+    full_information: Optional[str] = None
+    information_json: Optional[str] = None
+
+
+class PIAICardUpdateRequest(BaseModel):
+    pi: Optional[str] = None
+    team_name: Optional[str] = None
+    card_name: Optional[str] = None
+    card_type: Optional[str] = None
+    description: Optional[str] = None
+    date: Optional[str] = None
+    priority: Optional[str] = None
+    source: Optional[str] = None
+    source_job_id: Optional[int] = None
+    full_information: Optional[str] = None
+    information_json: Optional[str] = None
+
+
+@pi_ai_cards_router.post("/pi-ai-cards")
+async def create_pi_ai_card(
+    request: PIAICardCreateRequest,
+    conn: Connection = Depends(get_db_connection)
+):
+    try:
+        validated_pi = validate_pi_name(request.pi)
+        payload = request.model_dump()
+        payload["pi"] = validated_pi
+        # Optional team_name can be sanitized using team rules if provided
+        if payload.get("team_name") is not None:
+            # Reuse same rules as team validation
+            payload["team_name"] = re.sub(r'[^a-zA-Z0-9\s\-_]', '', payload["team_name"].strip())
+
+        created = create_ai_card(payload, conn)
+        return {
+            "success": True,
+            "data": {"card": created},
+            "message": f"PI AI card created with ID {created.get('id')}"
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error creating PI AI card: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to create PI AI card: {str(e)}")
+
+
+@pi_ai_cards_router.patch("/pi-ai-cards/{id}")
+async def update_pi_ai_card(
+    id: int,
+    request: PIAICardUpdateRequest,
+    conn: Connection = Depends(get_db_connection)
+):
+    try:
+        updates = request.model_dump(exclude_unset=True)
+        if "pi" in updates and updates["pi"] is not None:
+            updates["pi"] = validate_pi_name(updates["pi"])
+        if "team_name" in updates and updates["team_name"] is not None:
+            updates["team_name"] = re.sub(r'[^a-zA-Z0-9\s\-_]', '', updates["team_name"].strip())
+
+        updated = update_ai_card_by_id(id, updates, conn)
+        if not updated:
+            raise HTTPException(status_code=404, detail=f"PI AI card with ID {id} not found")
+
+        return {
+            "success": True,
+            "data": {"card": updated},
+            "message": f"PI AI card {id} updated successfully"
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error updating PI AI card {id}: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to update PI AI card: {str(e)}")
+
+
+@pi_ai_cards_router.delete("/pi-ai-cards/{id}")
+async def delete_pi_ai_card(
+    id: int,
+    conn: Connection = Depends(get_db_connection)
+):
+    try:
+        deleted = delete_ai_card_by_id(id, conn)
+        if not deleted:
+            raise HTTPException(status_code=404, detail=f"PI AI card with ID {id} not found")
+
+        return {
+            "success": True,
+            "data": {"id": id},
+            "message": f"PI AI card {id} deleted successfully"
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error deleting PI AI card {id}: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to delete PI AI card: {str(e)}")

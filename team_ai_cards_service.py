@@ -4,13 +4,20 @@ Team AI Cards Service - Provides REST API endpoints for team AI summary cards
 """
 
 from fastapi import APIRouter, HTTPException, Depends, Query
+from pydantic import BaseModel
 from sqlalchemy import text
 from sqlalchemy.engine import Connection
 from typing import List, Dict, Any, Optional
 import logging
 import re
 from database_connection import get_db_connection
-from database_general import get_top_ai_cards, get_team_ai_card_by_id
+from database_general import (
+    get_top_ai_cards,
+    get_team_ai_card_by_id,
+    create_ai_card,
+    update_ai_card_by_id,
+    delete_ai_card_by_id,
+)
 import config
 
 logger = logging.getLogger(__name__)
@@ -204,4 +211,108 @@ async def get_team_ai_card(id: int, conn: Connection = Depends(get_db_connection
             status_code=500,
             detail=f"Failed to fetch team AI card: {str(e)}"
         )
+
+
+# -----------------------
+# Create/Update/Delete
+# -----------------------
+
+class TeamAICardCreateRequest(BaseModel):
+    team_name: str
+    card_name: str
+    card_type: str
+    description: str
+    date: Optional[str] = None
+    priority: Optional[str] = None
+    source: Optional[str] = None
+    source_job_id: Optional[int] = None
+    full_information: Optional[str] = None
+    information_json: Optional[str] = None
+    pi: Optional[str] = None
+
+
+class TeamAICardUpdateRequest(BaseModel):
+    team_name: Optional[str] = None
+    pi: Optional[str] = None
+    card_name: Optional[str] = None
+    card_type: Optional[str] = None
+    description: Optional[str] = None
+    date: Optional[str] = None
+    priority: Optional[str] = None
+    source: Optional[str] = None
+    source_job_id: Optional[int] = None
+    full_information: Optional[str] = None
+    information_json: Optional[str] = None
+
+
+@team_ai_cards_router.post("/team-ai-cards")
+async def create_team_ai_card(
+    request: TeamAICardCreateRequest,
+    conn: Connection = Depends(get_db_connection)
+):
+    try:
+        validated_team_name = validate_team_name(request.team_name)
+        payload = request.model_dump()
+        payload["team_name"] = validated_team_name
+        # If pi not provided, default to None (will be null in DB)
+        created = create_ai_card(payload, conn)
+        return {
+            "success": True,
+            "data": {"card": created},
+            "message": f"Team AI card created with ID {created.get('id')}"
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error creating team AI card: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to create team AI card: {str(e)}")
+
+
+@team_ai_cards_router.patch("/team-ai-cards/{id}")
+async def update_team_ai_card(
+    id: int,
+    request: TeamAICardUpdateRequest,
+    conn: Connection = Depends(get_db_connection)
+):
+    try:
+        updates = request.model_dump(exclude_unset=True)
+        if "team_name" in updates and updates["team_name"] is not None:
+            updates["team_name"] = validate_team_name(updates["team_name"])
+
+        updated = update_ai_card_by_id(id, updates, conn)
+        if not updated:
+            raise HTTPException(status_code=404, detail=f"Team AI card with ID {id} not found")
+
+        return {
+            "success": True,
+            "data": {"card": updated},
+            "message": f"Team AI card {id} updated successfully"
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error updating team AI card {id}: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to update team AI card: {str(e)}")
+
+
+@team_ai_cards_router.delete("/team-ai-cards/{id}")
+async def delete_team_ai_card(
+    id: int,
+    conn: Connection = Depends(get_db_connection)
+):
+    try:
+        deleted = delete_ai_card_by_id(id, conn)
+        if not deleted:
+            raise HTTPException(status_code=404, detail=f"Team AI card with ID {id} not found")
+
+        return {
+            "success": True,
+            "data": {"id": id},
+            "message": f"Team AI card {id} deleted successfully"
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error deleting team AI card {id}: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to delete team AI card: {str(e)}")
 

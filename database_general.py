@@ -319,6 +319,177 @@ def get_pi_ai_card_by_id(card_id: int, conn: Connection = None) -> Optional[Dict
         logger.error(f"Error fetching PI AI card {card_id}: {e}")
         raise e
 
+
+# -------------------------------------------------------------
+# Shared CRUD helpers for ai_summary (used by Team/PI AI Cards)
+# -------------------------------------------------------------
+def create_ai_card(data: Dict[str, Any], conn: Connection = None) -> Dict[str, Any]:
+    """
+    Insert a new AI card row into ai_summary and return the created row.
+
+    Only allowed columns are inserted; others are ignored if provided.
+    """
+    try:
+        allowed_columns = {
+            "date", "team_name", "card_name", "card_type", "priority", "source",
+            "source_job_id", "description", "full_information", "information_json", "pi"
+        }
+
+        filtered = {k: v for k, v in data.items() if k in allowed_columns}
+        if not filtered:
+            raise ValueError("No valid fields provided for ai_summary insert")
+
+        columns_sql = ", ".join(filtered.keys())
+        values_sql = ", ".join([f":{k}" for k in filtered.keys()])
+
+        query = text(f"""
+            INSERT INTO {config.AI_SUMMARY_TABLE} ({columns_sql})
+            VALUES ({values_sql})
+            RETURNING *
+        """)
+
+        result = conn.execute(query, filtered)
+        row = result.fetchone()
+        conn.commit()
+        return dict(row._mapping)
+    except Exception as e:
+        logger.error(f"Error creating ai card: {e}")
+        conn.rollback()
+        raise e
+
+
+def update_ai_card_by_id(card_id: int, updates: Dict[str, Any], conn: Connection = None) -> Optional[Dict[str, Any]]:
+    """
+    Update an existing AI card row by id and return the updated row, or None if not found.
+    """
+    try:
+        allowed_columns = {
+            "date", "team_name", "card_name", "card_type", "priority", "source",
+            "source_job_id", "description", "full_information", "information_json", "pi"
+        }
+        filtered = {k: v for k, v in updates.items() if k in allowed_columns}
+        if not filtered:
+            raise ValueError("No valid fields provided for ai_summary update")
+
+        set_clauses = ", ".join([f"{k} = :{k}" for k in filtered.keys()])
+        params = dict(filtered)
+        params["id"] = card_id
+
+        query = text(f"""
+            UPDATE {config.AI_SUMMARY_TABLE}
+            SET {set_clauses}, updated_at = CURRENT_TIMESTAMP
+            WHERE id = :id
+            RETURNING *
+        """)
+
+        result = conn.execute(query, params)
+        row = result.fetchone()
+        conn.commit()
+        if not row:
+            return None
+        return dict(row._mapping)
+    except Exception as e:
+        logger.error(f"Error updating ai card {card_id}: {e}")
+        conn.rollback()
+        raise e
+
+
+def delete_ai_card_by_id(card_id: int, conn: Connection = None) -> bool:
+    """Hard delete an AI card by id. Returns True if deleted, False if not found."""
+    try:
+        query = text(f"DELETE FROM {config.AI_SUMMARY_TABLE} WHERE id = :id")
+        result = conn.execute(query, {"id": card_id})
+        conn.commit()
+        return result.rowcount > 0
+    except Exception as e:
+        logger.error(f"Error deleting ai card {card_id}: {e}")
+        conn.rollback()
+        raise e
+
+
+# -------------------------------------------------------------
+# CRUD helpers for recommendations
+# -------------------------------------------------------------
+def create_recommendation(data: Dict[str, Any], conn: Connection = None) -> Dict[str, Any]:
+    """
+    Insert a new recommendation and return the created row.
+    """
+    try:
+        allowed_columns = {
+            "team_name", "date", "action_text", "rational", "full_information",
+            "priority", "status", "information_json"
+        }
+        filtered = {k: v for k, v in data.items() if k in allowed_columns}
+        if not filtered:
+            raise ValueError("No valid fields provided for recommendations insert")
+
+        columns_sql = ", ".join(filtered.keys())
+        values_sql = ", ".join([f":{k}" for k in filtered.keys()])
+
+        query = text(f"""
+            INSERT INTO {config.RECOMMENDATIONS_TABLE} ({columns_sql})
+            VALUES ({values_sql})
+            RETURNING *
+        """)
+
+        result = conn.execute(query, filtered)
+        row = result.fetchone()
+        conn.commit()
+        return dict(row._mapping)
+    except Exception as e:
+        logger.error(f"Error creating recommendation: {e}")
+        conn.rollback()
+        raise e
+
+
+def update_recommendation_by_id(recommendation_id: int, updates: Dict[str, Any], conn: Connection = None) -> Optional[Dict[str, Any]]:
+    """
+    Update an existing recommendation by id and return the updated row, or None if not found.
+    """
+    try:
+        allowed_columns = {
+            "team_name", "date", "action_text", "rational", "full_information",
+            "priority", "status", "information_json"
+        }
+        filtered = {k: v for k, v in updates.items() if k in allowed_columns}
+        if not filtered:
+            raise ValueError("No valid fields provided for recommendations update")
+
+        set_clauses = ", ".join([f"{k} = :{k}" for k in filtered.keys()])
+        params = dict(filtered)
+        params["id"] = recommendation_id
+
+        query = text(f"""
+            UPDATE {config.RECOMMENDATIONS_TABLE}
+            SET {set_clauses}, updated_at = CURRENT_TIMESTAMP
+            WHERE id = :id
+            RETURNING *
+        """)
+
+        result = conn.execute(query, params)
+        row = result.fetchone()
+        conn.commit()
+        if not row:
+            return None
+        return dict(row._mapping)
+    except Exception as e:
+        logger.error(f"Error updating recommendation {recommendation_id}: {e}")
+        conn.rollback()
+        raise e
+
+
+def delete_recommendation_by_id(recommendation_id: int, conn: Connection = None) -> bool:
+    """Hard delete a recommendation by id. Returns True if deleted, False if not found."""
+    try:
+        query = text(f"DELETE FROM {config.RECOMMENDATIONS_TABLE} WHERE id = :id")
+        result = conn.execute(query, {"id": recommendation_id})
+        conn.commit()
+        return result.rowcount > 0
+    except Exception as e:
+        logger.error(f"Error deleting recommendation {recommendation_id}: {e}")
+        conn.rollback()
+        raise e
+
 def get_all_settings_db(conn: Connection = None) -> Dict[str, str]:
     """
     Get all global settings from the database.

@@ -4,13 +4,20 @@ Recommendations Service - Provides REST API endpoints for team recommendations
 """
 
 from fastapi import APIRouter, HTTPException, Depends, Query
+from pydantic import BaseModel
 from sqlalchemy import text
 from sqlalchemy.engine import Connection
 from typing import List, Dict, Any, Optional
 import logging
 import re
 from database_connection import get_db_connection
-from database_general import get_top_ai_recommendations, get_recommendation_by_id
+from database_general import (
+    get_top_ai_recommendations,
+    get_recommendation_by_id,
+    create_recommendation,
+    update_recommendation_by_id,
+    delete_recommendation_by_id,
+)
 import config
 
 logger = logging.getLogger(__name__)
@@ -187,4 +194,102 @@ async def get_recommendation(id: int, conn: Connection = Depends(get_db_connecti
             status_code=500,
             detail=f"Failed to fetch recommendation: {str(e)}"
         )
+
+
+# -----------------------
+# Create/Update/Delete
+# -----------------------
+
+class RecommendationCreateRequest(BaseModel):
+    team_name: str
+    action_text: str
+    date: Optional[str] = None
+    rational: Optional[str] = None
+    full_information: Optional[str] = None
+    priority: Optional[str] = None
+    status: Optional[str] = None
+    information_json: Optional[str] = None
+
+
+class RecommendationUpdateRequest(BaseModel):
+    team_name: Optional[str] = None
+    action_text: Optional[str] = None
+    date: Optional[str] = None
+    rational: Optional[str] = None
+    full_information: Optional[str] = None
+    priority: Optional[str] = None
+    status: Optional[str] = None
+    information_json: Optional[str] = None
+
+
+@recommendations_router.post("/recommendations")
+async def create_recommendation_endpoint(
+    request: RecommendationCreateRequest,
+    conn: Connection = Depends(get_db_connection)
+):
+    try:
+        validated_team_name = validate_team_name(request.team_name)
+        payload = request.model_dump()
+        payload["team_name"] = validated_team_name
+
+        created = create_recommendation(payload, conn)
+        return {
+            "success": True,
+            "data": {"recommendation": created},
+            "message": f"Recommendation created with ID {created.get('id')}"
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error creating recommendation: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to create recommendation: {str(e)}")
+
+
+@recommendations_router.patch("/recommendations/{id}")
+async def update_recommendation_endpoint(
+    id: int,
+    request: RecommendationUpdateRequest,
+    conn: Connection = Depends(get_db_connection)
+):
+    try:
+        updates = request.model_dump(exclude_unset=True)
+        if "team_name" in updates and updates["team_name"] is not None:
+            updates["team_name"] = validate_team_name(updates["team_name"])
+
+        updated = update_recommendation_by_id(id, updates, conn)
+        if not updated:
+            raise HTTPException(status_code=404, detail=f"Recommendation with ID {id} not found")
+
+        return {
+            "success": True,
+            "data": {"recommendation": updated},
+            "message": f"Recommendation {id} updated successfully"
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error updating recommendation {id}: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to update recommendation: {str(e)}")
+
+
+@recommendations_router.delete("/recommendations/{id}")
+async def delete_recommendation_endpoint(
+    id: int,
+    conn: Connection = Depends(get_db_connection)
+):
+    try:
+        deleted = delete_recommendation_by_id(id, conn)
+        if not deleted:
+            raise HTTPException(status_code=404, detail=f"Recommendation with ID {id} not found")
+
+        return {
+            "success": True,
+            "data": {"id": id},
+            "message": f"Recommendation {id} deleted successfully"
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error deleting recommendation {id}: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to delete recommendation: {str(e)}")
 
