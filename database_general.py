@@ -102,7 +102,7 @@ def get_top_ai_cards(team_name: str, limit: int = 4, conn: Connection = None) ->
                                    WHEN 'Medium' THEN 3 
                                END
                        ) as rn
-                FROM public.team_ai_summary_cards
+                FROM public.ai_summary
                 WHERE team_name = :team_name
             )
             SELECT id, date, team_name, card_name, card_type, priority, source, description, full_information, information_json
