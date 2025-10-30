@@ -288,6 +288,37 @@ def get_recommendation_by_id(recommendation_id: int, conn: Connection = None) ->
         raise e
 
 
+def get_pi_ai_card_by_id(card_id: int, conn: Connection = None) -> Optional[Dict[str, Any]]:
+    """
+    Get a single PI AI summary card by ID from pi_ai_summary_cards table.
+    Uses parameterized queries to prevent SQL injection.
+
+    Args:
+        card_id (int): The ID of the PI AI card to retrieve
+        conn (Connection): Database connection from FastAPI dependency
+
+    Returns:
+        dict: PI AI card dictionary or None if not found
+    """
+    try:
+        query = text(f"""
+            SELECT *
+            FROM {config.PI_AI_CARDS_TABLE}
+            WHERE id = :id
+        """)
+
+        logger.info(f"Executing query to get PI AI card with ID {card_id} from {config.PI_AI_CARDS_TABLE}")
+
+        result = conn.execute(query, {"id": card_id})
+        row = result.fetchone()
+        if not row:
+            return None
+
+        return dict(row._mapping)
+    except Exception as e:
+        logger.error(f"Error fetching PI AI card {card_id}: {e}")
+        raise e
+
 def get_all_settings_db(conn: Connection = None) -> Dict[str, str]:
     """
     Get all global settings from the database.

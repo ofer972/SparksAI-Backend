@@ -15,7 +15,7 @@ import logging
 import json
 import httpx
 from database_connection import get_db_connection
-from database_general import get_team_ai_card_by_id, get_recommendation_by_id, get_prompt_by_email_and_name
+from database_general import get_team_ai_card_by_id, get_recommendation_by_id, get_prompt_by_email_and_name, get_pi_ai_card_by_id
 import config
 
 logger = logging.getLogger(__name__)
@@ -396,6 +396,61 @@ async def ai_chat(
                     detail=f"Failed to fetch team AI card: {str(e)}"
                 )
         
+        # 2.3. Handle PI_insights chat type - fetch PI card and build context
+        elif chat_type_str == "PI_insights":
+            if not request.insights_id:
+                raise HTTPException(
+                    status_code=400,
+                    detail="insights_id is required when chat_type is PI_insights"
+                )
+            try:
+                insights_id_int = int(request.insights_id)
+                logger.info(f"Fetching PI AI card with ID: {insights_id_int}")
+                card = get_pi_ai_card_by_id(insights_id_int, conn)
+                if not card:
+                    raise HTTPException(
+                        status_code=404,
+                        detail=f"PI AI card with ID {insights_id_int} not found"
+                    )
+                full_information = card.get('full_information', '')
+                if not full_information:
+                    logger.warning(f"PI AI card {insights_id_int} has empty full_information field")
+                    conversation_context = None
+                else:
+                    content_prompt_name = f"{chat_type_str}-Content"
+                    content_intro = None
+                    try:
+                        content_prompt = get_prompt_by_email_and_name(
+                            email_address='admin',
+                            prompt_name=content_prompt_name,
+                            conn=conn,
+                            active=True
+                        )
+                        if content_prompt and content_prompt.get('prompt_description'):
+                            content_intro = str(content_prompt['prompt_description'])
+                            logger.info(f"Using DB content prompt for prompt_name='{content_prompt_name}' (length: {len(content_intro)} chars)")
+                        else:
+                            logger.info(f"No active DB content prompt found for prompt_name='{content_prompt_name}', using fallback context intro")
+                    except Exception as e:
+                        logger.warning(f"Failed to fetch DB content prompt for prompt_name='{content_prompt_name}': {e}. Using fallback.")
+                    if not content_intro:
+                        content_intro = "This is previous discussion we have in a different chat. Read this information as I want to ask follow up questions."
+                    conversation_context = content_intro + '\n\n' + full_information
+                    logger.info(f"Built conversation context from PI AI card {insights_id_int} (length: {len(conversation_context)} chars)")
+            except ValueError:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Invalid insights_id format: {request.insights_id}. Must be an integer."
+                )
+            except HTTPException:
+                raise
+            except Exception as e:
+                logger.error(f"Error fetching PI AI card for PI_insights: {e}")
+                raise HTTPException(
+                    status_code=500,
+                    detail=f"Failed to fetch PI AI card: {str(e)}"
+                )
+
         # 2.5. Handle Recommendation_reason chat type - fetch recommendation data and build context
         elif chat_type_str == "Recommendation_reason":
             # Validate recommendation_id is provided

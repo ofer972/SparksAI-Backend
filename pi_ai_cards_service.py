@@ -12,6 +12,7 @@ from typing import List, Dict, Any
 import logging
 import re
 from database_connection import get_db_connection
+from database_general import get_pi_ai_card_by_id
 import config
 
 logger = logging.getLogger(__name__)
@@ -223,28 +224,13 @@ async def get_pi_ai_card(id: int, conn: Connection = Depends(get_db_connection))
         JSON response with single PI AI card or 404 if not found
     """
     try:
-        # SECURE: Parameterized query prevents SQL injection
-        query = text(f"""
-            SELECT * 
-            FROM {config.PI_AI_CARDS_TABLE} 
-            WHERE id = :id
-        """)
-        
-        logger.info(f"Executing query to get PI AI card with ID {id} from {config.PI_AI_CARDS_TABLE}")
-        
-        # Execute query with connection from dependency
-        result = conn.execute(query, {"id": id})
-        row = result.fetchone()
-        
-        if not row:
+        card = get_pi_ai_card_by_id(id, conn)
+        if not card:
             raise HTTPException(
                 status_code=404,
                 detail=f"PI AI card with ID {id} not found"
             )
-        
-        # Convert row to dictionary - get all fields from database
-        card = dict(row._mapping)
-        
+
         return {
             "success": True,
             "data": {
