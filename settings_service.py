@@ -57,6 +57,13 @@ async def get_all_settings(conn: Connection = Depends(get_db_connection)):
         )
 
 
+# Alias endpoint for convenience: GET /settings
+# Returns the same payload as /settings/getAll
+@settings_router.get("/settings")
+async def get_all_settings_alias(conn: Connection = Depends(get_db_connection)):
+    return await get_all_settings(conn)
+
+
 async def call_llm_reset_settings() -> None:
     """
     Call LLM service /reset-settings endpoint to clear settings cache.
