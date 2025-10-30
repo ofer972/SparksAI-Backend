@@ -414,37 +414,46 @@ async def ai_chat(
                     status_code=400,
                     detail="recommendation_id is required when chat_type is Recommendation_reason"
                 )
-            
             try:
                 # Convert recommendation_id to int
                 recommendation_id_int = int(request.recommendation_id)
-                
                 # Fetch recommendation using shared helper function
                 logger.info(f"Fetching recommendation with ID: {recommendation_id_int}")
                 recommendation = get_recommendation_by_id(recommendation_id_int, conn)
-                
                 if not recommendation:
                     raise HTTPException(
                         status_code=404,
                         detail=f"Recommendation with ID {recommendation_id_int} not found"
                     )
-                
                 # Extract action_text and full_information from recommendation
                 action_text = recommendation.get('action_text', '')
                 full_information = recommendation.get('full_information', '')
-                
-                if not action_text or not full_information:
-                    logger.warning(f"Recommendation {recommendation_id_int} has empty action_text or full_information field")
-                    conversation_context = None
-                else:
-                    # Build context text (same format as old project)
-                    conversation_context = "This is previous discussion we have in a different chat. Read this information as I want to ask follow up questions.\n\n"
-                    conversation_context += f"Please explain the reason for recommendation --> \"{action_text}\"\n\n"
-                    conversation_context += "Explain in a brief and short description the reason for recommendation\n\n"
-                    conversation_context += full_information
-                    
-                    logger.info(f"Built conversation context from recommendation {recommendation_id_int} (length: {len(conversation_context)} chars)")
-                    
+                content_prompt_name = "Recommendation_reason-Content"
+                context_built = False
+                try:
+                    content_prompt = get_prompt_by_email_and_name(
+                        email_address='admin',
+                        prompt_name=content_prompt_name,
+                        conn=conn,
+                        active=True
+                    )
+                    if content_prompt and content_prompt.get('prompt_description'):
+                        # Use DB prompt + action_text as context
+                        conversation_context = f"{content_prompt['prompt_description']}\n\"{action_text}\""
+                        logger.info(f"Using DB content prompt for Recommendation_reason-Content (length: {len(conversation_context)} chars)")
+                        context_built = True
+                    else:
+                        logger.info(f"No active DB content prompt found for Recommendation_reason-Content, using fallback context.")
+                except Exception as e:
+                    logger.warning(f"Failed to fetch DB content prompt for Recommendation_reason-Content: {e}. Using fallback.")
+                if not context_built:
+                    # Fallback: the original multi-part string
+                    conversation_context = (
+                        "This is previous discussion we have in a different chat. Read this information as I want to ask follow up questions.\n\n"
+                        f"Please explain the reason for recommendation --> \"{action_text}\"\n\n"
+                        "Explain in a brief and short description the reason for recommendation\n\n"
+                        f"{full_information}"
+                    )
             except ValueError:
                 raise HTTPException(
                     status_code=400,
