@@ -12,7 +12,6 @@ from sqlalchemy import text
 from typing import Optional, Dict, Any, Tuple
 from enum import Enum
 import logging
-import uuid
 import json
 import httpx
 from database_connection import get_db_connection
@@ -80,54 +79,48 @@ def get_or_create_chat_history(
     pi = pi or "unknown"
     chat_type = chat_type or "Direct_chat"
     
-    # If conversation_id provided, try to fetch existing history
-    if conversation_id:
+    # If conversation_id provided, try to fetch existing history (now integer ID)
+    if conversation_id is not None and str(conversation_id).strip() != "":
         try:
-            # Validate UUID format
-            uuid.UUID(conversation_id)
-            
+            conversation_id_int = int(str(conversation_id))
             query = text(f"""
                 SELECT id, history_json
                 FROM {config.CHAT_HISTORY_TABLE}
                 WHERE id = :conversation_id
             """)
-            
-            result = conn.execute(query, {"conversation_id": conversation_id})
+            result = conn.execute(query, {"conversation_id": conversation_id_int})
             row = result.fetchone()
-            
             if row:
                 history_json = row[1] if row[1] is not None else {"messages": []}
-                # Ensure history_json has messages key
                 if not isinstance(history_json, dict):
                     history_json = {"messages": []}
                 if "messages" not in history_json:
                     history_json["messages"] = []
                 return str(row[0]), history_json
-        except (ValueError, Exception) as e:
+        except Exception as e:
             logger.warning(f"Error fetching chat history for conversation_id {conversation_id}: {e}")
             # If fetch fails, create new conversation
     
     # Create new chat history row
-    new_conversation_id = str(uuid.uuid4())
     history_json = {"messages": []}
-    
     insert_query = text(f"""
         INSERT INTO {config.CHAT_HISTORY_TABLE}
-        (id, username, team, pi, chat_type, history_json)
-        VALUES (:id, :username, :team, :pi, :chat_type, CAST(:history_json AS jsonb))
+        (username, team, pi, chat_type, history_json)
+        VALUES (:username, :team, :pi, :chat_type, CAST(:history_json AS jsonb))
         RETURNING id
     """)
     
     try:
-        conn.execute(insert_query, {
-            "id": new_conversation_id,
+        result = conn.execute(insert_query, {
             "username": username,
             "team": team,
             "pi": pi,
             "chat_type": chat_type,
             "history_json": json.dumps(history_json)
         })
+        row = result.fetchone()
         conn.commit()
+        new_conversation_id = str(row[0])
         logger.info(f"Created new chat history with conversation_id: {new_conversation_id}")
     except Exception as e:
         logger.error(f"Error creating chat history: {e}")
@@ -304,12 +297,9 @@ async def ai_chat(
         JSON response with AI answer and conversation details
     """
     try:
-        # Validate that question is provided
+        # Allow empty questions; log for visibility
         if not request.question or not request.question.strip():
-            raise HTTPException(
-                status_code=400,
-                detail="Question is required"
-            )
+            logger.info("Empty question received; continuing without user question")
         
         # DEBUG: Log incoming parameters
         logger.info("=" * 60)
@@ -438,8 +428,10 @@ async def ai_chat(
                         active=True
                     )
                     if content_prompt and content_prompt.get('prompt_description'):
-                        # Use DB prompt + action_text as context
-                        conversation_context = f"{content_prompt['prompt_description']}\n\"{action_text}\""
+                        # Use DB prompt + action_text + full_information as context
+                        conversation_context = (
+                            f"{content_prompt['prompt_description']}\n\"{action_text}\"\n\n{full_information}"
+                        )
                         logger.info(f"Using DB content prompt for Recommendation_reason-Content (length: {len(conversation_context)} chars)")
                         context_built = True
                     else:

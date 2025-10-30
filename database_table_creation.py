@@ -698,7 +698,7 @@ def create_chat_history_table_if_not_exists(engine=None) -> bool:
                 print("Creating chat_history table...")
                 create_table_sql = """
                 CREATE TABLE public.chat_history (
-                    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+                    id SERIAL PRIMARY KEY,
                     username VARCHAR(255) NOT NULL,
                     team VARCHAR(255) NOT NULL,
                     pi VARCHAR(255) NOT NULL,
