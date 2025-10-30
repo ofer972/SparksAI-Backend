@@ -5,7 +5,7 @@ This service provides endpoints for managing, creating, and cancelling agent job
 Uses FastAPI dependencies for clean connection management and SQL injection protection.
 """
 
-from fastapi import APIRouter, HTTPException, Depends
+from fastapi import APIRouter, HTTPException, Depends, Response
 from sqlalchemy import text
 from sqlalchemy.engine import Connection
 from typing import List, Dict, Any, Optional
@@ -163,6 +163,44 @@ async def get_agent_jobs(conn: Connection = Depends(get_db_connection)):
             detail=f"Failed to fetch agent jobs: {str(e)}"
         )
 
+# -----------------------
+# Next pending job (static path) - must be BEFORE dynamic {job_id}
+# -----------------------
+
+@agent_jobs_router.get("/agent-jobs/next-pending")
+async def get_next_pending_job(conn: Connection = Depends(get_db_connection)):
+    """
+    Get the oldest pending agent job (status Pending/pending).
+    Returns a single row or 404 if none.
+    """
+    try:
+        query = text(f"""
+            SELECT *
+            FROM {config.AGENT_JOBS_TABLE}
+            WHERE status IN ('pending','Pending')
+            ORDER BY created_at ASC, job_id ASC
+            LIMIT 1
+        """)
+
+        logger.info("Fetching next pending agent job")
+        result = conn.execute(query)
+        row = result.fetchone()
+        if not row:
+            return Response(status_code=204)
+
+        job = dict(row._mapping)
+        return {
+            "success": True,
+            "data": {"job": job},
+            "message": "Retrieved next pending job"
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error fetching next pending job: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to fetch next pending job: {str(e)}")
+
+
 @agent_jobs_router.get("/agent-jobs/{job_id}")
 async def get_agent_job(job_id: int, conn: Connection = Depends(get_db_connection)):
     """
@@ -240,7 +278,7 @@ async def create_team_job(
         insert_query = text(f"""
             INSERT INTO {config.AGENT_JOBS_TABLE} 
             (job_type, team_name, pi, status, created_at, updated_at)
-            VALUES (:job_type, :team_name, NULL, 'pending', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+            VALUES (:job_type, :team_name, NULL, 'Pending', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
             RETURNING job_id, job_type, team_name, pi, status, created_at
         """)
         
@@ -299,7 +337,7 @@ async def create_pi_job(
         insert_query = text(f"""
             INSERT INTO {config.AGENT_JOBS_TABLE} 
             (job_type, team_name, pi, status, created_at, updated_at)
-            VALUES (:job_type, NULL, :pi, 'pending', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+            VALUES (:job_type, NULL, :pi, 'Pending', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
             RETURNING job_id, job_type, team_name, pi, status, created_at
         """)
         

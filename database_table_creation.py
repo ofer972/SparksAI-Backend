@@ -123,8 +123,7 @@ def create_prompts_table_if_not_exists(engine=None) -> bool:
                     CONSTRAINT prompts_pkey PRIMARY KEY (email_address, prompt_name)
                 );
                 
-                ALTER TABLE public.prompts ADD CONSTRAINT prompts_email_address_fkey 
-                FOREIGN KEY (email_address) REFERENCES public.users(email_address) ON DELETE CASCADE;
+                -- Intentionally no foreign key on email_address
                 
                 CREATE INDEX idx_prompts_type ON public.prompts(prompt_type);
                 CREATE INDEX idx_prompts_active ON public.prompts(prompt_active);
