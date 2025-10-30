@@ -17,7 +17,7 @@ API_PREFIX = f"/api/{API_VERSION}"
 # --- Table Names Configuration ---
 WORK_ITEMS_TABLE = "jira_issues"  # Main table name - can be changed here
 RECOMMENDATIONS_TABLE = "recommendations"  # Recommendations table
-TEAM_AI_CARDS_TABLE = "team_ai_summary_cards"  # Team AI cards table
+TEAM_AI_CARDS_TABLE = "ai_summary"  # Team AI cards table (uses ai_summary)
 PIS_TABLE = "pis"  # PIs table
 CLOSED_SPRINT_VIEW = "closed_sprint_summary"  # Closed sprint summary view
 AGENT_JOBS_TABLE = "agent_jobs"  # Agent jobs table
