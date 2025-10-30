@@ -16,7 +16,7 @@ import uuid
 import json
 import httpx
 from database_connection import get_db_connection
-from database_general import get_team_ai_card_by_id, get_recommendation_by_id
+from database_general import get_team_ai_card_by_id, get_recommendation_by_id, get_prompt_by_email_and_name
 import config
 
 logger = logging.getLogger(__name__)
@@ -354,34 +354,44 @@ async def ai_chat(
                     status_code=400,
                     detail="insights_id is required when chat_type is Team_insights"
                 )
-            
             try:
                 # Convert insights_id to int
                 insights_id_int = int(request.insights_id)
-                
                 # Fetch team AI card using shared helper function
                 logger.info(f"Fetching team AI card with ID: {insights_id_int}")
                 card = get_team_ai_card_by_id(insights_id_int, conn)
-                
                 if not card:
                     raise HTTPException(
                         status_code=404,
                         detail=f"Team AI card with ID {insights_id_int} not found"
                     )
-                
                 # Extract full_information from card
                 full_information = card.get('full_information', '')
-                
                 if not full_information:
                     logger.warning(f"Team AI card {insights_id_int} has empty full_information field")
                     conversation_context = None
                 else:
-                    # Build context text (same as old project)
-                    conversation_context = "This is previous discussion we have in a different chat. Read this information as I want to ask follow up questions.\n\n"
-                    conversation_context += full_information
-                    
-                    logger.info(f"Built conversation context from team AI card {insights_id_int} (length: {len(conversation_context)} chars)")
-                    
+                    # NEW: Try prompt from DB before fallback
+                    content_prompt_name = f"{chat_type_str}-Content"
+                    content_intro = None
+                    try:
+                        content_prompt = get_prompt_by_email_and_name(
+                            email_address='admin',
+                            prompt_name=content_prompt_name,
+                            conn=conn,
+                            active=True
+                        )
+                        if content_prompt and content_prompt.get('prompt_description'):
+                            content_intro = str(content_prompt['prompt_description'])
+                            logger.info(f"Using DB content prompt for prompt_name='{content_prompt_name}' (length: {len(content_intro)} chars)")
+                        else:
+                            logger.info(f"No active DB content prompt found for prompt_name='{content_prompt_name}', using fallback context intro")
+                    except Exception as e:
+                        logger.warning(f"Failed to fetch DB content prompt for prompt_name='{content_prompt_name}': {e}. Using fallback.")
+                    if not content_intro:
+                        content_intro = "This is previous discussion we have in a different chat. Read this information as I want to ask follow up questions."
+                    conversation_context = content_intro + '\n\n' + full_information
+                    logger.info(f"Built conversation context from team AI card {insights_id_int} with intro (length: {len(conversation_context)} chars)")
             except ValueError:
                 raise HTTPException(
                     status_code=400,
@@ -449,6 +459,27 @@ async def ai_chat(
                     detail=f"Failed to fetch recommendation: {str(e)}"
                 )
         
+        # 2.8. Resolve system message by chat type using DB prompt (admin + active)
+        system_message = SYSTEM_MESSAGE
+        if chat_type_str:
+            prompt_name = f"{chat_type_str}-System"
+            try:
+                prompt_row = get_prompt_by_email_and_name(
+                    email_address='admin',
+                    prompt_name=prompt_name,
+                    conn=conn,
+                    active=True
+                )
+                if prompt_row and prompt_row.get('prompt_description'):
+                    system_message = str(prompt_row['prompt_description'])
+                    logger.info(f"Using DB system prompt for prompt_name='{prompt_name}' (length: {len(system_message)} chars)")
+                else:
+                    logger.info(f"No active DB prompt found for prompt_name='{prompt_name}', using default system message")
+            except Exception as e:
+                logger.warning(f"Failed to fetch DB system prompt for prompt_name='{prompt_name}': {e}. Using default.")
+        else:
+            logger.info("chat_type not provided; using default system message")
+
         # 3. Call LLM service
         llm_response = await call_llm_service(
             conversation_id=conversation_id,
@@ -459,7 +490,7 @@ async def ai_chat(
             selected_pi=request.selected_pi,
             chat_type=chat_type_str,
             conversation_context=conversation_context,
-            system_message=SYSTEM_MESSAGE
+            system_message=system_message
         )
         
         if not llm_response.get("success"):

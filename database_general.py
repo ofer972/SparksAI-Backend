@@ -185,6 +185,73 @@ def get_team_ai_card_by_id(card_id: int, conn: Connection = None) -> Optional[Di
         raise e
 
 
+def get_prompt_by_email_and_name(
+    email_address: str,
+    prompt_name: str,
+    conn: Connection = None,
+    active: Optional[bool] = None
+) -> Optional[Dict[str, Any]]:
+    """
+    Get a single prompt by email_address and prompt_name from the prompts table.
+    Optionally filter by prompt_active.
+
+    Args:
+        email_address: Owner email (e.g., 'admin')
+        prompt_name: Prompt name (chat type string)
+        conn: Database connection
+        active: If True, require prompt_active=TRUE; if False, require prompt_active=FALSE; if None, no filter
+
+    Returns:
+        dict: Prompt row as dictionary or None if not found
+    """
+    try:
+        where_clauses = ["email_address = :email_address", "prompt_name = :prompt_name"]
+        params: Dict[str, Any] = {
+            "email_address": email_address,
+            "prompt_name": prompt_name
+        }
+
+        if active is True:
+            where_clauses.append("prompt_active = TRUE")
+        elif active is False:
+            where_clauses.append("prompt_active = FALSE")
+
+        query = text(f"""
+            SELECT 
+                email_address,
+                prompt_name,
+                prompt_description,
+                prompt_type,
+                prompt_active,
+                created_at,
+                updated_at
+            FROM {config.PROMPTS_TABLE}
+            WHERE {' AND '.join(where_clauses)}
+        """)
+
+        logger.info(
+            f"Executing query to get prompt '{prompt_name}' for '{email_address}' from {config.PROMPTS_TABLE} (active={active})"
+        )
+
+        result = conn.execute(query, params)
+        row = result.fetchone()
+        if not row:
+            return None
+
+        return {
+            "email_address": row[0],
+            "prompt_name": row[1],
+            "prompt_description": row[2],
+            "prompt_type": row[3],
+            "prompt_active": row[4],
+            "created_at": row[5],
+            "updated_at": row[6]
+        }
+    except Exception as e:
+        logger.error(f"Error fetching prompt '{prompt_name}' for '{email_address}': {e}")
+        raise e
+
+
 def get_recommendation_by_id(recommendation_id: int, conn: Connection = None) -> Optional[Dict[str, Any]]:
     """
     Get a single recommendation by ID from recommendations table.

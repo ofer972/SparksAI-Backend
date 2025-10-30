@@ -13,6 +13,7 @@ from pydantic import BaseModel
 import logging
 import re
 from database_connection import get_db_connection
+from database_general import get_prompt_by_email_and_name
 import config
 
 logger = logging.getLogger(__name__)
@@ -193,55 +194,29 @@ async def get_prompt(
         # Validate inputs
         validated_email = validate_email_address(email_address)
         validated_name = validate_prompt_name(prompt_name)
-        
-        # SECURE: Parameterized query prevents SQL injection
-        query = text(f"""
-            SELECT 
-                email_address,
-                prompt_name,
-                prompt_description,
-                prompt_type,
-                prompt_active,
-                created_at,
-                updated_at
-            FROM {config.PROMPTS_TABLE} 
-            WHERE email_address = :email_address AND prompt_name = :prompt_name
-        """)
-        
-        logger.info(f"Executing query to get prompt {validated_name} for {validated_email}")
-        
-        # Execute query with connection from dependency
-        result = conn.execute(query, {
-            "email_address": validated_email,
-            "prompt_name": validated_name
-        })
-        row = result.fetchone()
-        
-        if not row:
+
+        # Use shared database function
+        prompt_row = get_prompt_by_email_and_name(
+            email_address=validated_email,
+            prompt_name=validated_name,
+            conn=conn,
+            active=None  # API returns even inactive prompts; filtering is up to caller
+        )
+
+        if not prompt_row:
             raise HTTPException(
                 status_code=404,
                 detail=f"Prompt '{prompt_name}' not found for email '{email_address}'"
             )
-        
-        # Convert row to dictionary
-        prompt = {
-            "email_address": row[0],
-            "prompt_name": row[1],
-            "prompt_description": row[2],  # Full description
-            "prompt_type": row[3],
-            "prompt_active": row[4],
-            "created_at": row[5],
-            "updated_at": row[6]
-        }
-        
+
         return {
             "success": True,
             "data": {
-                "prompt": prompt
+                "prompt": prompt_row
             },
             "message": f"Retrieved prompt '{prompt_name}' for '{email_address}'"
         }
-    
+
     except HTTPException:
         # Re-raise HTTP exceptions (like the 404 error above)
         raise
