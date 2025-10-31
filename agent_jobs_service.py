@@ -111,6 +111,7 @@ async def get_agent_jobs(conn: Connection = Depends(get_db_connection)):
                 job_id,
                 job_type,
                 team_name,
+                pi,
                 status,
                 claimed_by,
                 claimed_at,
@@ -131,7 +132,7 @@ async def get_agent_jobs(conn: Connection = Depends(get_db_connection)):
         jobs = []
         for row in rows:
             # Truncate result to first 200 characters with ellipsis when longer
-            result_text = row[6]
+            result_text = row[7]
             if isinstance(result_text, str) and len(result_text) > 200:
                 result_text = result_text[:200] + "..."
 
@@ -139,11 +140,12 @@ async def get_agent_jobs(conn: Connection = Depends(get_db_connection)):
                 "job_id": row[0],
                 "job_type": row[1],
                 "team_name": row[2],
-                "status": row[3],
-                "claimed_by": row[4],
-                "claimed_at": row[5],
+                "pi": row[3],
+                "status": row[4],
+                "claimed_by": row[5],
+                "claimed_at": row[6],
                 "result": result_text,
-                "error": row[7]
+                "error": row[8]
             }
             jobs.append(job_dict)
         
