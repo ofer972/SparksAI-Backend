@@ -12,8 +12,13 @@ from sqlalchemy import create_engine, text, event
 from sqlalchemy.engine import Engine
 from typing import Optional
 import logging
+import os
 
 logger = logging.getLogger(__name__)
+
+# Control SQL logging via environment variable (defaults to enabled)
+_sql_log_env = os.getenv('SQL_LOG_ENABLED', 'true').strip().lower()
+SQL_LOG_ENABLED = _sql_log_env in ('1', 'true', 'yes', 'on')
 
 # Global engine cache to prevent multiple engine creation
 _cached_engine = None
@@ -27,7 +32,7 @@ def receive_before_cursor_execute(conn, cursor, statement, parameters, context, 
 @event.listens_for(Engine, "after_cursor_execute")
 def receive_after_cursor_execute(conn, cursor, statement, parameters, context, executemany):
     """Log SQL query execution time"""
-    if hasattr(context, '_query_start_time'):
+    if SQL_LOG_ENABLED and hasattr(context, '_query_start_time'):
         total_time = time.time() - context._query_start_time
         # Truncate long queries for readability
         query = statement if len(statement) < 200 else statement[:200] + "..."

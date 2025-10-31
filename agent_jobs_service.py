@@ -182,7 +182,6 @@ async def get_next_pending_job(conn: Connection = Depends(get_db_connection)):
             LIMIT 1
         """)
 
-        logger.info("Fetching next pending agent job")
         result = conn.execute(query)
         row = result.fetchone()
         if not row:
