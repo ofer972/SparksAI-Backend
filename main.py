@@ -24,6 +24,43 @@ from ai_chat_service import ai_chat_router
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
+# ANSI color codes for terminal output
+class Colors:
+    RESET = '\033[0m'
+    BOLD = '\033[1m'
+    # HTTP Method colors
+    GET = '\033[92m'      # Bright Green
+    POST = '\033[96m'     # Cyan (Bright Cyan)
+    PUT = '\033[93m'      # Yellow
+    PATCH = '\033[95m'   # Magenta
+    DELETE = '\033[91m'  # Red
+    DEFAULT = '\033[90m'  # Gray
+
+# Emoji mapping for HTTP methods
+METHOD_EMOJIS = {
+    'GET': '📥',
+    'POST': '📤',
+    'PUT': '✏️',
+    'PATCH': '🔧',
+    'DELETE': '🗑️',
+}
+
+def get_method_style(method: str) -> tuple[str, str]:
+    """Returns (color_code, emoji) for HTTP method"""
+    method_upper = method.upper()
+    emoji = METHOD_EMOJIS.get(method_upper, '📡')
+    
+    color_map = {
+        'GET': Colors.GET,
+        'POST': Colors.POST,
+        'PUT': Colors.PUT,
+        'PATCH': Colors.PATCH,
+        'DELETE': Colors.DELETE,
+    }
+    color = color_map.get(method_upper, Colors.DEFAULT)
+    
+    return color, emoji
+
 # Simple comment for testing commit and push
 
 app = FastAPI(
@@ -47,13 +84,14 @@ app.add_middleware(
 @app.middleware("http")
 async def timing_middleware(request: Request, call_next):
     start_time = time.time()
-    logger.info(f"REQUEST: {request.method} {request.url.path} - START")
+    color, emoji = get_method_style(request.method)
+    logger.info(f"{color}{emoji} REQUEST: {request.method} {request.url.path} - START{Colors.RESET}")
     
     response = await call_next(request)
     
     end_time = time.time()
     duration = end_time - start_time
-    logger.info(f"REQUEST: {request.method} {request.url.path} - END (Duration: {duration:.3f}s)")
+    logger.info(f"{color}{emoji} REQUEST: {request.method} {request.url.path} - END (Duration: {duration:.3f}s){Colors.RESET}")
     
     return response
 
