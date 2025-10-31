@@ -642,6 +642,7 @@ def create_recommendations_table_if_not_exists(engine=None) -> bool:
                     information_json TEXT,
                     priority VARCHAR(50) NOT NULL,
                     status VARCHAR(50) NOT NULL,
+                    source_job_id INTEGER,
                     created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
                     updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
                 );
