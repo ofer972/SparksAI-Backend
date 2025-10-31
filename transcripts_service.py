@@ -101,6 +101,76 @@ async def get_transcripts(conn: Connection = Depends(get_db_connection)):
             detail=f"Failed to fetch transcripts: {str(e)}"
         )
 
+@transcripts_router.get("/transcripts/getLatestDaily")
+async def get_latest_daily_transcript(
+    team_name: str = Query(..., description="Team name for Daily transcript"),
+    conn: Connection = Depends(get_db_connection)
+):
+    """
+    Get the latest Daily transcript for a team. Returns 204 if none.
+    """
+    try:
+        validated_team = validate_name(team_name, "team_name")
+        query = text(f"""
+            SELECT *
+            FROM {config.TRANSCRIPTS_TABLE}
+            WHERE type = 'Daily'
+              AND team_name = :team_name
+            ORDER BY transcript_date DESC
+            LIMIT 1
+        """)
+        result = conn.execute(query, {"team_name": validated_team})
+        row = result.fetchone()
+        if not row:
+            from fastapi import Response
+            return Response(status_code=204)
+        return {
+            "success": True,
+            "data": {"transcript": dict(row._mapping)},
+            "message": f"Retrieved latest Daily transcript for team '{validated_team}'"
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error fetching latest Daily transcript for {team_name}: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to fetch latest Daily transcript: {str(e)}")
+
+
+@transcripts_router.get("/transcripts/getLatestPISync")
+async def get_latest_pi_sync_transcript(
+    pi_name: str = Query(..., description="PI name for PI sync transcript"),
+    conn: Connection = Depends(get_db_connection)
+):
+    """
+    Get the latest PI sync transcript. Returns 204 if none.
+    """
+    try:
+        validated_pi = validate_name(pi_name, "pi_name")
+        query = text(f"""
+            SELECT *
+            FROM {config.TRANSCRIPTS_TABLE}
+            WHERE type = 'PI Sync'
+              AND pi = :pi_name
+            ORDER BY transcript_date DESC
+            LIMIT 1
+        """)
+        result = conn.execute(query, {"pi_name": validated_pi})
+        row = result.fetchone()
+        if not row:
+            from fastapi import Response
+            return Response(status_code=204)
+        return {
+            "success": True,
+            "data": {"transcript": dict(row._mapping)},
+            "message": f"Retrieved latest PI sync transcript for '{validated_pi}'"
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error fetching latest PI sync transcript for {pi_name}: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to fetch latest PI sync transcript: {str(e)}")
+
+
 @transcripts_router.get("/transcripts/{id}")
 async def get_transcript(id: int, conn: Connection = Depends(get_db_connection)):
     """
@@ -153,76 +223,6 @@ async def get_transcript(id: int, conn: Connection = Depends(get_db_connection))
             status_code=500,
             detail=f"Failed to fetch transcript: {str(e)}"
         )
-
-
-@transcripts_router.get("/transcripts/getLatestDaily")
-async def get_latest_daily_transcript(
-    team_name: str = Query(..., description="Team name for Daily transcript"),
-    conn: Connection = Depends(get_db_connection)
-):
-    """
-    Get the latest Daily transcript for a team. Returns 204 if none.
-    """
-    try:
-        validated_team = validate_name(team_name, "team_name")
-        query = text(f"""
-            SELECT *
-            FROM {config.TRANSCRIPTS_TABLE}
-            WHERE type = 'Daily'
-              AND team_name = :team_name
-            ORDER BY transcript_date DESC
-            LIMIT 1
-        """)
-        result = conn.execute(query, {"team_name": validated_team})
-        row = result.fetchone()
-        if not row:
-            from fastapi import Response
-            return Response(status_code=204)
-        return {
-            "success": True,
-            "data": {"transcript": dict(row._mapping)},
-            "message": f"Retrieved latest Daily transcript for team '{validated_team}'"
-        }
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error(f"Error fetching latest Daily transcript for {team_name}: {e}")
-        raise HTTPException(status_code=500, detail=f"Failed to fetch latest Daily transcript: {str(e)}")
-
-
-@transcripts_router.get("/transcripts/getLatestPISync")
-async def get_latest_pi_sync_transcript(
-    pi_name: str = Query(..., description="PI name for PI sync transcript"),
-    conn: Connection = Depends(get_db_connection)
-):
-    """
-    Get the latest PI sync transcript. Returns 204 if none.
-    """
-    try:
-        validated_pi = validate_name(pi_name, "pi_name")
-        query = text(f"""
-            SELECT *
-            FROM {config.TRANSCRIPTS_TABLE}
-            WHERE type = 'PI sync'
-              AND team_name = :pi_name
-            ORDER BY transcript_date DESC
-            LIMIT 1
-        """)
-        result = conn.execute(query, {"pi_name": validated_pi})
-        row = result.fetchone()
-        if not row:
-            from fastapi import Response
-            return Response(status_code=204)
-        return {
-            "success": True,
-            "data": {"transcript": dict(row._mapping)},
-            "message": f"Retrieved latest PI sync transcript for '{validated_pi}'"
-        }
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error(f"Error fetching latest PI sync transcript for {pi_name}: {e}")
-        raise HTTPException(status_code=500, detail=f"Failed to fetch latest PI sync transcript: {str(e)}")
 
 
 @transcripts_router.post("/transcripts/upload-team")
