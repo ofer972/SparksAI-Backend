@@ -80,7 +80,8 @@ async def get_transcripts(conn: Connection = Depends(get_db_connection)):
                 "type": row[3],
                 "file_name": row[4],
                 "raw_text": raw_text_content,
-                "origin": row[6]
+                "origin": row[6],
+                "pi": row[7]
             }
             transcripts.append(transcript_dict)
         
