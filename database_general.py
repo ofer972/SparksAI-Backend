@@ -152,15 +152,16 @@ def get_top_ai_cards(team_name: str, limit: int = 4, conn: Connection = None) ->
 
 def get_team_ai_card_by_id(card_id: int, conn: Connection = None) -> Optional[Dict[str, Any]]:
     """
-    Get a single team AI summary card by ID from team_ai_summary_cards table.
+    Get a single team AI summary card by ID from ai_summary table.
     Uses parameterized queries to prevent SQL injection.
+    Returns all fields including source_job_id.
     
     Args:
         card_id (int): The ID of the team AI card to retrieve
         conn (Connection): Database connection from FastAPI dependency
         
     Returns:
-        dict: Team AI card dictionary or None if not found
+        dict: Team AI card dictionary (includes source_job_id) or None if not found
     """
     try:
         # SECURE: Parameterized query prevents SQL injection
@@ -291,15 +292,16 @@ def get_recommendation_by_id(recommendation_id: int, conn: Connection = None) ->
 
 def get_pi_ai_card_by_id(card_id: int, conn: Connection = None) -> Optional[Dict[str, Any]]:
     """
-    Get a single PI AI summary card by ID from pi_ai_summary_cards table.
+    Get a single PI AI summary card by ID from ai_summary table.
     Uses parameterized queries to prevent SQL injection.
+    Returns all fields including source_job_id.
 
     Args:
         card_id (int): The ID of the PI AI card to retrieve
         conn (Connection): Database connection from FastAPI dependency
 
     Returns:
-        dict: PI AI card dictionary or None if not found
+        dict: PI AI card dictionary (includes source_job_id) or None if not found
     """
     try:
         query = text(f"""

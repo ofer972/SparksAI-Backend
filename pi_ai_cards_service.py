@@ -168,6 +168,7 @@ async def get_pi_ai_cards_collection(conn: Connection = Depends(get_db_connectio
                 priority,
                 description,
                 source,
+                source_job_id,
                 pi
             FROM {config.PI_AI_CARDS_TABLE}
             ORDER BY id DESC 
@@ -197,7 +198,8 @@ async def get_pi_ai_cards_collection(conn: Connection = Depends(get_db_connectio
                 "priority": row[5],
                 "description": description_text,
                 "source": row[7],
-                "pi": row[8]
+                "source_job_id": row[8],
+                "pi": row[9]
             }
             cards.append(card_dict)
         
