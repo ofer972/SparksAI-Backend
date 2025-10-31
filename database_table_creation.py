@@ -643,8 +643,7 @@ def create_recommendations_table_if_not_exists(engine=None) -> bool:
                     priority VARCHAR(50) NOT NULL,
                     status VARCHAR(50) NOT NULL,
                     created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
-                    updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
-                    UNIQUE (team_name, date)
+                    updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
                 );
                 
                 CREATE INDEX idx_recommendations_team_date ON public.recommendations(team_name, date DESC);
