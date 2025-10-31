@@ -5,6 +5,7 @@ import os
 import logging
 import base64
 import time
+from database_connection import _current_request_path
 
 # Import service modules
 from teams_service import teams_router
@@ -81,20 +82,35 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+# Paths that should skip START message logging
+_SKIP_START_LOG_PATHS = {"/api/v1/agent-jobs/next-pending"}
+
 # Add timing middleware to log request/response times
 @app.middleware("http")
 async def timing_middleware(request: Request, call_next):
     start_time = time.time()
     color, emoji = get_method_style(request.method)
-    logger.info(f"{color}{emoji} REQUEST: {request.method} {request.url.path} - START{Colors.RESET}")
+    request_path = request.url.path
     
-    response = await call_next(request)
+    # Set request path in context variable for SQL logging control
+    _current_request_path.set(request_path)
     
-    end_time = time.time()
-    duration = end_time - start_time
-    logger.info(f"{color}{emoji} REQUEST: {request.method} {request.url.path} - END (Duration: {duration:.3f}s){Colors.RESET}")
-    
-    return response
+    try:
+        # Skip START logging for specific paths
+        if request_path not in _SKIP_START_LOG_PATHS:
+            logger.info(f"{color}{emoji} REQUEST: {request.method} {request_path} - START{Colors.RESET}")
+        
+        response = await call_next(request)
+        
+        end_time = time.time()
+        duration = end_time - start_time
+        status_code = response.status_code
+        logger.info(f"{color}{emoji} REQUEST: {request.method} {request_path} - END (Duration: {duration:.3f}s) - Status: {status_code}{Colors.RESET}")
+        
+        return response
+    finally:
+        # Clear context variable after request
+        _current_request_path.set(None)
 
 # Include service routers
 app.include_router(teams_router, prefix="/api/v1", tags=["teams"])
@@ -198,4 +214,4 @@ if __name__ == "__main__":
     workers = int(os.getenv("WORKERS", 1))
     
     print(f"Starting server on port {port} with {workers} worker(s)")
-    uvicorn.run(app, host="0.0.0.0", port=port, workers=workers)
+    uvicorn.run(app, host="0.0.0.0", port=port, workers=workers, access_log=False)

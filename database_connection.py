@@ -12,13 +12,19 @@ from sqlalchemy import create_engine, text, event
 from sqlalchemy.engine import Engine
 from typing import Optional
 import logging
-import os
+from contextvars import ContextVar
 
 logger = logging.getLogger(__name__)
 
 # Control SQL logging via environment variable (defaults to enabled)
 _sql_log_env = os.getenv('SQL_LOG_ENABLED', 'true').strip().lower()
 SQL_LOG_ENABLED = _sql_log_env in ('1', 'true', 'yes', 'on')
+
+# Context variable to store current request path for SQL logging control
+_current_request_path: ContextVar[Optional[str]] = ContextVar('current_request_path', default=None)
+
+# Paths that should skip SQL logging
+_SKIP_SQL_LOG_PATHS = {"/api/v1/agent-jobs/next-pending"}
 
 # Global engine cache to prevent multiple engine creation
 _cached_engine = None
@@ -33,6 +39,11 @@ def receive_before_cursor_execute(conn, cursor, statement, parameters, context, 
 def receive_after_cursor_execute(conn, cursor, statement, parameters, context, executemany):
     """Log SQL query execution time"""
     if SQL_LOG_ENABLED and hasattr(context, '_query_start_time'):
+        # Check if we should skip SQL logging for this request path
+        current_path = _current_request_path.get()
+        if current_path in _SKIP_SQL_LOG_PATHS:
+            return  # Skip SQL logging for this path
+        
         total_time = time.time() - context._query_start_time
         # Truncate long queries for readability
         query = statement if len(statement) < 200 else statement[:200] + "..."
