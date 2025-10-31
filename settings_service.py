@@ -86,62 +86,6 @@ async def call_llm_reset_settings() -> None:
         # Don't fail the request if LLM service is unavailable
 
 
-@settings_router.put("/settings/{setting_key}")
-async def update_setting(
-    setting_key: str,
-    value: str = Query(..., description="The value to set"),
-    conn: Connection = Depends(get_db_connection)
-):
-    """
-    Update a single global setting in the database.
-    
-    Uses UPSERT logic (INSERT ... ON CONFLICT UPDATE).
-    After successful update, calls LLM service /reset-settings to clear cache.
-    
-    Args:
-        setting_key: The setting key to update (path parameter)
-        value: The value to set (query parameter)
-        
-    Returns:
-        JSON response with success status and message
-    """
-    try:
-        # Update setting in database
-        success = set_setting_db(
-            setting_key=setting_key,
-            setting_value=value,
-            updated_by='admin',
-            conn=conn
-        )
-        
-        if not success:
-            raise HTTPException(
-                status_code=500,
-                detail=f"Failed to update setting '{setting_key}'"
-            )
-        
-        # Call LLM service to reset settings cache
-        await call_llm_reset_settings()
-        
-        return {
-            "success": True,
-            "data": {
-                "setting_key": setting_key,
-                "setting_value": value
-            },
-            "message": f"Setting '{setting_key}' updated successfully"
-        }
-    
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error(f"Error updating setting '{setting_key}': {e}")
-        raise HTTPException(
-            status_code=500,
-            detail=f"Failed to update setting: {str(e)}"
-        )
-
-
 @settings_router.put("/settings/batch")
 async def update_settings_batch(
     request: BatchSettingsUpdateRequest,
@@ -201,4 +145,60 @@ async def update_settings_batch(
         raise HTTPException(
             status_code=500,
             detail=f"Failed to update settings: {str(e)}"
+        )
+
+
+@settings_router.put("/settings/{setting_key}")
+async def update_setting(
+    setting_key: str,
+    value: str = Query(..., description="The value to set"),
+    conn: Connection = Depends(get_db_connection)
+):
+    """
+    Update a single global setting in the database.
+    
+    Uses UPSERT logic (INSERT ... ON CONFLICT UPDATE).
+    After successful update, calls LLM service /reset-settings to clear cache.
+    
+    Args:
+        setting_key: The setting key to update (path parameter)
+        value: The value to set (query parameter)
+        
+    Returns:
+        JSON response with success status and message
+    """
+    try:
+        # Update setting in database
+        success = set_setting_db(
+            setting_key=setting_key,
+            setting_value=value,
+            updated_by='admin',
+            conn=conn
+        )
+        
+        if not success:
+            raise HTTPException(
+                status_code=500,
+                detail=f"Failed to update setting '{setting_key}'"
+            )
+        
+        # Call LLM service to reset settings cache
+        await call_llm_reset_settings()
+        
+        return {
+            "success": True,
+            "data": {
+                "setting_key": setting_key,
+                "setting_value": value
+            },
+            "message": f"Setting '{setting_key}' updated successfully"
+        }
+    
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error updating setting '{setting_key}': {e}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to update setting: {str(e)}"
         )
