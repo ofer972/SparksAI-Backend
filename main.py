@@ -34,8 +34,8 @@ class Colors:
     GET = '\033[92m'      # Bright Green
     POST = '\033[96m'     # Cyan (Bright Cyan)
     PUT = '\033[93m'      # Yellow
-    PATCH = '\033[95m'   # Magenta
-    DELETE = '\033[91m'  # Red
+    PATCH = '\033[34m'    # Dark Blue
+    DELETE = '\033[95m'   # Magenta
     DEFAULT = '\033[90m'  # Gray
 
 # Emoji mapping for HTTP methods

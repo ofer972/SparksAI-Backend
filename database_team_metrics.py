@@ -202,7 +202,7 @@ def get_sprints_with_total_issues_db(team_name: str, sprint_status: str = None, 
         conn (Connection): Database connection from FastAPI dependency
     
     Returns:
-        list: List of sprint dictionaries with sprint_id, name, and total_issues
+        list: List of sprint dictionaries with sprint_id, name, total_issues, start_date, end_date, and sprint_goal
     """
     try:
         # SECURE: Parameterized query prevents SQL injection
@@ -210,7 +210,10 @@ def get_sprints_with_total_issues_db(team_name: str, sprint_status: str = None, 
             SELECT 
                 s.sprint_id, 
                 s.name,
-                COUNT(i.issue_id) as total_issues
+                COUNT(i.issue_id) as total_issues,
+                s.start_date,
+                s.end_date,
+                s.goal as sprint_goal
             FROM public.jira_sprints s
             LEFT JOIN public.jira_issues i ON (
                 s.sprint_id = i.current_sprint_id AND i.team_name = :team_name
@@ -234,7 +237,7 @@ def get_sprints_with_total_issues_db(team_name: str, sprint_status: str = None, 
             sql_query += " AND s.state = :sprint_status"
         
         sql_query += """
-            GROUP BY s.sprint_id, s.name, s.end_date
+            GROUP BY s.sprint_id, s.name, s.end_date, s.start_date, s.goal
             ORDER BY s.end_date DESC
             LIMIT 10;"""
         
@@ -253,7 +256,10 @@ def get_sprints_with_total_issues_db(team_name: str, sprint_status: str = None, 
             sprints.append({
                 'sprint_id': row[0],
                 'name': row[1],
-                'total_issues': int(row[2]) if row[2] else 0
+                'total_issues': int(row[2]) if row[2] else 0,
+                'start_date': row[3].strftime('%Y-%m-%d') if row[3] else None,
+                'end_date': row[4].strftime('%Y-%m-%d') if row[4] else None,
+                'sprint_goal': row[5] if row[5] else None
             })
         
         return sprints
