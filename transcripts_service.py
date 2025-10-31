@@ -431,3 +431,53 @@ async def upload_pi_transcript(
             status_code=500,
             detail=f"Failed to upload PI transcript: {str(e)}"
         )
+
+
+@transcripts_router.delete("/transcripts/{id}")
+async def delete_transcript(
+    id: int,
+    conn: Connection = Depends(get_db_connection)
+):
+    """
+    Delete a transcript by ID.
+    
+    Args:
+        id: The ID of the transcript to delete
+    
+    Returns:
+        JSON response with success message or 404 if not found
+    """
+    try:
+        # SECURE: Parameterized query prevents SQL injection
+        query = text(f"""
+            DELETE FROM {config.TRANSCRIPTS_TABLE} 
+            WHERE id = :id
+        """)
+        
+        logger.info(f"Deleting transcript with ID {id} from {config.TRANSCRIPTS_TABLE}")
+        
+        result = conn.execute(query, {"id": id})
+        conn.commit()
+        
+        if result.rowcount == 0:
+            raise HTTPException(
+                status_code=404,
+                detail=f"Transcript with ID {id} not found"
+            )
+        
+        return {
+            "success": True,
+            "data": {"id": id},
+            "message": f"Transcript {id} deleted successfully"
+        }
+    
+    except HTTPException:
+        # Re-raise HTTP exceptions (like the 404 error above)
+        raise
+    except Exception as e:
+        logger.error(f"Error deleting transcript {id}: {e}")
+        conn.rollback()
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to delete transcript: {str(e)}"
+        )

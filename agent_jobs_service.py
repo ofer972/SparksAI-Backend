@@ -515,3 +515,53 @@ async def update_agent_job(
         logger.error(f"Error updating agent job {job_id}: {e}")
         conn.rollback()
         raise HTTPException(status_code=500, detail=f"Failed to update agent job: {str(e)}")
+
+
+@agent_jobs_router.delete("/agent-jobs/{job_id}")
+async def delete_agent_job(
+    job_id: int,
+    conn: Connection = Depends(get_db_connection)
+):
+    """
+    Delete an agent job by ID.
+    
+    Args:
+        job_id: The ID of the agent job to delete
+    
+    Returns:
+        JSON response with success message or 404 if not found
+    """
+    try:
+        # SECURE: Parameterized query prevents SQL injection
+        query = text(f"""
+            DELETE FROM {config.AGENT_JOBS_TABLE} 
+            WHERE job_id = :job_id
+        """)
+        
+        logger.info(f"Deleting agent job with ID {job_id} from {config.AGENT_JOBS_TABLE}")
+        
+        result = conn.execute(query, {"job_id": job_id})
+        conn.commit()
+        
+        if result.rowcount == 0:
+            raise HTTPException(
+                status_code=404,
+                detail=f"Agent job with ID {job_id} not found"
+            )
+        
+        return {
+            "success": True,
+            "data": {"job_id": job_id},
+            "message": f"Agent job {job_id} deleted successfully"
+        }
+    
+    except HTTPException:
+        # Re-raise HTTP exceptions (like the 404 error above)
+        raise
+    except Exception as e:
+        logger.error(f"Error deleting agent job {job_id}: {e}")
+        conn.rollback()
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to delete agent job: {str(e)}"
+        )
