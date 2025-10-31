@@ -96,6 +96,7 @@ def get_top_ai_cards(team_name: str, limit: int = 4, conn: Connection = None) ->
                            PARTITION BY card_type 
                            ORDER BY 
                                date DESC,
+                               updated_at DESC,
                                CASE priority 
                                    WHEN 'Critical' THEN 1 
                                    WHEN 'High' THEN 2 
