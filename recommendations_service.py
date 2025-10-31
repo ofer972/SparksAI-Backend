@@ -209,6 +209,7 @@ class RecommendationCreateRequest(BaseModel):
     priority: Optional[str] = None
     status: Optional[str] = None
     information_json: Optional[str] = None
+    source_job_id: Optional[int] = None
 
 
 class RecommendationUpdateRequest(BaseModel):
@@ -220,6 +221,7 @@ class RecommendationUpdateRequest(BaseModel):
     priority: Optional[str] = None
     status: Optional[str] = None
     information_json: Optional[str] = None
+    source_job_id: Optional[int] = None
 
 
 @recommendations_router.post("/recommendations")

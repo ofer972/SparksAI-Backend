@@ -420,7 +420,7 @@ def create_recommendation(data: Dict[str, Any], conn: Connection = None) -> Dict
     try:
         allowed_columns = {
             "team_name", "date", "action_text", "rational", "full_information",
-            "priority", "status", "information_json"
+            "priority", "status", "information_json", "source_job_id"
         }
         filtered = {k: v for k, v in data.items() if k in allowed_columns}
         if not filtered:
@@ -452,7 +452,7 @@ def update_recommendation_by_id(recommendation_id: int, updates: Dict[str, Any],
     try:
         allowed_columns = {
             "team_name", "date", "action_text", "rational", "full_information",
-            "priority", "status", "information_json"
+            "priority", "status", "information_json", "source_job_id"
         }
         filtered = {k: v for k, v in updates.items() if k in allowed_columns}
         if not filtered:
