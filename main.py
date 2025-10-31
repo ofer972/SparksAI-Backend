@@ -82,8 +82,8 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Paths that should skip START message logging
-_SKIP_START_LOG_PATHS = {"/api/v1/agent-jobs/next-pending"}
+# Paths that should skip START and END message logging
+_SKIP_LOG_PATHS = {"/api/v1/agent-jobs/next-pending"}
 
 # Add timing middleware to log request/response times
 @app.middleware("http")
@@ -97,15 +97,17 @@ async def timing_middleware(request: Request, call_next):
     
     try:
         # Skip START logging for specific paths
-        if request_path not in _SKIP_START_LOG_PATHS:
+        if request_path not in _SKIP_LOG_PATHS:
             logger.info(f"{color}{emoji} REQUEST: {request.method} {request_path} - START{Colors.RESET}")
         
         response = await call_next(request)
         
-        end_time = time.time()
-        duration = end_time - start_time
-        status_code = response.status_code
-        logger.info(f"{color}{emoji} REQUEST: {request.method} {request_path} - END (Duration: {duration:.3f}s) - Status: {status_code}{Colors.RESET}")
+        # Skip END logging for specific paths
+        if request_path not in _SKIP_LOG_PATHS:
+            end_time = time.time()
+            duration = end_time - start_time
+            status_code = response.status_code
+            logger.info(f"{color}{emoji} REQUEST: {request.method} {request_path} - END (Duration: {duration:.3f}s) - Status: {status_code}{Colors.RESET}")
         
         return response
     finally:
