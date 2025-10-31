@@ -102,11 +102,15 @@ async def timing_middleware(request: Request, call_next):
         
         response = await call_next(request)
         
-        # Skip END logging for specific paths
-        if request_path not in _SKIP_LOG_PATHS:
-            end_time = time.time()
-            duration = end_time - start_time
-            status_code = response.status_code
+        end_time = time.time()
+        duration = end_time - start_time
+        status_code = response.status_code
+        
+        # Always log errors (4xx, 5xx) even for suppressed paths
+        # Skip successful responses (2xx, 3xx) for specific paths
+        should_log = request_path not in _SKIP_LOG_PATHS or status_code >= 400
+        
+        if should_log:
             logger.info(f"{color}{emoji} REQUEST: {request.method} {request_path} - END (Duration: {duration:.3f}s) - Status: {status_code}{Colors.RESET}")
         
         return response
