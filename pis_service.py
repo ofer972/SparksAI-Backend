@@ -294,6 +294,10 @@ async def get_pi_status_for_today(
         if plan_grace_period is None:
             plan_grace_period = 5
         
+        # Set default value of "Epic" for issue_type if empty/None
+        if issue_type is None or issue_type == "":
+            issue_type = "Epic"
+        
         logger.info(f"Fetching PI status for today")
         logger.info(f"Parameters: pi={pi}, project={project}, issue_type={issue_type}, team={team}, plan_grace_period={plan_grace_period}")
         
