@@ -40,7 +40,8 @@ class AIChatRequest(BaseModel):
     """Request model for AI chat endpoint"""
     conversation_id: Optional[str] = Field(None, description="Conversation ID for tracking chat sessions")
     question: Optional[str] = Field(None, description="The user's question")
-    username: Optional[str] = Field(None, description="Username who requested the chat")
+    user_id: Optional[str] = Field(None, description="User ID who requested the chat")
+    prompt_name: Optional[str] = Field(None, description="Prompt name")
     selected_team: Optional[str] = Field(None, description="Selected team name")
     selected_pi: Optional[str] = Field(None, description="Selected PI name")
     chat_type: Optional[ChatType] = Field(None, description="Type of chat")
@@ -53,7 +54,7 @@ class AIChatRequest(BaseModel):
 
 def get_or_create_chat_history(
     conversation_id: Optional[str],
-    username: Optional[str],
+    user_id: Optional[str],
     team: Optional[str],
     pi: Optional[str],
     chat_type: Optional[str],
@@ -64,7 +65,7 @@ def get_or_create_chat_history(
     
     Args:
         conversation_id: Existing conversation ID (UUID)
-        username: Username (required for new conversations)
+        user_id: User ID (required for new conversations)
         team: Team name (required for new conversations)
         pi: PI name (required for new conversations)
         chat_type: Chat type (required for new conversations)
@@ -74,7 +75,7 @@ def get_or_create_chat_history(
         Tuple of (conversation_id as string, history_json dict)
     """
     # Provide defaults for required fields
-    username = username or "unknown"
+    username = user_id or "unknown"
     team = team or "unknown"
     pi = pi or "unknown"
     chat_type = chat_type or "Direct_chat"
@@ -213,7 +214,7 @@ async def call_llm_service(
     conversation_id: str,
     question: str,
     history_json: Dict[str, Any],
-    username: Optional[str],
+    user_id: Optional[str],
     selected_team: Optional[str],
     selected_pi: Optional[str],
     chat_type: Optional[str],
@@ -227,7 +228,7 @@ async def call_llm_service(
         conversation_id: Conversation ID
         question: User's question
         history_json: Chat history JSON
-        username: Username
+        user_id: User ID
         selected_team: Team name
         selected_pi: PI name
         chat_type: Chat type
@@ -243,7 +244,7 @@ async def call_llm_service(
         "conversation_id": conversation_id,
         "question": question,
         "history_json": history_json,
-        "username": username,
+        "username": user_id,
         "selected_team": selected_team,
         "selected_pi": selected_pi,
         "chat_type": chat_type,
@@ -307,7 +308,8 @@ async def ai_chat(
         logger.info("=" * 60)
         logger.info(f"  conversation_id: {request.conversation_id}")
         logger.info(f"  question: {request.question}")
-        logger.info(f"  username: {request.username}")
+        logger.info(f"  user_id: {request.user_id}")
+        logger.info(f"  prompt_name: {request.prompt_name}")
         logger.info(f"  selected_team: {request.selected_team}")
         logger.info(f"  selected_pi: {request.selected_pi}")
         logger.info(f"  chat_type: {request.chat_type}")
@@ -325,7 +327,7 @@ async def ai_chat(
         # 1. Get or create chat history
         conversation_id, history_json = get_or_create_chat_history(
             conversation_id=request.conversation_id,
-            username=request.username,
+            user_id=request.user_id,
             team=request.selected_team,
             pi=request.selected_pi,
             chat_type=chat_type_str,
@@ -576,7 +578,7 @@ async def ai_chat(
             conversation_id=conversation_id,
             question=request.question,
             history_json=history_json,
-            username=request.username,
+            user_id=request.user_id,
             selected_team=request.selected_team,
             selected_pi=request.selected_pi,
             chat_type=chat_type_str,
@@ -605,8 +607,10 @@ async def ai_chat(
             "conversation_id": conversation_id,
             "question": request.question
         }
-        if request.username:
-            input_params["username"] = request.username
+        if request.user_id:
+            input_params["user_id"] = request.user_id
+        if request.prompt_name:
+            input_params["prompt_name"] = request.prompt_name
         if request.selected_team:
             input_params["selected_team"] = request.selected_team
         if request.selected_pi:
