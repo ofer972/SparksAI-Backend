@@ -151,7 +151,7 @@ async def get_pi_burndown(
     Parameters:
         pi: PI name (mandatory)
         project: Project key filter (optional)
-        issue_type: Issue type filter (optional, defaults to 'all')
+        issue_type: Issue type filter (optional, defaults to 'Epic')
         team: Team name filter (optional)
     
     Returns:
@@ -164,6 +164,10 @@ async def get_pi_burndown(
                 status_code=400,
                 detail="pi parameter is required"
             )
+        
+        # Set default value of "Epic" for issue_type if empty/None
+        if issue_type is None or issue_type == "":
+            issue_type = "Epic"
         
         logger.info(f"Fetching PI burndown data for PI: {pi}")
         logger.info(f"Filters: project={project}, issue_type={issue_type}, team={team}")

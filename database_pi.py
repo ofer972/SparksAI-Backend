@@ -98,8 +98,9 @@ def fetch_pi_burndown_data(pi_name: str, project_keys: str = None, issue_type: s
         if not pi_name:
             return []
         
-        # Default issue_type to 'all' if not provided
-        issue_type = 'all' if not issue_type or issue_type == 'all' else issue_type
+        # Default issue_type to 'Epic' if not provided (note: can still pass 'all' explicitly)
+        if not issue_type or issue_type == "":
+            issue_type = 'Epic'
         
         logger.info(f"Executing PI burndown query for PI: {pi_name}")
         logger.info(f"Filters: project_keys={project_keys}, issue_type={issue_type}, team_names={team_names}")
