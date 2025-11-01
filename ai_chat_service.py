@@ -538,6 +538,49 @@ async def ai_chat(
         else:
             logger.info("chat_type not provided; using default system message")
 
+        # 2.8.5. Handle dashboard chat types (PI_dashboard, Team_dashboard) - fetch content prompt
+        if chat_type_str in ["PI_dashboard", "Team_dashboard"]:
+            if conversation_context is None:  # Only set if not already set by other chat types
+                if not request.prompt_name or not request.prompt_name.strip():
+                    # Use default: fetch "{chat_type}-Content" from admin
+                    content_prompt_name = f"{chat_type_str}-Content"
+                    try:
+                        content_prompt = get_prompt_by_email_and_name(
+                            email_address='admin',
+                            prompt_name=content_prompt_name,
+                            conn=conn,
+                            active=True
+                        )
+                        if content_prompt and content_prompt.get('prompt_description'):
+                            conversation_context = str(content_prompt['prompt_description'])
+                            logger.info(f"Using default DB content prompt for '{content_prompt_name}' (length: {len(conversation_context)} chars)")
+                        else:
+                            logger.info(f"No active DB content prompt found for '{content_prompt_name}'")
+                    except Exception as e:
+                        logger.warning(f"Failed to fetch DB content prompt for '{content_prompt_name}': {e}")
+                else:
+                    # Use custom prompt: fetch from user_id with request.prompt_name
+                    custom_prompt_name = request.prompt_name.strip()
+                    try:
+                        custom_prompt = get_prompt_by_email_and_name(
+                            email_address=request.user_id or 'unknown',
+                            prompt_name=custom_prompt_name,
+                            conn=conn,
+                            active=True
+                        )
+                        if custom_prompt and custom_prompt.get('prompt_description'):
+                            conversation_context = str(custom_prompt['prompt_description'])
+                            # GREEN: prompt found
+                            logger.info(f"\033[92mprompt_name found!\033[0m (prompt_name='{custom_prompt_name}', user_id='{request.user_id}')")
+                            logger.info(f"Using custom DB prompt for '{custom_prompt_name}' (length: {len(conversation_context)} chars)")
+                        else:
+                            # RED: prompt not found
+                            logger.error(f"\033[91mprompt_name not found!\033[0m (prompt_name='{custom_prompt_name}', user_id='{request.user_id}')")
+                            logger.info(f"No active DB prompt found for prompt_name='{custom_prompt_name}' with user_id='{request.user_id}'")
+                    except Exception as e:
+                        # RED: prompt not found (error)
+                        logger.error(f"\033[91mprompt_name not found!\033[0m (prompt_name='{custom_prompt_name}', user_id='{request.user_id}'): {e}")
+
         # 2.9. On initial call, persist initial system/context snapshot into chat history
         try:
             is_initial_call = not history_json.get('messages')
