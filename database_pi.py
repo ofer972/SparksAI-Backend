@@ -201,3 +201,72 @@ def fetch_scope_changes_data(quarters: List[str], conn: Connection = None) -> Li
     except Exception as e:
         logger.error(f"Error fetching scope changes data: {e}")
         raise e
+
+
+def fetch_pi_summary_data(
+    target_pi_name: str = None,
+    target_project_keys: str = None,
+    target_issue_type: str = None,
+    target_team_names: str = None,
+    planned_grace_period_days: int = None,
+    conn: Connection = None
+) -> List[Dict[str, Any]]:
+    """
+    Fetch PI summary data from the database function get_pi_summary_data.
+    
+    Args:
+        target_pi_name (str, optional): PI name filter
+        target_project_keys (str, optional): Project keys filter
+        target_issue_type (str, optional): Issue type filter
+        target_team_names (str, optional): Team names filter
+        planned_grace_period_days (int, optional): Planned grace period in days
+        conn (Connection): Database connection from FastAPI dependency
+    
+    Returns:
+        list: List of dictionaries with PI summary data (all columns from SELECT *)
+    """
+    try:
+        logger.info(f"Executing PI summary query")
+        logger.info(f"Filters: pi={target_pi_name}, project={target_project_keys}, issue_type={target_issue_type}, team={target_team_names}, grace_period={planned_grace_period_days}")
+        
+        # SECURITY: Use parameterized query to prevent SQL injection
+        sql_query_text = text("""
+            SELECT * FROM public.get_pi_summary_data(
+                :target_pi_name_param,
+                :target_issue_type_param,
+                :target_project_keys_param,
+                :target_team_names_param,
+                :planned_grace_period_days_param
+            )
+        """)
+        
+        logger.info(f"Executing SQL for PI summary data")
+        
+        # Execute query with parameters (SECURE: prevents SQL injection)
+        result = conn.execute(sql_query_text, {
+            'target_pi_name_param': target_pi_name,
+            'target_issue_type_param': target_issue_type,
+            'target_project_keys_param': target_project_keys,
+            'target_team_names_param': target_team_names,
+            'planned_grace_period_days_param': planned_grace_period_days
+        })
+        
+        # Convert rows to list of dictionaries - return all columns as-is
+        summary_data = []
+        for row in result:
+            row_dict = dict(row._mapping)
+            
+            # Format array/list columns if present (following same pattern as other functions)
+            for col in row_dict.keys():
+                if isinstance(row_dict[col], list):
+                    row_dict[col] = ', '.join(row_dict[col])
+            
+            summary_data.append(row_dict)
+        
+        logger.info(f"Retrieved {len(summary_data)} PI summary records")
+        
+        return summary_data
+            
+    except Exception as e:
+        logger.error(f"Error fetching PI summary data: {e}")
+        raise e

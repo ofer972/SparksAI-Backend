@@ -11,7 +11,7 @@ from sqlalchemy.engine import Connection
 from typing import List, Dict, Any, Union
 import logging
 from database_connection import get_db_connection
-from database_pi import fetch_pi_predictability_data, fetch_pi_burndown_data, fetch_scope_changes_data
+from database_pi import fetch_pi_predictability_data, fetch_pi_burndown_data, fetch_scope_changes_data, fetch_pi_summary_data
 import config
 
 logger = logging.getLogger(__name__)
@@ -262,4 +262,64 @@ async def get_scope_changes(
         raise HTTPException(
             status_code=500,
             detail=f"Failed to fetch scope changes data: {str(e)}"
+        )
+
+
+@pis_router.get("/pis/get-pi-status-for-today")
+async def get_pi_status_for_today(
+    pi: str = Query(None, description="PI name filter"),
+    project: str = Query(None, description="Project key filter"),
+    issue_type: str = Query(None, description="Issue type filter"),
+    team: str = Query(None, description="Team name filter"),
+    plan_grace_period: int = Query(None, description="Planned grace period in days"),
+    conn: Connection = Depends(get_db_connection)
+):
+    """
+    Get PI status for today using the get_pi_summary_data database function.
+    
+    Returns all columns from the SELECT * query of get_pi_summary_data function.
+    
+    Parameters:
+        pi: PI name filter (optional)
+        project: Project key filter (optional)
+        issue_type: Issue type filter (optional)
+        team: Team name filter (optional)
+        plan_grace_period: Planned grace period in days (optional)
+    
+    Returns:
+        JSON response with PI summary data (all columns from database function)
+    """
+    try:
+        # Set default value of 5 for plan_grace_period if empty/None
+        if plan_grace_period is None:
+            plan_grace_period = 5
+        
+        logger.info(f"Fetching PI status for today")
+        logger.info(f"Parameters: pi={pi}, project={project}, issue_type={issue_type}, team={team}, plan_grace_period={plan_grace_period}")
+        
+        # Call database function
+        summary_data = fetch_pi_summary_data(
+            target_pi_name=pi,
+            target_project_keys=project,
+            target_issue_type=issue_type,
+            target_team_names=team,
+            planned_grace_period_days=plan_grace_period,
+            conn=conn
+        )
+        
+        return {
+            "success": True,
+            "data": summary_data,
+            "count": len(summary_data),
+            "message": f"Retrieved PI status data for {len(summary_data)} records"
+        }
+    
+    except HTTPException:
+        # Re-raise HTTP exceptions
+        raise
+    except Exception as e:
+        logger.error(f"Error fetching PI status for today: {e}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to fetch PI status for today: {str(e)}"
         )
