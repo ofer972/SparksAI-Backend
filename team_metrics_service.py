@@ -58,6 +58,60 @@ def validate_sprint_count(sprint_count: int) -> int:
     return sprint_count
 
 
+def get_cycle_time_status(cycle_time: float) -> str:
+    """
+    Determine cycle time status based on value.
+    
+    Args:
+        cycle_time: Cycle time in days
+    
+    Returns:
+        "green" if cycle_time < 10
+        "yellow" if 10 <= cycle_time <= 15
+        "red" if cycle_time > 15
+    """
+    if cycle_time < 10:
+        return "green"
+    elif cycle_time <= 15:
+        return "yellow"
+    else:
+        return "red"
+
+
+def get_predictability_status(predictability: float) -> str:
+    """
+    Determine predictability status based on value.
+    
+    Args:
+        predictability: Predictability percentage (0-100)
+    
+    Returns:
+        "green" if predictability >= 75
+        "yellow" if 60 <= predictability < 75
+        "red" if predictability < 60
+    """
+    if predictability >= 75:
+        return "green"
+    elif predictability >= 60:
+        return "yellow"
+    else:
+        return "red"
+
+
+def get_velocity_status(velocity: int) -> str:
+    """
+    Determine velocity status based on value.
+    Currently always returns "green" until a proper determination method is found.
+    
+    Args:
+        velocity: Velocity (issue count)
+    
+    Returns:
+        "green" (always for now)
+    """
+    return "green"
+
+
 @team_metrics_router.get("/team-metrics/get-avg-sprint-metrics")
 async def get_avg_sprint_metrics(
     team_name: str = Query(..., description="Team name to get metrics for"),
@@ -84,12 +138,20 @@ async def get_avg_sprint_metrics(
         # Get metrics from database function
         metrics = get_team_avg_sprint_metrics(validated_team_name, validated_sprint_count, conn)
         
+        # Calculate status for each metric
+        velocity_status = get_velocity_status(metrics['velocity'])
+        cycle_time_status = get_cycle_time_status(metrics['cycle_time'])
+        predictability_status = get_predictability_status(metrics['predictability'])
+        
         return {
             "success": True,
             "data": {
                 "velocity": metrics['velocity'],
                 "cycle_time": metrics['cycle_time'],
                 "predictability": metrics['predictability'],
+                "velocity_status": velocity_status,
+                "cycle_time_status": cycle_time_status,
+                "predictability_status": predictability_status,
                 "team_name": validated_team_name,
                 "sprint_count": validated_sprint_count
             },
