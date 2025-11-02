@@ -254,10 +254,11 @@ async def get_sprint_issues_with_epic_for_llm(
         
         # SECURE: Parameterized query prevents SQL injection
         # Using SELECT * to return all fields from the view
+        # sprint_ids is an array column, so we check if :sprint_id exists in that array
         query = text("""
             SELECT *
             FROM public.sprint_issues_with_epic_for_llm
-            WHERE sprint_id = :sprint_id AND team_name = :team_name
+            WHERE :sprint_id = ANY(sprint_ids) AND team_name = :team_name
         """)
         
         logger.info(f"Executing query to get sprint issues with epic for LLM for sprint_id: {sprint_id}, team_name: {validated_team_name}")

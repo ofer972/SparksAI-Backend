@@ -40,6 +40,10 @@ class Colors:
     PATCH = '\033[34m'    # Dark Blue
     DELETE = '\033[95m'   # Magenta
     DEFAULT = '\033[90m'  # Gray
+    # HTTP Status code colors
+    STATUS_SUCCESS = '\033[92m'      # Bright Green (for 2xx)
+    STATUS_CLIENT_ERROR = '\033[93m' # Yellow (for 4xx)
+    STATUS_SERVER_ERROR = '\033[91m' # Red (for 5xx)
 
 # Emoji mapping for HTTP methods
 METHOD_EMOJIS = {
@@ -65,6 +69,37 @@ def get_method_style(method: str) -> tuple[str, str]:
     color = color_map.get(method_upper, Colors.DEFAULT)
     
     return color, emoji
+
+
+def get_status_code_colors(status_code: int, method_color: str) -> tuple[str, str]:
+    """
+    Returns (log_line_color, status_code_color) based on status code.
+    
+    Logic:
+    - 2xx (success): Keep method color for line, green (bold) for status code
+    - 4xx (client error): Yellow (bold) for entire line
+    - 5xx (server error): Red (bold) for entire line
+    - Other: Default behavior
+    
+    Args:
+        status_code: HTTP status code
+        method_color: Original method color to preserve for 2xx
+    
+    Returns:
+        tuple: (log_line_color, status_code_color)
+    """
+    if 200 <= status_code < 300:
+        # 2xx - Keep method color, status code gets green (bold)
+        return method_color, Colors.STATUS_SUCCESS
+    elif 400 <= status_code < 500:
+        # 4xx - Yellow (bold) for entire line
+        return Colors.STATUS_CLIENT_ERROR, Colors.STATUS_CLIENT_ERROR
+    elif status_code >= 500:
+        # 5xx - Red (bold) for entire line
+        return Colors.STATUS_SERVER_ERROR, Colors.STATUS_SERVER_ERROR
+    else:
+        # 1xx, 3xx - Default color
+        return method_color, Colors.DEFAULT
 
 # Simple comment for testing commit and push
 
@@ -114,7 +149,32 @@ async def timing_middleware(request: Request, call_next):
         should_log = request_path not in _SKIP_LOG_PATHS or status_code >= 400
         
         if should_log:
-            logger.info(f"{color}{emoji} REQUEST: {request.method} {request_path} - END (Duration: {duration:.3f}s) - Status: {status_code}{Colors.RESET}")
+            # Get colors based on status code
+            # For 2xx: keep method color, for 4xx/5xx: override with status color
+            log_line_color, status_color = get_status_code_colors(status_code, color)
+            
+            # Apply bold formatting
+            if 400 <= status_code < 500:
+                # 4xx - Entire line yellow (bold)
+                bold_prefix = Colors.BOLD
+                status_bold = Colors.BOLD
+            elif status_code >= 500:
+                # 5xx - Entire line red (bold)
+                bold_prefix = Colors.BOLD
+                status_bold = Colors.BOLD
+            elif 200 <= status_code < 300:
+                # 2xx - Status code green (bold), line keeps method color (no bold on line)
+                bold_prefix = ""
+                status_bold = Colors.BOLD
+            else:
+                # 1xx, 3xx - Default, no bold
+                bold_prefix = ""
+                status_bold = ""
+            
+            logger.info(
+                f"{log_line_color}{bold_prefix}{emoji} REQUEST: {request.method} {request_path} - "
+                f"END (Duration: {duration:.3f}s) - Status: {status_color}{status_bold}{status_code}{Colors.RESET}"
+            )
         
         return response
     finally:
