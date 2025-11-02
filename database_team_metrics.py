@@ -114,32 +114,62 @@ def get_team_count_in_progress(team_name: str, conn: Connection = None) -> Dict[
         raise e
 
 
-def get_team_current_sprint_completion(team_name: str, conn: Connection = None) -> float:
+def get_team_current_sprint_progress(team_name: str, conn: Connection = None) -> Dict[str, Any]:
     """
-    Get completion rate for a team (percentage of completed issues in current active sprint).
-    Uses get_team_active_sprint_metrics helper function.
-    Copied exact logic from JiraDashboard-NEWUI project.
+    Get current sprint progress for a team with detailed breakdown.
+    Returns total issues, completed, in progress, to do counts, and completion percentage.
     
     Args:
         team_name (str): Team name
         conn (Connection): Database connection from FastAPI dependency
     
     Returns:
-        float: Completion rate as percentage (0-100)
+        dict: Dictionary with 'total_issues', 'completed_issues', 'in_progress_issues', 
+              'todo_issues', and 'percent_completed' values
     """
     try:
-        # Get active sprint metrics using helper function
-        metrics = get_team_active_sprint_metrics(team_name, conn)
-        total = metrics.get('total_issues', 0)
-        completed = metrics.get('completed_issues', 0)
+        # SECURE: Parameterized query prevents SQL injection
+        sql_query = """
+            SELECT 
+                COUNT(*) as total_issues,
+                COUNT(CASE WHEN status_category = 'Done' THEN 1 END) as completed_issues,
+                COUNT(CASE WHEN status_category = 'In Progress' THEN 1 END) as in_progress_issues,
+                COUNT(CASE WHEN status_category = 'To Do' THEN 1 END) as todo_issues,
+                (COUNT(CASE WHEN status_category = 'Done' THEN 1 END)::numeric * 100) 
+                    / NULLIF(COUNT(*), 0) as percent_completed
+            FROM public.jira_issues
+            WHERE team_name = :team_name
+            AND current_sprint_id IN (
+                SELECT sprint_id FROM public.jira_sprints 
+                WHERE state = 'active'
+            );
+        """
         
-        if total > 0:
-            return round((completed / total) * 100)
+        logger.info(f"Executing query to get current sprint progress for team: {team_name}")
+        logger.info(f"Parameters: team_name={team_name}")
+        
+        result = conn.execute(text(sql_query), {"team_name": team_name})
+        row = result.fetchone()
+        
+        if row:
+            return {
+                'total_issues': int(row[0]) if row[0] else 0,
+                'completed_issues': int(row[1]) if row[1] else 0,
+                'in_progress_issues': int(row[2]) if row[2] else 0,
+                'todo_issues': int(row[3]) if row[3] else 0,
+                'percent_completed': float(row[4]) if row[4] is not None else 0.0
+            }
         else:
-            return 0.0
+            return {
+                'total_issues': 0,
+                'completed_issues': 0,
+                'in_progress_issues': 0,
+                'todo_issues': 0,
+                'percent_completed': 0.0
+            }
             
     except Exception as e:
-        logger.error(f"Error fetching current sprint completion for team {team_name}: {e}")
+        logger.error(f"Error fetching current sprint progress for team {team_name}: {e}")
         raise e
 
 

@@ -14,7 +14,7 @@ from database_connection import get_db_connection
 from database_team_metrics import (
     get_team_avg_sprint_metrics,
     get_team_count_in_progress,
-    get_team_current_sprint_completion,
+    get_team_current_sprint_progress,
     get_sprints_with_total_issues_db,
     get_sprint_burndown_data_db,
     get_closed_sprints_data_db,
@@ -212,45 +212,55 @@ async def get_count_in_progress(
         )
 
 
-@team_metrics_router.get("/team-metrics/current-sprint-completion")
-async def get_current_sprint_completion(
-    team_name: str = Query(..., description="Team name to get completion rate for"),
+@team_metrics_router.get("/team-metrics/current-sprint-progress")
+async def get_current_sprint_progress(
+    team_name: str = Query(..., description="Team name to get sprint progress for"),
     conn: Connection = Depends(get_db_connection)
 ):
     """
-    Get current sprint completion rate for a specific team.
+    Get current sprint progress for a specific team with detailed breakdown.
     
-    Returns the percentage of completed issues in the current active sprint.
+    Returns total issues, completed, in progress, to do counts, and completion percentage
+    for the current active sprint.
     
     Args:
         team_name: Name of the team
     
     Returns:
-        JSON response with completion percentage
+        JSON response with sprint progress metrics including:
+        - total_issues: Total number of issues in active sprint
+        - completed_issues: Number of completed issues (status_category = 'Done')
+        - in_progress_issues: Number of issues in progress
+        - todo_issues: Number of issues in to do status
+        - percent_completed: Percentage of completed issues (0-100)
     """
     try:
         # Validate inputs
         validated_team_name = validate_team_name(team_name)
         
-        # Get completion rate from database function
-        completion_rate = get_team_current_sprint_completion(validated_team_name, conn)
+        # Get sprint progress data from database function
+        progress_data = get_team_current_sprint_progress(validated_team_name, conn)
         
         return {
             "success": True,
             "data": {
-                "completion_rate": completion_rate,
+                "total_issues": progress_data['total_issues'],
+                "completed_issues": progress_data['completed_issues'],
+                "in_progress_issues": progress_data['in_progress_issues'],
+                "todo_issues": progress_data['todo_issues'],
+                "percent_completed": progress_data['percent_completed'],
                 "team_name": validated_team_name
             },
-            "message": f"Retrieved current sprint completion rate for team '{validated_team_name}'"
+            "message": f"Retrieved current sprint progress for team '{validated_team_name}'"
         }
     
     except HTTPException:
         raise  # Re-raise FastAPI HTTPExceptions
     except Exception as e:
-        logger.error(f"Error fetching current sprint completion for team {validated_team_name}: {e}")
+        logger.error(f"Error fetching current sprint progress for team {validated_team_name}: {e}")
         raise HTTPException(
             status_code=500,
-            detail=f"Failed to fetch current sprint completion: {str(e)}"
+            detail=f"Failed to fetch current sprint progress: {str(e)}"
         )
 
 
