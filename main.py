@@ -22,6 +22,8 @@ from prompts_service import prompts_router
 from ai_chat_service import ai_chat_router
 from agent_llm_service import agent_llm_router
 from users_service import users_router
+from issues_service import issues_router
+from sprints_service import sprints_router
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -134,6 +136,8 @@ app.include_router(prompts_router, prefix="/api/v1", tags=["prompts"])
 app.include_router(ai_chat_router, prefix="/api/v1", tags=["ai-chat"])
 app.include_router(agent_llm_router, prefix="/api/v1", tags=["agent-llm"])
 app.include_router(users_router, prefix="/api/v1", tags=["users"])
+app.include_router(issues_router, prefix="/api/v1", tags=["issues"])
+app.include_router(sprints_router, prefix="/api/v1", tags=["sprints"])
 
 @app.get("/")
 async def root():

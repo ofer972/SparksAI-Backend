@@ -53,6 +53,10 @@ TRANSCRIPTS_SERVICE_PREFIX = "/transcripts"
 PROMPTS_SERVICE_PREFIX = "/prompts"
 # AI Chat Service
 AI_CHAT_SERVICE_PREFIX = "/ai-chat"
+# Issues Service
+ISSUES_SERVICE_PREFIX = "/issues"
+# Sprints Service
+SPRINTS_SERVICE_PREFIX = "/sprints"
 
 # --- Error Handling Configuration ---
 DEFAULT_ERROR_MESSAGE = "An unexpected error occurred"
