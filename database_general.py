@@ -345,7 +345,7 @@ def get_formatted_job_data_for_llm_followup(card_id: int, job_id: Optional[int],
         query = text("""
             SELECT *
             FROM get_job_data_for_llm_followup
-            WHERE id = :card_id AND job_id = :job_id
+            WHERE ai_card_id = :card_id AND job_id = :job_id
         """)
         
         logger.info(f"Executing query to get formatted job data for LLM followup (card_id={card_id}, job_id={job_id})")
