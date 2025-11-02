@@ -94,72 +94,6 @@ async def get_sprints(conn: Connection = Depends(get_db_connection)):
             detail=f"Failed to fetch sprints: {str(e)}"
         )
 
-@sprints_router.get("/sprints/{sprint_id}")
-async def get_sprint(
-    sprint_id: int,
-    conn: Connection = Depends(get_db_connection)
-):
-    """
-    Get a single sprint by ID.
-    
-    Returns all columns from the jira_sprints table for the specified sprint_id.
-    
-    Args:
-        sprint_id: The ID of the sprint to retrieve (int4)
-    
-    Returns:
-        JSON response with single sprint (all columns) or 404 if not found
-    """
-    try:
-        # SECURE: Parameterized query prevents SQL injection
-        query = text("""
-            SELECT *
-            FROM public.jira_sprints
-            WHERE sprint_id = :sprint_id
-        """)
-        
-        logger.info(f"Executing query to get sprint with ID: {sprint_id}")
-        
-        result = conn.execute(query, {"sprint_id": sprint_id})
-        row = result.fetchone()
-        
-        if not row:
-            raise HTTPException(
-                status_code=404,
-                detail=f"Sprint with ID {sprint_id} not found"
-            )
-        
-        # Convert row to dictionary - return all columns
-        sprint_dict = dict(row._mapping)
-        
-        # Format date fields if they exist
-        if 'start_date' in sprint_dict and sprint_dict['start_date']:
-            sprint_dict['start_date'] = sprint_dict['start_date'].strftime('%Y-%m-%d') if hasattr(sprint_dict['start_date'], 'strftime') else sprint_dict['start_date']
-        if 'end_date' in sprint_dict and sprint_dict['end_date']:
-            sprint_dict['end_date'] = sprint_dict['end_date'].strftime('%Y-%m-%d') if hasattr(sprint_dict['end_date'], 'strftime') else sprint_dict['end_date']
-        if 'created_at' in sprint_dict and sprint_dict['created_at']:
-            sprint_dict['created_at'] = sprint_dict['created_at'].isoformat() if hasattr(sprint_dict['created_at'], 'isoformat') else sprint_dict['created_at']
-        if 'updated_at' in sprint_dict and sprint_dict['updated_at']:
-            sprint_dict['updated_at'] = sprint_dict['updated_at'].isoformat() if hasattr(sprint_dict['updated_at'], 'isoformat') else sprint_dict['updated_at']
-        
-        return {
-            "success": True,
-            "data": {
-                "sprint": sprint_dict
-            },
-            "message": f"Retrieved sprint with ID {sprint_id}"
-        }
-    
-    except HTTPException:
-        # Re-raise HTTP exceptions (like the 404 error above)
-        raise
-    except Exception as e:
-        logger.error(f"Error fetching sprint {sprint_id}: {e}")
-        raise HTTPException(
-            status_code=500,
-            detail=f"Failed to fetch sprint: {str(e)}"
-        )
-
 @sprints_router.get("/sprints/active-sprint-summary-by-team")
 async def get_active_sprint_summary_by_team(
     team_name: str = Query(..., description="Team name to get active sprint summary for"),
@@ -227,5 +161,138 @@ async def get_active_sprint_summary_by_team(
         raise HTTPException(
             status_code=500,
             detail=f"Failed to fetch active sprint summary: {str(e)}"
+        )
+
+@sprints_router.get("/sprints/active-sprint-summary/{sprint_id}")
+async def get_active_sprint_summary(
+    sprint_id: int,
+    conn: Connection = Depends(get_db_connection)
+):
+    """
+    Get active sprint summary by sprint ID from the active_sprint_summary view.
+    
+    Returns all columns from the view for the specified sprint_id.
+    
+    Args:
+        sprint_id: The ID of the sprint to get summary for (int4)
+    
+    Returns:
+        JSON response with active sprint summary (all columns from view) or 404 if not found
+    """
+    try:
+        # SECURE: Parameterized query prevents SQL injection
+        query = text("""
+            SELECT *
+            FROM public.active_sprint_summary
+            WHERE sprint_id = :sprint_id
+        """)
+        
+        logger.info(f"Executing query to get active sprint summary for sprint_id: {sprint_id}")
+        
+        result = conn.execute(query, {"sprint_id": sprint_id})
+        row = result.fetchone()
+        
+        if not row:
+            raise HTTPException(
+                status_code=404,
+                detail=f"Active sprint summary with sprint_id {sprint_id} not found"
+            )
+        
+        # Convert row to dictionary - return all columns from view
+        summary_dict = dict(row._mapping)
+        
+        # Format date/datetime fields if they exist
+        for key, value in summary_dict.items():
+            if value is not None:
+                if hasattr(value, 'strftime'):
+                    # Date or timestamp field
+                    if 'date' in key.lower() or 'time' in key.lower():
+                        summary_dict[key] = value.strftime('%Y-%m-%d %H:%M:%S') if hasattr(value, 'strftime') else str(value)
+                elif hasattr(value, 'isoformat'):
+                    # Datetime field
+                    summary_dict[key] = value.isoformat()
+        
+        return {
+            "success": True,
+            "data": {
+                "summary": summary_dict
+            },
+            "message": f"Retrieved active sprint summary for sprint_id {sprint_id}"
+        }
+    
+    except HTTPException:
+        # Re-raise HTTP exceptions (like the 404 error above)
+        raise
+    except Exception as e:
+        logger.error(f"Error fetching active sprint summary for sprint_id {sprint_id}: {e}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to fetch active sprint summary: {str(e)}"
+        )
+
+@sprints_router.get("/sprints/{sprint_id}")
+async def get_sprint(
+    sprint_id: int,
+    conn: Connection = Depends(get_db_connection)
+):
+    """
+    Get a single sprint by ID.
+    
+    Returns all columns from the jira_sprints table for the specified sprint_id.
+    
+    Args:
+        sprint_id: The ID of the sprint to retrieve (int4)
+    
+    Returns:
+        JSON response with single sprint (all columns) or 404 if not found
+    """
+    try:
+        # SECURE: Parameterized query prevents SQL injection
+        query = text("""
+            SELECT *
+            FROM public.jira_sprints
+            WHERE sprint_id = :sprint_id
+        """)
+        
+        logger.info(f"Executing query to get sprint with ID: {sprint_id}")
+        
+        result = conn.execute(query, {"sprint_id": sprint_id})
+        row = result.fetchone()
+        
+        if not row:
+            raise HTTPException(
+                status_code=404,
+                detail=f"Sprint with ID {sprint_id} not found"
+            )
+        
+        # Convert row to dictionary - return all columns
+        sprint_dict = dict(row._mapping)
+        
+        # Format date fields if they exist
+        if 'start_date' in sprint_dict and sprint_dict['start_date']:
+            sprint_dict['start_date'] = sprint_dict['start_date'].strftime('%Y-%m-%d') if hasattr(sprint_dict['start_date'], 'strftime') else sprint_dict['start_date']
+        if 'end_date' in sprint_dict and sprint_dict['end_date']:
+            sprint_dict['end_date'] = sprint_dict['end_date'].strftime('%Y-%m-%d') if hasattr(sprint_dict['end_date'], 'strftime') else sprint_dict['end_date']
+        if 'created_at' in sprint_dict and sprint_dict['created_at']:
+            sprint_dict['created_at'] = sprint_dict['created_at'].isoformat() if hasattr(sprint_dict['created_at'], 'isoformat') else sprint_dict['created_at']
+        if 'updated_at' in sprint_dict and sprint_dict['updated_at']:
+            sprint_dict['updated_at'] = sprint_dict['updated_at'].isoformat() if hasattr(sprint_dict['updated_at'], 'isoformat') else sprint_dict['updated_at']
+        
+        return {
+            "success": True,
+            "data": {
+                "sprint": sprint_dict
+            },
+            "message": f"Retrieved sprint with ID {sprint_id}"
+        }
+    
+    except HTTPException:
+        # Re-raise HTTP exceptions (like the 404 error above)
+        raise
+    except Exception as e:
+        logger.error(f"Error fetching sprint {sprint_id}: {e}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to fetch sprint: {str(e)}"
         )
 
