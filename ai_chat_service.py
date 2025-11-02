@@ -15,7 +15,7 @@ import logging
 import json
 import httpx
 from database_connection import get_db_connection
-from database_general import get_team_ai_card_by_id, get_recommendation_by_id, get_prompt_by_email_and_name, get_pi_ai_card_by_id
+from database_general import get_team_ai_card_by_id, get_recommendation_by_id, get_prompt_by_email_and_name, get_pi_ai_card_by_id, get_formatted_job_data_for_llm_followup
 import config
 
 logger = logging.getLogger(__name__)
@@ -357,33 +357,32 @@ async def ai_chat(
                         status_code=404,
                         detail=f"Team AI card with ID {insights_id_int} not found"
                     )
-                # Extract full_information from card
-                full_information = card.get('full_information', '')
-                if not full_information:
-                    logger.warning(f"Team AI card {insights_id_int} has empty full_information field")
-                    conversation_context = None
-                else:
-                    # NEW: Try prompt from DB before fallback
-                    content_prompt_name = f"{chat_type_str}-Content"
-                    content_intro = None
-                    try:
-                        content_prompt = get_prompt_by_email_and_name(
-                            email_address='admin',
-                            prompt_name=content_prompt_name,
-                            conn=conn,
-                            active=True
-                        )
-                        if content_prompt and content_prompt.get('prompt_description'):
-                            content_intro = str(content_prompt['prompt_description'])
-                            logger.info(f"Using DB content prompt for prompt_name='{content_prompt_name}' (length: {len(content_intro)} chars)")
-                        else:
-                            logger.info(f"No active DB content prompt found for prompt_name='{content_prompt_name}', using fallback context intro")
-                    except Exception as e:
-                        logger.warning(f"Failed to fetch DB content prompt for prompt_name='{content_prompt_name}': {e}. Using fallback.")
-                    if not content_intro:
-                        content_intro = "This is previous discussion we have in a different chat. Read this information as I want to ask follow up questions."
-                    conversation_context = content_intro + '\n\n' + full_information
-                    logger.info(f"Built conversation context from team AI card {insights_id_int} with intro (length: {len(conversation_context)} chars)")
+                # Extract source_job_id from card
+                source_job_id = card.get('source_job_id')
+                # Get formatted job data from view (always returns a string - either data or message)
+                formatted_job_data = get_formatted_job_data_for_llm_followup(insights_id_int, source_job_id, conn)
+                
+                # NEW: Try prompt from DB before fallback
+                content_prompt_name = f"{chat_type_str}-Content"
+                content_intro = None
+                try:
+                    content_prompt = get_prompt_by_email_and_name(
+                        email_address='admin',
+                        prompt_name=content_prompt_name,
+                        conn=conn,
+                        active=True
+                    )
+                    if content_prompt and content_prompt.get('prompt_description'):
+                        content_intro = str(content_prompt['prompt_description'])
+                        logger.info(f"Using DB content prompt for prompt_name='{content_prompt_name}' (length: {len(content_intro)} chars)")
+                    else:
+                        logger.info(f"No active DB content prompt found for prompt_name='{content_prompt_name}', using fallback context intro")
+                except Exception as e:
+                    logger.warning(f"Failed to fetch DB content prompt for prompt_name='{content_prompt_name}': {e}. Using fallback.")
+                if not content_intro:
+                    content_intro = "This is previous discussion we had in a different chat. Read this information as I want to ask follow up questions."
+                conversation_context = content_intro + '\n\n' + formatted_job_data
+                logger.info(f"Built conversation context from team AI card {insights_id_int} with intro (length: {len(conversation_context)} chars)")
             except ValueError:
                 raise HTTPException(
                     status_code=400,
@@ -414,31 +413,31 @@ async def ai_chat(
                         status_code=404,
                         detail=f"PI AI card with ID {insights_id_int} not found"
                     )
-                full_information = card.get('full_information', '')
-                if not full_information:
-                    logger.warning(f"PI AI card {insights_id_int} has empty full_information field")
-                    conversation_context = None
-                else:
-                    content_prompt_name = f"{chat_type_str}-Content"
-                    content_intro = None
-                    try:
-                        content_prompt = get_prompt_by_email_and_name(
-                            email_address='admin',
-                            prompt_name=content_prompt_name,
-                            conn=conn,
-                            active=True
-                        )
-                        if content_prompt and content_prompt.get('prompt_description'):
-                            content_intro = str(content_prompt['prompt_description'])
-                            logger.info(f"Using DB content prompt for prompt_name='{content_prompt_name}' (length: {len(content_intro)} chars)")
-                        else:
-                            logger.info(f"No active DB content prompt found for prompt_name='{content_prompt_name}', using fallback context intro")
-                    except Exception as e:
-                        logger.warning(f"Failed to fetch DB content prompt for prompt_name='{content_prompt_name}': {e}. Using fallback.")
-                    if not content_intro:
-                        content_intro = "This is previous discussion we have in a different chat. Read this information as I want to ask follow up questions."
-                    conversation_context = content_intro + '\n\n' + full_information
-                    logger.info(f"Built conversation context from PI AI card {insights_id_int} (length: {len(conversation_context)} chars)")
+                # Extract source_job_id from card
+                source_job_id = card.get('source_job_id')
+                # Get formatted job data from view (always returns a string - either data or message)
+                formatted_job_data = get_formatted_job_data_for_llm_followup(insights_id_int, source_job_id, conn)
+                
+                content_prompt_name = f"{chat_type_str}-Content"
+                content_intro = None
+                try:
+                    content_prompt = get_prompt_by_email_and_name(
+                        email_address='admin',
+                        prompt_name=content_prompt_name,
+                        conn=conn,
+                        active=True
+                    )
+                    if content_prompt and content_prompt.get('prompt_description'):
+                        content_intro = str(content_prompt['prompt_description'])
+                        logger.info(f"Using DB content prompt for prompt_name='{content_prompt_name}' (length: {len(content_intro)} chars)")
+                    else:
+                        logger.info(f"No active DB content prompt found for prompt_name='{content_prompt_name}', using fallback context intro")
+                except Exception as e:
+                    logger.warning(f"Failed to fetch DB content prompt for prompt_name='{content_prompt_name}': {e}. Using fallback.")
+                if not content_intro:
+                    content_intro = "This is previous discussion we had in a different chat. Read this information as I want to ask follow up questions."
+                conversation_context = content_intro + '\n\n' + formatted_job_data
+                logger.info(f"Built conversation context from PI AI card {insights_id_int} (length: {len(conversation_context)} chars)")
             except ValueError:
                 raise HTTPException(
                     status_code=400,

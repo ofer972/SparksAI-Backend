@@ -323,6 +323,66 @@ def get_pi_ai_card_by_id(card_id: int, conn: Connection = None) -> Optional[Dict
         raise e
 
 
+def get_formatted_job_data_for_llm_followup(card_id: int, job_id: Optional[int], conn: Connection = None) -> Optional[str]:
+    """
+    Get formatted job data from get_job_data_for_llm_followup view for LLM context.
+    Formats all fields as "Field Name = \nvalue\n" and skips NULL fields.
+    
+    Args:
+        card_id (int): The ID of the card
+        job_id (Optional[int]): The source_job_id from the card (can be None)
+        conn (Connection): Database connection from FastAPI dependency
+        
+    Returns:
+        str: Formatted string with all non-NULL fields, or None if no data found.
+             Returns message string if job_id is None or no data found.
+    """
+    try:
+        # If no job_id, return message indicating no previous job discussion
+        if job_id is None:
+            return f"No previous chat discussion was found in the previous job (no job ID)"
+        
+        query = text("""
+            SELECT *
+            FROM get_job_data_for_llm_followup
+            WHERE id = :card_id AND job_id = :job_id
+        """)
+        
+        logger.info(f"Executing query to get formatted job data for LLM followup (card_id={card_id}, job_id={job_id})")
+        
+        result = conn.execute(query, {"card_id": card_id, "job_id": job_id})
+        row = result.fetchone()
+        
+        if not row:
+            logger.info(f"No data found in view for card_id={card_id}, job_id={job_id}")
+            return f"No previous chat discussion was found in the previous job ({job_id})"
+        
+        # Convert row to dictionary
+        row_dict = dict(row._mapping)
+        
+        # Format all non-NULL fields as "Field Name = \nvalue\n"
+        formatted_parts = []
+        for field_name, field_value in row_dict.items():
+            if field_value is not None:
+                # Convert field name to readable format (replace underscores with spaces, capitalize)
+                readable_field_name = str(field_name).replace('_', ' ').title()
+                # Format: "Field Name = \nvalue\n"
+                formatted_parts.append(f"{readable_field_name} = \n{field_value}\n")
+        
+        if not formatted_parts:
+            logger.info(f"All fields are NULL for card_id={card_id}, job_id={job_id}")
+            return f"No previous chat discussion was found in the previous job ({job_id})"
+        
+        formatted_data = "\n".join(formatted_parts)
+        logger.info(f"Formatted job data (length: {len(formatted_data)} chars, {len(formatted_parts)} fields)")
+        return formatted_data
+        
+    except Exception as e:
+        logger.error(f"Error fetching formatted job data for LLM followup (card_id={card_id}, job_id={job_id}): {e}")
+        # Return message instead of raising error
+        return f"No previous chat discussion was found in the previous job ({job_id if job_id else 'unknown'})"
+
+
 # -------------------------------------------------------------
 # Shared CRUD helpers for ai_summary (used by Team/PI AI Cards)
 # -------------------------------------------------------------
