@@ -230,6 +230,79 @@ async def get_active_sprint_summary(
             detail=f"Failed to fetch active sprint summary: {str(e)}"
         )
 
+@sprints_router.get("/sprints/sprint-issues-with-epic-for-llm")
+async def get_sprint_issues_with_epic_for_llm(
+    sprint_id: int = Query(..., description="Sprint ID to get issues with epic for"),
+    team_name: str = Query(..., description="Team name to get issues for"),
+    conn: Connection = Depends(get_db_connection)
+):
+    """
+    Get sprint issues with epic data from the sprint_issues_with_epic_for_llm view.
+    
+    Returns all columns from the view using SELECT * for the specified sprint_id and team_name.
+    
+    Args:
+        sprint_id: The ID of the sprint to get issues for (int)
+        team_name: The name of the team to get issues for (str)
+    
+    Returns:
+        JSON response with all fields from the sprint_issues_with_epic_for_llm view
+    """
+    try:
+        # Validate team name
+        validated_team_name = validate_team_name(team_name)
+        
+        # SECURE: Parameterized query prevents SQL injection
+        # Using SELECT * to return all fields from the view
+        query = text("""
+            SELECT *
+            FROM public.sprint_issues_with_epic_for_llm
+            WHERE sprint_id = :sprint_id AND team_name = :team_name
+        """)
+        
+        logger.info(f"Executing query to get sprint issues with epic for LLM for sprint_id: {sprint_id}, team_name: {validated_team_name}")
+        
+        result = conn.execute(query, {"sprint_id": sprint_id, "team_name": validated_team_name})
+        rows = result.fetchall()
+        
+        # Convert rows to list of dictionaries - return all columns from view
+        sprint_issues = []
+        for row in rows:
+            issue_dict = dict(row._mapping)
+            
+            # Format date/datetime fields if they exist
+            for key, value in issue_dict.items():
+                if value is not None:
+                    if hasattr(value, 'strftime'):
+                        # Date field
+                        issue_dict[key] = value.strftime('%Y-%m-%d')
+                    elif hasattr(value, 'isoformat'):
+                        # Datetime field
+                        issue_dict[key] = value.isoformat()
+            
+            sprint_issues.append(issue_dict)
+        
+        return {
+            "success": True,
+            "data": {
+                "sprint_issues": sprint_issues,
+                "count": len(sprint_issues),
+                "sprint_id": sprint_id,
+                "team_name": validated_team_name
+            },
+            "message": f"Retrieved {len(sprint_issues)} sprint issues with epic data for sprint_id {sprint_id} and team '{validated_team_name}'"
+        }
+    
+    except HTTPException:
+        # Re-raise HTTP exceptions (validation errors)
+        raise
+    except Exception as e:
+        logger.error(f"Error fetching sprint issues with epic for LLM (sprint_id: {sprint_id}, team_name: {team_name}): {e}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to fetch sprint issues with epic for LLM: {str(e)}"
+        )
+
 @sprints_router.get("/sprints/{sprint_id}")
 async def get_sprint(
     sprint_id: int,
