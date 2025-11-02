@@ -232,17 +232,17 @@ async def get_active_sprint_summary(
 
 @sprints_router.get("/sprints/sprint-issues-with-epic-for-llm")
 async def get_sprint_issues_with_epic_for_llm(
-    sprint_ids: List[int] = Query(..., description="Sprint IDs to get issues with epic for"),
+    sprint_id: int = Query(..., description="Sprint ID to get issues with epic for"),
     team_name: str = Query(..., description="Team name to get issues for"),
     conn: Connection = Depends(get_db_connection)
 ):
     """
     Get sprint issues with epic data from the sprint_issues_with_epic_for_llm view.
     
-    Returns all columns from the view using SELECT * for the specified sprint_ids and team_name.
+    Returns all columns from the view using SELECT * for the specified sprint_id and team_name.
     
     Args:
-        sprint_ids: List of sprint IDs to get issues for (List[int])
+        sprint_id: Sprint ID to get issues for (int)
         team_name: The name of the team to get issues for (str)
     
     Returns:
@@ -257,12 +257,12 @@ async def get_sprint_issues_with_epic_for_llm(
         query = text("""
             SELECT *
             FROM public.sprint_issues_with_epic_for_llm
-            WHERE sprint_id = ALL(:sprint_ids) AND team_name = :team_name
+            WHERE sprint_id = :sprint_id AND team_name = :team_name
         """)
         
-        logger.info(f"Executing query to get sprint issues with epic for LLM for sprint_ids: {sprint_ids}, team_name: {validated_team_name}")
+        logger.info(f"Executing query to get sprint issues with epic for LLM for sprint_id: {sprint_id}, team_name: {validated_team_name}")
         
-        result = conn.execute(query, {"sprint_ids": sprint_ids, "team_name": validated_team_name})
+        result = conn.execute(query, {"sprint_id": sprint_id, "team_name": validated_team_name})
         rows = result.fetchall()
         
         # Convert rows to list of dictionaries - return all columns from view
@@ -287,17 +287,17 @@ async def get_sprint_issues_with_epic_for_llm(
             "data": {
                 "sprint_issues": sprint_issues,
                 "count": len(sprint_issues),
-                "sprint_ids": sprint_ids,
+                "sprint_id": sprint_id,
                 "team_name": validated_team_name
             },
-            "message": f"Retrieved {len(sprint_issues)} sprint issues with epic data for sprint_ids {sprint_ids} and team '{validated_team_name}'"
+            "message": f"Retrieved {len(sprint_issues)} sprint issues with epic data for sprint_id {sprint_id} and team '{validated_team_name}'"
         }
     
     except HTTPException:
         # Re-raise HTTP exceptions (validation errors)
         raise
     except Exception as e:
-        logger.error(f"Error fetching sprint issues with epic for LLM (sprint_ids: {sprint_ids}, team_name: {team_name}): {e}")
+        logger.error(f"Error fetching sprint issues with epic for LLM (sprint_id: {sprint_id}, team_name: {team_name}): {e}")
         raise HTTPException(
             status_code=500,
             detail=f"Failed to fetch sprint issues with epic for LLM: {str(e)}"
