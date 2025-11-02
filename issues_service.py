@@ -96,7 +96,7 @@ async def get_issues(
                 status_category,
                 flagged,
                 dependency,
-                parent_key
+                "Epic Link / Parent Key" as parent_key
             FROM {config.WORK_ITEMS_TABLE}
             WHERE {where_clause}
             ORDER BY issue_id DESC
