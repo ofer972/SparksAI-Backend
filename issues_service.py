@@ -43,7 +43,7 @@ async def get_issues(
     """
     Get a collection of issues with optional filtering.
     
-    Returns issues with fields: issue_key, issue_type, summary, description, status_category.
+    Returns issues with fields: issue_key, issue_type, summary, description, status_category, flagged, dependency, parent_key.
     
     Args:
         issue_type: Optional filter by issue type
@@ -93,7 +93,10 @@ async def get_issues(
                 issue_type,
                 summary,
                 description,
-                status_category
+                status_category,
+                flagged,
+                dependency,
+                parent_key
             FROM {config.WORK_ITEMS_TABLE}
             WHERE {where_clause}
             ORDER BY issue_id DESC
@@ -113,7 +116,10 @@ async def get_issues(
                 "issue_type": row[1],
                 "summary": row[2],
                 "description": row[3],
-                "status_category": row[4]
+                "status_category": row[4],
+                "flagged": row[5],
+                "dependency": row[6],
+                "parent_key": row[7]
             }
             issues.append(issue_dict)
         
