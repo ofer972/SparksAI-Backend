@@ -20,6 +20,12 @@ from datetime import datetime
 from pathlib import Path
 from database_connection import get_db_connection
 from database_general import get_team_ai_card_by_id, get_recommendation_by_id, get_prompt_by_email_and_name, get_pi_ai_card_by_id, get_formatted_job_data_for_llm_followup_insight, get_formatted_job_data_for_llm_followup_recommendation
+from database_team_metrics import (
+    get_closed_sprints_data_db,
+    get_sprint_burndown_data_db,
+    get_issues_trend_data_db,
+    get_sprints_with_total_issues_db
+)
 import config
 
 logger = logging.getLogger(__name__)
@@ -54,6 +60,86 @@ def is_localhost():
     except Exception:
         # If we can't determine, default to False (safer - won't write files in production)
         return False
+
+
+def write_llm_context_debug_file(
+    chat_type: str,
+    conversation_id: str,
+    conversation_context: Optional[str],
+    system_message: Optional[str],
+    request: Any,
+    history_json: Optional[Dict[str, Any]] = None
+) -> None:
+    """
+    Generic function to write LLM context to debug file (only on localhost).
+    
+    Args:
+        chat_type: Chat type string (e.g., "Team_insights", "Team_dashboard")
+        conversation_id: Conversation ID
+        conversation_context: Conversation context string
+        system_message: System message string
+        request: AIChatRequest object with all request details
+    """
+    if not is_localhost():
+        logger.debug(f"Skipping debug file write for {chat_type} (not running on localhost)")
+        return
+    
+    try:
+        # Build entity identifier for filename
+        entity_id = None
+        if request.insights_id:
+            entity_id = f"_insights{request.insights_id}"
+        elif request.recommendation_id:
+            entity_id = f"_rec{request.recommendation_id}"
+        elif request.selected_team and chat_type == "Team_dashboard":
+            # For Team_dashboard, use team name (sanitized for filename)
+            team_sanitized = request.selected_team.replace(' ', '_').replace('/', '_')[:30]
+            entity_id = f"_team{team_sanitized}"
+        
+        entity_suffix = entity_id if entity_id else ""
+        filename = f"llm_context_debug_{chat_type}_conv{conversation_id}{entity_suffix}.txt"
+        file_path = Path(filename)
+        
+        with open(file_path, 'w', encoding='utf-8') as f:
+            f.write("=" * 80 + "\n")
+            f.write(f"LLM CONTEXT DEBUG - {chat_type}\n")
+            f.write(f"Timestamp: {datetime.now().isoformat()}\n")
+            f.write(f"Conversation ID: {conversation_id}\n")
+            f.write(f"User ID: {request.user_id}\n")
+            f.write(f"Team: {request.selected_team}\n")
+            f.write(f"PI: {request.selected_pi}\n")
+            if request.insights_id:
+                f.write(f"Insights ID: {request.insights_id}\n")
+            if request.recommendation_id:
+                f.write(f"Recommendation ID: {request.recommendation_id}\n")
+            f.write("=" * 80 + "\n\n")
+            
+            f.write("SYSTEM MESSAGE:\n")
+            f.write("-" * 80 + "\n")
+            f.write(system_message or "(None)" + "\n\n")
+            
+            f.write("CONVERSATION CONTEXT:\n")
+            f.write("-" * 80 + "\n")
+            f.write(conversation_context or "(None)" + "\n\n")
+            
+            f.write("USER QUESTION:\n")
+            f.write("-" * 80 + "\n")
+            f.write(request.question or "(Empty)" + "\n\n")
+            
+            # Include chat history if available (last 5 messages)
+            if history_json:
+                f.write("CHAT HISTORY (Last 5 messages):\n")
+                f.write("-" * 80 + "\n")
+                messages = history_json.get('messages', [])
+                for msg in messages[-5:]:
+                    role = msg.get('role', 'unknown')
+                    content = msg.get('content', '')
+                    f.write(f"[{role}]: {content[:200]}...\n")
+                f.write("\n" + "=" * 80 + "\n")
+        
+        logger.info(f"TEMPORARY DEBUG: Wrote LLM context to file: {filename}")
+    except Exception as e:
+        logger.warning(f"Failed to write LLM context debug file for {chat_type}: {e}")
 
 # System message constant for all AI chat interactions
 SYSTEM_MESSAGE = "You are AI assistant specialized in Agile, Scrum, Scaled Agile. All your answers should be brief with no more than 3 paragraphs with concrete and specific information based on the content provided"
@@ -241,6 +327,275 @@ def update_chat_history(
             status_code=500,
             detail=f"Failed to update chat history: {str(e)}"
         )
+
+
+def build_team_dashboard_context(
+    team_name: Optional[str],
+    prompt_name: Optional[str],
+    user_id: Optional[str],
+    conn: Connection
+) -> Optional[str]:
+    """
+    Build conversation context for Team_dashboard chat type.
+    Fetches DB prompt (default or custom) and adds formatted team metrics data.
+    
+    Args:
+        team_name: Team name (required for data fetching)
+        prompt_name: Optional custom prompt name
+        user_id: User ID for custom prompt lookup
+        conn: Database connection
+        
+    Returns:
+        Formatted conversation context string or None if no data available
+    """
+    conversation_context = None
+    
+    # Fetch DB prompt (default or custom)
+    if not prompt_name or not prompt_name.strip():
+        # Use default: fetch "Team_dashboard-Content" from admin
+        content_prompt_name = "Team_dashboard-Content"
+        try:
+            content_prompt = get_prompt_by_email_and_name(
+                email_address='admin',
+                prompt_name=content_prompt_name,
+                conn=conn,
+                active=True
+            )
+            if content_prompt and content_prompt.get('prompt_description'):
+                conversation_context = str(content_prompt['prompt_description'])
+                logger.info(f"Using default DB content prompt for '{content_prompt_name}' (length: {len(conversation_context)} chars)")
+        except Exception as e:
+            logger.warning(f"Failed to fetch DB content prompt for '{content_prompt_name}': {e}")
+    else:
+        # Use custom prompt: fetch from user_id with prompt_name
+        custom_prompt_name = prompt_name.strip()
+        try:
+            custom_prompt = get_prompt_by_email_and_name(
+                email_address=user_id or 'unknown',
+                prompt_name=custom_prompt_name,
+                conn=conn,
+                active=True
+            )
+            if custom_prompt and custom_prompt.get('prompt_description'):
+                conversation_context = str(custom_prompt['prompt_description'])
+                logger.info(f"Using custom DB prompt for '{custom_prompt_name}' (length: {len(conversation_context)} chars)")
+            else:
+                logger.error(f"Custom prompt not found: '{custom_prompt_name}' (user_id='{user_id}')")
+        except Exception as e:
+            logger.error(f"Failed to fetch custom prompt '{custom_prompt_name}': {e}")
+    
+    # Fetch and format team metrics data (closed sprints, burndown, bugs trend)
+    if team_name:
+        try:
+            # 1. Fetch closed sprints (last 3 months)
+            closed_sprints = []
+            try:
+                closed_sprints = get_closed_sprints_data_db(team_name, months=3, conn=conn)
+                logger.info(f"Fetched {len(closed_sprints)} closed sprints for Team_dashboard")
+            except Exception as e:
+                logger.warning(f"Failed to fetch closed sprints for Team_dashboard: {e}")
+            
+            # 2. Fetch sprint burndown (auto-select active sprint)
+            burndown_data = []
+            selected_sprint_name = None
+            try:
+                # Get active sprints and select the one with max total issues
+                active_sprints = get_sprints_with_total_issues_db(team_name, "active", conn)
+                if active_sprints:
+                    selected_sprint = max(active_sprints, key=lambda x: x.get('total_issues', 0))
+                    selected_sprint_name = selected_sprint.get('name')
+                    logger.info(f"Auto-selected sprint '{selected_sprint_name}' for burndown")
+                    
+                    # Get burndown data
+                    burndown_data = get_sprint_burndown_data_db(
+                        team_name, 
+                        selected_sprint_name, 
+                        issue_type="all", 
+                        conn=conn
+                    )
+                    logger.info(f"Fetched {len(burndown_data)} burndown records for Team_dashboard")
+                else:
+                    logger.info("No active sprints found for Team_dashboard burndown")
+            except Exception as e:
+                logger.warning(f"Failed to fetch sprint burndown for Team_dashboard: {e}")
+            
+            # 3. Fetch bugs trend (last 6 months, issue_type='Bug')
+            bugs_trend = []
+            try:
+                bugs_trend = get_issues_trend_data_db(team_name, months=6, issue_type="Bug", conn=conn)
+                logger.info(f"Fetched {len(bugs_trend)} bugs trend records for Team_dashboard")
+            except Exception as e:
+                logger.warning(f"Failed to fetch bugs trend for Team_dashboard: {e}")
+            
+            # Format the data
+            formatted_data = format_team_dashboard_data(
+                closed_sprints, 
+                burndown_data, 
+                bugs_trend,
+                sprint_name=selected_sprint_name
+            )
+            
+            # Combine with prompt text
+            if formatted_data:
+                if conversation_context:
+                    conversation_context = conversation_context + '\n\n' + formatted_data
+                else:
+                    conversation_context = formatted_data
+                logger.info(f"Combined prompt and formatted data for Team_dashboard (total length: {len(conversation_context)} chars)")
+            
+        except Exception as e:
+            logger.error(f"Error fetching team metrics data for Team_dashboard: {e}")
+            # Continue with just prompt text if data fetching fails
+    else:
+        logger.warning("team_name not provided for Team_dashboard, skipping data fetch")
+    
+    return conversation_context
+
+
+def build_pi_dashboard_context(
+    prompt_name: Optional[str],
+    user_id: Optional[str],
+    conn: Connection
+) -> Optional[str]:
+    """
+    Build conversation context for PI_dashboard chat type.
+    Fetches DB prompt (default or custom).
+    
+    Args:
+        prompt_name: Optional custom prompt name
+        user_id: User ID for custom prompt lookup
+        conn: Database connection
+        
+    Returns:
+        Formatted conversation context string or None if no data available
+    """
+    conversation_context = None
+    
+    # Fetch DB prompt (default or custom)
+    if not prompt_name or not prompt_name.strip():
+        # Use default: fetch "PI_dashboard-Content" from admin
+        content_prompt_name = "PI_dashboard-Content"
+        try:
+            content_prompt = get_prompt_by_email_and_name(
+                email_address='admin',
+                prompt_name=content_prompt_name,
+                conn=conn,
+                active=True
+            )
+            if content_prompt and content_prompt.get('prompt_description'):
+                conversation_context = str(content_prompt['prompt_description'])
+                logger.info(f"Using default DB content prompt for '{content_prompt_name}' (length: {len(conversation_context)} chars)")
+        except Exception as e:
+            logger.warning(f"Failed to fetch DB content prompt for '{content_prompt_name}': {e}")
+    else:
+        # Use custom prompt: fetch from user_id with prompt_name
+        custom_prompt_name = prompt_name.strip()
+        try:
+            custom_prompt = get_prompt_by_email_and_name(
+                email_address=user_id or 'unknown',
+                prompt_name=custom_prompt_name,
+                conn=conn,
+                active=True
+            )
+            if custom_prompt and custom_prompt.get('prompt_description'):
+                conversation_context = str(custom_prompt['prompt_description'])
+                logger.info(f"Using custom DB prompt for '{custom_prompt_name}' (length: {len(conversation_context)} chars)")
+            else:
+                logger.error(f"Custom prompt not found: '{custom_prompt_name}' (user_id='{user_id}')")
+        except Exception as e:
+            logger.error(f"Failed to fetch custom prompt '{custom_prompt_name}': {e}")
+    
+    return conversation_context
+
+
+def format_team_dashboard_data(
+    closed_sprints: list,
+    burndown_data: list,
+    bugs_trend: list,
+    sprint_name: Optional[str] = None
+) -> str:
+    """
+    Format team dashboard data for LLM context.
+    
+    Args:
+        closed_sprints: List of closed sprint dictionaries
+        burndown_data: List of burndown daily snapshots
+        bugs_trend: List of bugs trend data (monthly)
+        sprint_name: Optional sprint name for burndown section
+        
+    Returns:
+        Formatted string for LLM context
+    """
+    formatted_parts = []
+    
+    # Format closed sprints
+    if closed_sprints:
+        formatted_parts.append("=== CLOSED SPRINTS (Last 3 months) ===")
+        for sprint in closed_sprints:
+            sprint_line = (
+                f"Sprint {sprint.get('sprint_name', 'Unknown')}: "
+                f"{sprint.get('start_date')} to {sprint.get('end_date')} | "
+                f"Completed: {sprint.get('completed_percentage', 0.0):.1f}% | "
+                f"Issues: {sprint.get('issues_at_start', 0)} planned, "
+                f"{sprint.get('issues_added', 0)} added, "
+                f"{sprint.get('issues_done', 0)} done, "
+                f"{sprint.get('issues_remaining', 0)} remaining"
+            )
+            if sprint.get('sprint_goal'):
+                sprint_line += f" | Goal: {sprint.get('sprint_goal')}"
+            formatted_parts.append(sprint_line)
+    else:
+        formatted_parts.append("=== CLOSED SPRINTS (Last 3 months) ===")
+        formatted_parts.append("No closed sprints found")
+    
+    formatted_parts.append("")  # Empty line
+    
+    # Format sprint burndown
+    if burndown_data:
+        sprint_info = f"=== SPRINT BURNDOWN (Active Sprint: {sprint_name or 'Unknown'}) ==="
+        if burndown_data[0].get('start_date') and burndown_data[0].get('end_date'):
+            sprint_info += f" | Dates: {burndown_data[0].get('start_date')} to {burndown_data[0].get('end_date')}"
+        if burndown_data[0].get('total_issues'):
+            sprint_info += f" | Total Issues: {burndown_data[0].get('total_issues')}"
+        formatted_parts.append(sprint_info)
+        
+        for day in burndown_data:
+            day_line = (
+                f"Date: {day.get('snapshot_date')} | "
+                f"Remaining: {day.get('remaining_issues', 0)} | "
+                f"Completed Today: {day.get('issues_completed_on_day', 0)} | "
+                f"Added Today: {day.get('issues_added_on_day', 0)} | "
+                f"Removed Today: {day.get('issues_removed_on_day', 0)}"
+            )
+            formatted_parts.append(day_line)
+    else:
+        formatted_parts.append(f"=== SPRINT BURNDOWN (Active Sprint: {sprint_name or 'N/A'}) ===")
+        formatted_parts.append("No burndown data found")
+    
+    formatted_parts.append("")  # Empty line
+    
+    # Format bugs trend
+    if bugs_trend:
+        formatted_parts.append("=== BUGS CREATED AND RESOLVED OVER TIME (Last 6 months) ===")
+        for month_data in bugs_trend:
+            # Extract month and other fields from the dictionary
+            report_month = month_data.get('report_month', 'Unknown')
+            created = month_data.get('created', 0)
+            resolved = month_data.get('resolved', 0)
+            open_count = month_data.get('open', 0) or month_data.get('cumulative_open', 0)
+            
+            trend_line = (
+                f"Month: {report_month} | "
+                f"Created: {created} | "
+                f"Resolved: {resolved} | "
+                f"Open: {open_count}"
+            )
+            formatted_parts.append(trend_line)
+    else:
+        formatted_parts.append("=== BUGS CREATED AND RESOLVED OVER TIME (Last 6 months) ===")
+        formatted_parts.append("No bugs trend data found")
+    
+    return "\n".join(formatted_parts)
 
 
 async def call_llm_service(
@@ -584,48 +939,22 @@ async def ai_chat(
         else:
             logger.info("chat_type not provided; using default system message")
 
-        # 2.8.5. Handle dashboard chat types (PI_dashboard, Team_dashboard) - fetch content prompt
-        if chat_type_str in ["PI_dashboard", "Team_dashboard"]:
+        # 2.8.5. Handle dashboard chat types (PI_dashboard, Team_dashboard)
+        if chat_type_str == "Team_dashboard":
             if conversation_context is None:  # Only set if not already set by other chat types
-                if not request.prompt_name or not request.prompt_name.strip():
-                    # Use default: fetch "{chat_type}-Content" from admin
-                    content_prompt_name = f"{chat_type_str}-Content"
-                    try:
-                        content_prompt = get_prompt_by_email_and_name(
-                            email_address='admin',
-                            prompt_name=content_prompt_name,
-                            conn=conn,
-                            active=True
-                        )
-                        if content_prompt and content_prompt.get('prompt_description'):
-                            conversation_context = str(content_prompt['prompt_description'])
-                            logger.info(f"Using default DB content prompt for '{content_prompt_name}' (length: {len(conversation_context)} chars)")
-                        else:
-                            logger.info(f"No active DB content prompt found for '{content_prompt_name}'")
-                    except Exception as e:
-                        logger.warning(f"Failed to fetch DB content prompt for '{content_prompt_name}': {e}")
-                else:
-                    # Use custom prompt: fetch from user_id with request.prompt_name
-                    custom_prompt_name = request.prompt_name.strip()
-                    try:
-                        custom_prompt = get_prompt_by_email_and_name(
-                            email_address=request.user_id or 'unknown',
-                            prompt_name=custom_prompt_name,
-                            conn=conn,
-                            active=True
-                        )
-                        if custom_prompt and custom_prompt.get('prompt_description'):
-                            conversation_context = str(custom_prompt['prompt_description'])
-                            # GREEN: prompt found
-                            logger.info(f"\033[92mprompt_name found!\033[0m (prompt_name='{custom_prompt_name}', user_id='{request.user_id}')")
-                            logger.info(f"Using custom DB prompt for '{custom_prompt_name}' (length: {len(conversation_context)} chars)")
-                        else:
-                            # RED: prompt not found
-                            logger.error(f"\033[91mprompt_name not found!\033[0m (prompt_name='{custom_prompt_name}', user_id='{request.user_id}')")
-                            logger.info(f"No active DB prompt found for prompt_name='{custom_prompt_name}' with user_id='{request.user_id}'")
-                    except Exception as e:
-                        # RED: prompt not found (error)
-                        logger.error(f"\033[91mprompt_name not found!\033[0m (prompt_name='{custom_prompt_name}', user_id='{request.user_id}'): {e}")
+                conversation_context = build_team_dashboard_context(
+                    team_name=request.selected_team,
+                    prompt_name=request.prompt_name,
+                    user_id=request.user_id,
+                    conn=conn
+                )
+        elif chat_type_str == "PI_dashboard":
+            if conversation_context is None:  # Only set if not already set by other chat types
+                conversation_context = build_pi_dashboard_context(
+                    prompt_name=request.prompt_name,
+                    user_id=request.user_id,
+                    conn=conn
+                )
 
         # 2.9. On initial call, persist initial system/context snapshot into chat history
         try:
@@ -662,62 +991,18 @@ async def ai_chat(
         except Exception as e:
             logger.warning(f"Failed to store initial request snapshot: {e}")
 
-        # 2.10. TEMPORARY: Write context to file for testing (AI Chat Insights/Recommendations)
+        # 2.10. TEMPORARY: Write context to file for testing (AI Chat Insights/Recommendations/Dashboard)
         # Only write debug files on localhost (not on Railway/production)
         # One file per conversation (overwrites on each request for same conversation_id)
-        if chat_type_str in ["Team_insights", "PI_insights", "Recommendation_reason"]:
-            if is_localhost():
-                try:
-                    # Use conversation_id instead of timestamp - one file per conversation
-                    # Include insights_id or recommendation_id in filename for easier identification
-                    entity_id = None
-                    if request.insights_id:
-                        entity_id = f"_insights{request.insights_id}"
-                    elif request.recommendation_id:
-                        entity_id = f"_rec{request.recommendation_id}"
-                    
-                    entity_suffix = entity_id if entity_id else ""
-                    filename = f"llm_context_debug_{chat_type_str}_conv{conversation_id}{entity_suffix}.txt"
-                    file_path = Path(filename)
-                    
-                    with open(file_path, 'w', encoding='utf-8') as f:
-                        f.write("=" * 80 + "\n")
-                        f.write(f"LLM CONTEXT DEBUG - {chat_type_str}\n")
-                        f.write(f"Timestamp: {datetime.now().isoformat()}\n")
-                        f.write(f"Conversation ID: {conversation_id}\n")
-                        f.write(f"User ID: {request.user_id}\n")
-                        f.write(f"Team: {request.selected_team}\n")
-                        f.write(f"PI: {request.selected_pi}\n")
-                        if request.insights_id:
-                            f.write(f"Insights ID: {request.insights_id}\n")
-                        if request.recommendation_id:
-                            f.write(f"Recommendation ID: {request.recommendation_id}\n")
-                        f.write("=" * 80 + "\n\n")
-                        
-                        f.write("SYSTEM MESSAGE:\n")
-                        f.write("-" * 80 + "\n")
-                        f.write(system_message or "(None)" + "\n\n")
-                        
-                        f.write("CONVERSATION CONTEXT:\n")
-                        f.write("-" * 80 + "\n")
-                        f.write(conversation_context or "(None)" + "\n\n")
-                        
-                        f.write("USER QUESTION:\n")
-                        f.write("-" * 80 + "\n")
-                        f.write(request.question or "(Empty)" + "\n\n")
-                        
-                        f.write("CHAT HISTORY (Last 5 messages):\n")
-                        f.write("-" * 80 + "\n")
-                        messages = history_json.get('messages', [])
-                        for msg in messages[-5:]:
-                            f.write(f"[{msg.get('role', 'unknown')}]: {msg.get('content', '')[:200]}...\n")
-                        f.write("\n" + "=" * 80 + "\n")
-                    
-                    logger.info(f"TEMPORARY DEBUG: Wrote LLM context to file: {filename}")
-                except Exception as e:
-                    logger.warning(f"Failed to write LLM context debug file: {e}")
-            else:
-                logger.debug(f"Skipping debug file write (not running on localhost)")
+        if chat_type_str in ["Team_insights", "PI_insights", "Recommendation_reason", "Team_dashboard", "PI_dashboard"]:
+            write_llm_context_debug_file(
+                chat_type=chat_type_str,
+                conversation_id=conversation_id,
+                conversation_context=conversation_context,
+                system_message=system_message,
+                request=request,
+                history_json=history_json
+            )
 
         # 3. Call LLM service
         llm_response = await call_llm_service(
