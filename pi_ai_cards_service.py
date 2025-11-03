@@ -19,6 +19,7 @@ from database_general import (
     update_ai_card_by_id,
     delete_ai_card_by_id,
     get_top_ai_cards_filtered,
+    get_top_ai_cards_with_recommendations_filtered,
 )
 import config
 
@@ -106,6 +107,68 @@ async def get_pi_ai_cards(
             status_code=500,
             detail=f"Failed to fetch PI AI cards: {str(e)}"
         )
+
+
+@pi_ai_cards_router.get("/pi-ai-cards/getTopCardsWithRecommendations")
+async def get_pi_ai_cards_with_recommendations(
+    pi: str = Query(..., description="PI name to get PI AI cards for"),
+    limit: int = Query(4, description="Number of PI AI cards to return (default: 4, max: 50)"),
+    recommendations_limit: int = Query(4, description="Max recommendations per card (default: 4)"),
+    conn: Connection = Depends(get_db_connection)
+):
+    """
+    Get PI AI summary cards for a specific PI with their recommendations.
+    
+    Returns the most recent + highest priority card for each type (max 1 per type),
+    with recommendations linked via source_ai_summary_id.
+    Cards are ordered by:
+    1. Priority (Critical > High > Medium)
+    2. Date (newest first)
+    
+    Args:
+        pi: Name of the PI
+        limit: Number of PI AI cards to return (default: 4)
+        recommendations_limit: Maximum recommendations per card (default: 4)
+    
+    Returns:
+        JSON response with PI AI cards list (each with recommendations) and metadata
+    """
+    try:
+        # Validate inputs
+        validated_pi_name = validate_pi_name(pi)
+        validated_limit = validate_limit(limit)
+        validated_recommendations_limit = validate_limit(recommendations_limit)
+        
+        # Get PI AI cards with recommendations using shared generic function
+        ai_cards = get_top_ai_cards_with_recommendations_filtered(
+            'pi',
+            validated_pi_name,
+            validated_limit,
+            validated_recommendations_limit,
+            conn
+        )
+        
+        return {
+            "success": True,
+            "data": {
+                "ai_cards": ai_cards,
+                "count": len(ai_cards),
+                "pi": validated_pi_name,
+                "limit": validated_limit
+            },
+            "message": f"Retrieved {len(ai_cards)} PI AI cards with recommendations for PI '{validated_pi_name}'"
+        }
+    
+    except HTTPException:
+        # Re-raise HTTP exceptions (validation errors)
+        raise
+    except Exception as e:
+        logger.error(f"Error fetching PI AI cards with recommendations for PI {pi}: {e}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to fetch PI AI cards with recommendations: {str(e)}"
+        )
+
 
 @pi_ai_cards_router.get("/pi-ai-cards")
 async def get_pi_ai_cards_collection(conn: Connection = Depends(get_db_connection)):

@@ -171,6 +171,114 @@ def get_top_ai_cards(team_name: str, limit: int = 4, conn: Connection = None) ->
     return get_top_ai_cards_filtered('team_name', team_name, limit, conn)
 
 
+def get_recommendations_by_ai_summary_id(
+    ai_summary_id: int,
+    limit: int = 4,
+    conn: Connection = None
+) -> List[Dict[str, Any]]:
+    """
+    Get recommendations linked to a specific AI summary card.
+    
+    Returns recommendations ordered by:
+    1. Date (newest first)
+    2. Priority (High > Medium > Low)
+    3. ID (descending)
+    
+    Args:
+        ai_summary_id (int): The ID of the AI summary card
+        limit (int): Maximum number of recommendations to return (default: 4)
+        conn (Connection): Database connection from FastAPI dependency
+    
+    Returns:
+        list: List of recommendation dictionaries
+    """
+    try:
+        # SECURE: Parameterized query prevents SQL injection
+        sql_query = """
+            SELECT *
+            FROM public.recommendations
+            WHERE source_ai_summary_id = :ai_summary_id
+            ORDER BY 
+                DATE(date) DESC,
+                CASE priority 
+                    WHEN 'High' THEN 1
+                    WHEN 'Medium' THEN 2
+                    WHEN 'Low' THEN 3
+                    ELSE 4
+                END,
+                id DESC
+            LIMIT :limit
+        """
+        
+        logger.info(f"Executing query to get recommendations for AI summary card: {ai_summary_id}")
+        logger.info(f"Parameters: ai_summary_id={ai_summary_id}, limit={limit}")
+        
+        result = conn.execute(text(sql_query), {
+            'ai_summary_id': ai_summary_id,
+            'limit': limit
+        })
+        
+        # Convert rows to list of dictionaries
+        recommendations = []
+        for row in result:
+            recommendations.append(dict(row._mapping))
+        
+        return recommendations
+            
+    except Exception as e:
+        logger.error(f"Error fetching recommendations for AI summary card {ai_summary_id}: {e}")
+        raise e
+
+
+def get_top_ai_cards_with_recommendations_filtered(
+    filter_column: str,
+    filter_value: str,
+    limit: int = 4,
+    recommendations_limit: int = 4,
+    conn: Connection = None
+) -> List[Dict[str, Any]]:
+    """
+    Get top AI cards with their recommendations attached.
+    
+    Returns the most recent + highest priority card for each type (max 1 per type),
+    with recommendations linked via source_ai_summary_id.
+    
+    Args:
+        filter_column (str): Column to filter by ('team_name' or 'pi')
+        filter_value (str): Value to filter by
+        limit (int): Number of AI cards to return (default: 4)
+        recommendations_limit (int): Maximum recommendations per card (default: 4)
+        conn (Connection): Database connection from FastAPI dependency
+    
+    Returns:
+        list: List of AI card dictionaries, each with 'recommendations' array and 'recommendations_count'
+    """
+    try:
+        # Get top AI cards using existing function
+        ai_cards = get_top_ai_cards_filtered(filter_column, filter_value, limit, conn)
+        
+        # For each card, fetch and attach recommendations
+        for card in ai_cards:
+            card_id = card.get('id')
+            if card_id:
+                recommendations = get_recommendations_by_ai_summary_id(
+                    card_id,
+                    recommendations_limit,
+                    conn
+                )
+                card['recommendations'] = recommendations
+                card['recommendations_count'] = len(recommendations)
+            else:
+                card['recommendations'] = []
+                card['recommendations_count'] = 0
+        
+        return ai_cards
+            
+    except Exception as e:
+        logger.error(f"Error fetching top AI cards with recommendations filtered by {filter_column}={filter_value}: {e}")
+        raise e
+
+
 def get_team_ai_card_by_id(card_id: int, conn: Connection = None) -> Optional[Dict[str, Any]]:
     """
     Get a single team AI summary card by ID from ai_summary table.

@@ -17,6 +17,7 @@ from database_general import (
     create_ai_card,
     update_ai_card_by_id,
     delete_ai_card_by_id,
+    get_top_ai_cards_with_recommendations_filtered,
 )
 import config
 
@@ -104,6 +105,68 @@ async def get_team_ai_cards(
             status_code=500,
             detail=f"Failed to fetch AI cards: {str(e)}"
         )
+
+
+@team_ai_cards_router.get("/team-ai-cards/getTopCardsWithRecommendations")
+async def get_team_ai_cards_with_recommendations(
+    team_name: str = Query(..., description="Team name to get AI cards for"),
+    limit: int = Query(4, description="Number of AI cards to return (default: 4, max: 50)"),
+    recommendations_limit: int = Query(4, description="Max recommendations per card (default: 4)"),
+    conn: Connection = Depends(get_db_connection)
+):
+    """
+    Get team AI summary cards for a specific team with their recommendations.
+    
+    Returns the most recent + highest priority card for each type (max 1 per type),
+    with recommendations linked via source_ai_summary_id.
+    Cards are ordered by:
+    1. Priority (Critical > High > Medium)
+    2. Date (newest first)
+    
+    Args:
+        team_name: Name of the team
+        limit: Number of AI cards to return (default: 4)
+        recommendations_limit: Maximum recommendations per card (default: 4)
+    
+    Returns:
+        JSON response with AI cards list (each with recommendations) and metadata
+    """
+    try:
+        # Validate inputs
+        validated_team_name = validate_team_name(team_name)
+        validated_limit = validate_limit(limit)
+        validated_recommendations_limit = validate_limit(recommendations_limit)
+        
+        # Get AI cards with recommendations using shared generic function
+        ai_cards = get_top_ai_cards_with_recommendations_filtered(
+            'team_name',
+            validated_team_name,
+            validated_limit,
+            validated_recommendations_limit,
+            conn
+        )
+        
+        return {
+            "success": True,
+            "data": {
+                "ai_cards": ai_cards,
+                "count": len(ai_cards),
+                "team_name": validated_team_name,
+                "limit": validated_limit
+            },
+            "message": f"Retrieved {len(ai_cards)} AI cards with recommendations for team '{validated_team_name}'"
+        }
+    
+    except HTTPException:
+        # Re-raise HTTP exceptions (validation errors)
+        raise
+    except Exception as e:
+        logger.error(f"Error fetching AI cards with recommendations for team {team_name}: {e}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to fetch AI cards with recommendations: {str(e)}"
+        )
+
 
 @team_ai_cards_router.get("/team-ai-cards")
 async def get_team_ai_cards_collection(conn: Connection = Depends(get_db_connection)):
