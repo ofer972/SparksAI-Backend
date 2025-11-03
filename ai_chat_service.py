@@ -14,13 +14,46 @@ from enum import Enum
 import logging
 import json
 import httpx
+import socket
+import os
+from datetime import datetime
+from pathlib import Path
 from database_connection import get_db_connection
-from database_general import get_team_ai_card_by_id, get_recommendation_by_id, get_prompt_by_email_and_name, get_pi_ai_card_by_id, get_formatted_job_data_for_llm_followup
+from database_general import get_team_ai_card_by_id, get_recommendation_by_id, get_prompt_by_email_and_name, get_pi_ai_card_by_id, get_formatted_job_data_for_llm_followup_insight, get_formatted_job_data_for_llm_followup_recommendation
 import config
 
 logger = logging.getLogger(__name__)
 
 ai_chat_router = APIRouter()
+
+
+def is_localhost():
+    """
+    Detect if running on localhost by checking hostname patterns.
+    Returns True if localhost, False if Railway/production.
+    """
+    try:
+        hostname = socket.gethostname().lower()
+        
+        # Railway/production hostnames typically contain these patterns
+        production_keywords = [
+            'railway',
+            'railway-app',
+            'replica',
+            'prod',
+            'production'
+        ]
+        
+        # If hostname contains production keywords, it's NOT localhost
+        for keyword in production_keywords:
+            if keyword in hostname:
+                return False
+        
+        # Otherwise, assume it's localhost
+        return True
+    except Exception:
+        # If we can't determine, default to False (safer - won't write files in production)
+        return False
 
 # System message constant for all AI chat interactions
 SYSTEM_MESSAGE = "You are AI assistant specialized in Agile, Scrum, Scaled Agile. All your answers should be brief with no more than 3 paragraphs with concrete and specific information based on the content provided"
@@ -360,7 +393,7 @@ async def ai_chat(
                 # Extract source_job_id from card
                 source_job_id = card.get('source_job_id')
                 # Get formatted job data from view (always returns a string - either data or message)
-                formatted_job_data = get_formatted_job_data_for_llm_followup(insights_id_int, source_job_id, conn)
+                formatted_job_data = get_formatted_job_data_for_llm_followup_insight(insights_id_int, source_job_id, conn)
                 
                 # NEW: Try prompt from DB before fallback
                 content_prompt_name = f"{chat_type_str}-Content"
@@ -416,7 +449,7 @@ async def ai_chat(
                 # Extract source_job_id from card
                 source_job_id = card.get('source_job_id')
                 # Get formatted job data from view (always returns a string - either data or message)
-                formatted_job_data = get_formatted_job_data_for_llm_followup(insights_id_int, source_job_id, conn)
+                formatted_job_data = get_formatted_job_data_for_llm_followup_insight(insights_id_int, source_job_id, conn)
                 
                 content_prompt_name = f"{chat_type_str}-Content"
                 content_intro = None
@@ -471,11 +504,18 @@ async def ai_chat(
                         status_code=404,
                         detail=f"Recommendation with ID {recommendation_id_int} not found"
                     )
-                # Extract action_text and full_information from recommendation
-                action_text = recommendation.get('action_text', '')
-                full_information = recommendation.get('full_information', '')
+                # Extract source_job_id from recommendation (same pattern as Team Insights)
+                source_job_id = recommendation.get('source_job_id')
+                # Get formatted job data from recommendations table (always returns a string - either data or message)
+                formatted_job_data = get_formatted_job_data_for_llm_followup_recommendation(
+                    recommendation_id_int, 
+                    source_job_id, 
+                    conn
+                )
+                
+                # Build conversation_context (same pattern as Team Insights)
                 content_prompt_name = "Recommendation_reason-Content"
-                context_built = False
+                content_intro = None
                 try:
                     content_prompt = get_prompt_by_email_and_name(
                         email_address='admin',
@@ -484,24 +524,16 @@ async def ai_chat(
                         active=True
                     )
                     if content_prompt and content_prompt.get('prompt_description'):
-                        # Use DB prompt + action_text + full_information as context
-                        conversation_context = (
-                            f"{content_prompt['prompt_description']}\n\"{action_text}\"\n\n{full_information}"
-                        )
-                        logger.info(f"Using DB content prompt for Recommendation_reason-Content (length: {len(conversation_context)} chars)")
-                        context_built = True
+                        content_intro = str(content_prompt['prompt_description'])
+                        logger.info(f"Using DB content prompt for prompt_name='{content_prompt_name}' (length: {len(content_intro)} chars)")
                     else:
-                        logger.info(f"No active DB content prompt found for Recommendation_reason-Content, using fallback context.")
+                        logger.info(f"No active DB content prompt found for prompt_name='{content_prompt_name}', using fallback context intro")
                 except Exception as e:
-                    logger.warning(f"Failed to fetch DB content prompt for Recommendation_reason-Content: {e}. Using fallback.")
-                if not context_built:
-                    # Fallback: the original multi-part string
-                    conversation_context = (
-                        "This is previous discussion we have in a different chat. Read this information as I want to ask follow up questions.\n\n"
-                        f"Please explain the reason for recommendation --> \"{action_text}\"\n\n"
-                        "Explain in a brief and short description the reason for recommendation\n\n"
-                        f"{full_information}"
-                    )
+                    logger.warning(f"Failed to fetch DB content prompt for prompt_name='{content_prompt_name}': {e}. Using fallback.")
+                if not content_intro:
+                    content_intro = "This is previous discussion we had in a different chat. Read this information as I want to ask follow up questions."
+                conversation_context = content_intro + '\n\n' + formatted_job_data
+                logger.info(f"Built conversation context from recommendation {recommendation_id_int} with intro (length: {len(conversation_context)} chars)")
             except ValueError:
                 raise HTTPException(
                     status_code=400,
@@ -614,6 +646,63 @@ async def ai_chat(
                 logger.info("Stored initial system/context and seeded messages in chat history")
         except Exception as e:
             logger.warning(f"Failed to store initial request snapshot: {e}")
+
+        # 2.10. TEMPORARY: Write context to file for testing (AI Chat Insights/Recommendations)
+        # Only write debug files on localhost (not on Railway/production)
+        # One file per conversation (overwrites on each request for same conversation_id)
+        if chat_type_str in ["Team_insights", "PI_insights", "Recommendation_reason"]:
+            if is_localhost():
+                try:
+                    # Use conversation_id instead of timestamp - one file per conversation
+                    # Include insights_id or recommendation_id in filename for easier identification
+                    entity_id = None
+                    if request.insights_id:
+                        entity_id = f"_insights{request.insights_id}"
+                    elif request.recommendation_id:
+                        entity_id = f"_rec{request.recommendation_id}"
+                    
+                    entity_suffix = entity_id if entity_id else ""
+                    filename = f"llm_context_debug_{chat_type_str}_conv{conversation_id}{entity_suffix}.txt"
+                    file_path = Path(filename)
+                    
+                    with open(file_path, 'w', encoding='utf-8') as f:
+                        f.write("=" * 80 + "\n")
+                        f.write(f"LLM CONTEXT DEBUG - {chat_type_str}\n")
+                        f.write(f"Timestamp: {datetime.now().isoformat()}\n")
+                        f.write(f"Conversation ID: {conversation_id}\n")
+                        f.write(f"User ID: {request.user_id}\n")
+                        f.write(f"Team: {request.selected_team}\n")
+                        f.write(f"PI: {request.selected_pi}\n")
+                        if request.insights_id:
+                            f.write(f"Insights ID: {request.insights_id}\n")
+                        if request.recommendation_id:
+                            f.write(f"Recommendation ID: {request.recommendation_id}\n")
+                        f.write("=" * 80 + "\n\n")
+                        
+                        f.write("SYSTEM MESSAGE:\n")
+                        f.write("-" * 80 + "\n")
+                        f.write(system_message or "(None)" + "\n\n")
+                        
+                        f.write("CONVERSATION CONTEXT:\n")
+                        f.write("-" * 80 + "\n")
+                        f.write(conversation_context or "(None)" + "\n\n")
+                        
+                        f.write("USER QUESTION:\n")
+                        f.write("-" * 80 + "\n")
+                        f.write(request.question or "(Empty)" + "\n\n")
+                        
+                        f.write("CHAT HISTORY (Last 5 messages):\n")
+                        f.write("-" * 80 + "\n")
+                        messages = history_json.get('messages', [])
+                        for msg in messages[-5:]:
+                            f.write(f"[{msg.get('role', 'unknown')}]: {msg.get('content', '')[:200]}...\n")
+                        f.write("\n" + "=" * 80 + "\n")
+                    
+                    logger.info(f"TEMPORARY DEBUG: Wrote LLM context to file: {filename}")
+                except Exception as e:
+                    logger.warning(f"Failed to write LLM context debug file: {e}")
+            else:
+                logger.debug(f"Skipping debug file write (not running on localhost)")
 
         # 3. Call LLM service
         llm_response = await call_llm_service(

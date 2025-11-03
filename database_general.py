@@ -323,16 +323,70 @@ def get_pi_ai_card_by_id(card_id: int, conn: Connection = None) -> Optional[Dict
         raise e
 
 
-def get_formatted_job_data_for_llm_followup(card_id: int, job_id: Optional[int], conn: Connection = None) -> Optional[str]:
+def _format_job_data_for_llm(row_dict: Dict[str, Any], entity_type: str, entity_id: int, job_id: int) -> str:
     """
-    Get formatted job data from get_job_data_for_llm_followup view for LLM context.
+    Shared helper function to format job data for LLM context.
+    
+    Args:
+        row_dict: Dictionary of row data from database
+        entity_type: Type of entity ("card" or "recommendation")
+        entity_id: ID of the entity (card_id or recommendation_id)
+        job_id: Job ID
+    
+    Returns:
+        Formatted string with all non-NULL fields
+    """
+    # Format all non-NULL fields, excluding job_id
+    formatted_parts = []
+    for field_name, field_value in row_dict.items():
+        # Skip job_id field (not needed in output)
+        if field_name.lower() in ['job_id', 'jobid']:
+            continue
+        
+        if field_value is not None:
+            # TEMPORARY FIX: Remove prompt from input_sent
+            # This is a temporary fix to remove the prompt from the input_sent.
+            # The correct solution should be that we keep the original input that was sent to the LLM
+            # and the result from the LLM without a prompt.
+            if field_name.lower() == 'input_sent':
+                field_value_str = str(field_value)
+                # Search for "-- Prompt --" and remove everything after it
+                prompt_marker = "-- Prompt --"
+                if prompt_marker in field_value_str:
+                    field_value = field_value_str.split(prompt_marker)[0].rstrip()
+                    logger.info(f"Removed prompt from input_sent (temporary fix)")
+            
+            # Convert field name to readable format (replace underscores with spaces, capitalize)
+            readable_field_name = str(field_name).replace('_', ' ').title()
+            
+            # For recommendation_id and team_name, format on same line
+            # For other fields, keep the original format (new line)
+            if field_name.lower() in ['recommendation_id', 'recommendationid', 'ai_card_id', 'aicardid', 'team_name', 'teamname']:
+                # Format: "Field Name: value"
+                formatted_parts.append(f"{readable_field_name}: {field_value}")
+            else:
+                # Format: "Field Name = \nvalue\n"
+                formatted_parts.append(f"{readable_field_name} = \n{field_value}\n")
+    
+    if not formatted_parts:
+        logger.info(f"All fields are NULL for {entity_type}_id={entity_id}, job_id={job_id}")
+        return f"No previous chat discussion was found in the previous job ({job_id})"
+    
+    formatted_data = "\n".join(formatted_parts)
+    logger.info(f"Formatted job data (length: {len(formatted_data)} chars, {len(formatted_parts)} fields)")
+    return formatted_data
+
+
+def get_formatted_job_data_for_llm_followup_insight(card_id: int, job_id: Optional[int], conn: Connection = None) -> Optional[str]:
+    """
+    Get formatted job data from ai_summary table for LLM context (for insights/cards).
     Formats all fields as "Field Name = \nvalue\n" and skips NULL fields.
     
     Args:
         card_id (int): The ID of the card
         job_id (Optional[int]): The source_job_id from the card (can be None)
         conn (Connection): Database connection from FastAPI dependency
-        
+    
     Returns:
         str: Formatted string with all non-NULL fields, or None if no data found.
              Returns message string if job_id is None or no data found.
@@ -342,10 +396,16 @@ def get_formatted_job_data_for_llm_followup(card_id: int, job_id: Optional[int],
         if job_id is None:
             return f"No previous chat discussion was found in the previous job (no job ID)"
         
+        # Direct SELECT from ai_summary table (no view)
         query = text("""
-            SELECT *
-            FROM get_job_data_for_llm_followup
-            WHERE ai_card_id = :card_id AND job_id = :job_id
+            SELECT ai.id AS ai_card_id,
+                aj.job_id,
+                ai.team_name,
+                ai.full_information,
+                aj.input_sent
+            FROM ai_summary ai
+            JOIN agent_jobs aj ON ai.source_job_id = aj.job_id
+            WHERE ai.id = :card_id AND aj.job_id = :job_id
         """)
         
         logger.info(f"Executing query to get formatted job data for LLM followup (card_id={card_id}, job_id={job_id})")
@@ -354,31 +414,81 @@ def get_formatted_job_data_for_llm_followup(card_id: int, job_id: Optional[int],
         row = result.fetchone()
         
         if not row:
-            logger.info(f"No data found in view for card_id={card_id}, job_id={job_id}")
+            logger.info(f"No data found for card_id={card_id}, job_id={job_id}")
             return f"No previous chat discussion was found in the previous job ({job_id})"
         
         # Convert row to dictionary
         row_dict = dict(row._mapping)
         
-        # Format all non-NULL fields as "Field Name = \nvalue\n"
-        formatted_parts = []
-        for field_name, field_value in row_dict.items():
-            if field_value is not None:
-                # Convert field name to readable format (replace underscores with spaces, capitalize)
-                readable_field_name = str(field_name).replace('_', ' ').title()
-                # Format: "Field Name = \nvalue\n"
-                formatted_parts.append(f"{readable_field_name} = \n{field_value}\n")
-        
-        if not formatted_parts:
-            logger.info(f"All fields are NULL for card_id={card_id}, job_id={job_id}")
-            return f"No previous chat discussion was found in the previous job ({job_id})"
-        
-        formatted_data = "\n".join(formatted_parts)
-        logger.info(f"Formatted job data (length: {len(formatted_data)} chars, {len(formatted_parts)} fields)")
-        return formatted_data
+        # Use shared formatting helper
+        return _format_job_data_for_llm(row_dict, "card", card_id, job_id)
         
     except Exception as e:
         logger.error(f"Error fetching formatted job data for LLM followup (card_id={card_id}, job_id={job_id}): {e}")
+        # Return message instead of raising error
+        return f"No previous chat discussion was found in the previous job ({job_id if job_id else 'unknown'})"
+
+
+def get_formatted_job_data_for_llm_followup_recommendation(recommendation_id: int, job_id: Optional[int], conn: Connection = None) -> Optional[str]:
+    """
+    Get formatted job data for LLM context from recommendations table.
+    Similar to get_formatted_job_data_for_llm_followup_insight but queries recommendations instead of ai_summary.
+    
+    Args:
+        recommendation_id (int): The ID of the recommendation
+        job_id (Optional[int]): The source_job_id from the recommendation (can be None)
+        conn (Connection): Database connection from FastAPI dependency
+    
+    Returns:
+        str: Formatted string with all non-NULL fields, or None if no data found.
+             Returns message string if job_id is None or no data found.
+    """
+    try:
+        # If no job_id, return message indicating no previous job discussion
+        if job_id is None:
+            return f"No previous chat discussion was found in the previous job (no job ID)"
+        
+        # Direct SELECT from recommendations table (no view)
+        # Only filter by recommendation_id since the JOIN already connects via source_job_id
+        query = text("""
+            SELECT rec.id AS recommendation_id,
+                aj.job_id,
+                rec.team_name,
+                rec.full_information,
+                aj.input_sent
+            FROM recommendations rec
+            JOIN agent_jobs aj ON rec.source_job_id = aj.job_id
+            WHERE rec.id = :recommendation_id
+        """)
+        
+        logger.info(f"Executing query to get formatted job data for LLM followup (recommendation_id={recommendation_id}, job_id={job_id})")
+        
+        result = conn.execute(query, {"recommendation_id": recommendation_id})
+        row = result.fetchone()
+        
+        if not row:
+            # Check if recommendation exists but has no source_job_id or no matching agent_job
+            check_rec = text("SELECT id, source_job_id FROM recommendations WHERE id = :recommendation_id")
+            rec_check = conn.execute(check_rec, {"recommendation_id": recommendation_id})
+            rec_row = rec_check.fetchone()
+            if rec_row:
+                rec_data = dict(rec_row._mapping)
+                logger.warning(f"Recommendation {recommendation_id} exists but join failed. source_job_id={rec_data.get('source_job_id')}, expected job_id={job_id}")
+                if rec_data.get('source_job_id') is None:
+                    return f"No previous chat discussion was found (recommendation has no source_job_id)"
+                elif rec_data.get('source_job_id') != job_id:
+                    logger.warning(f"source_job_id mismatch: rec.source_job_id={rec_data.get('source_job_id')} != job_id={job_id}")
+            logger.info(f"No data found for recommendation_id={recommendation_id}, job_id={job_id}")
+            return f"No previous chat discussion was found in the previous job ({job_id})"
+        
+        # Convert row to dictionary
+        row_dict = dict(row._mapping)
+        
+        # Use shared formatting helper
+        return _format_job_data_for_llm(row_dict, "recommendation", recommendation_id, job_id)
+            
+    except Exception as e:
+        logger.error(f"Error fetching formatted job data for LLM followup (recommendation_id={recommendation_id}, job_id={job_id}): {e}")
         # Return message instead of raising error
         return f"No previous chat discussion was found in the previous job ({job_id if job_id else 'unknown'})"
 

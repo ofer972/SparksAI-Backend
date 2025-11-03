@@ -166,3 +166,6 @@ temp/
 
 # Railway deployment files (keep railway.json but ignore sensitive configs)
 # railway.json is kept for deployment configuration
+
+# LLM context debug files (temporary debug output)
+llm_context_debug*.txt
