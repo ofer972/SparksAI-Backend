@@ -26,6 +26,11 @@ from database_team_metrics import (
     get_issues_trend_data_db,
     get_sprints_with_total_issues_db
 )
+from database_pi import (
+    fetch_pi_burndown_data,
+    fetch_pi_predictability_data,
+    fetch_scope_changes_data
+)
 import config
 
 logger = logging.getLogger(__name__)
@@ -453,15 +458,17 @@ def build_team_dashboard_context(
 
 
 def build_pi_dashboard_context(
+    pi_name: Optional[str],
     prompt_name: Optional[str],
     user_id: Optional[str],
     conn: Connection
 ) -> Optional[str]:
     """
     Build conversation context for PI_dashboard chat type.
-    Fetches DB prompt (default or custom).
+    Fetches DB prompt (default or custom) and adds formatted PI metrics data.
     
     Args:
+        pi_name: PI name (required for data fetching)
         prompt_name: Optional custom prompt name
         user_id: User ID for custom prompt lookup
         conn: Database connection
@@ -504,6 +511,72 @@ def build_pi_dashboard_context(
                 logger.error(f"Custom prompt not found: '{custom_prompt_name}' (user_id='{user_id}')")
         except Exception as e:
             logger.error(f"Failed to fetch custom prompt '{custom_prompt_name}': {e}")
+    
+    # Fetch and format PI metrics data (burndown, predictability, scope changes)
+    if pi_name:
+        try:
+            # 1. Fetch PI burndown (with default issue_type="Epic")
+            burndown_data = []
+            try:
+                burndown_data = fetch_pi_burndown_data(
+                    pi_name=pi_name,
+                    project_keys=None,
+                    issue_type="Epic",  # Default from endpoint
+                    team_names=None,
+                    conn=conn
+                )
+                logger.info(f"Fetched {len(burndown_data)} PI burndown records for PI_dashboard")
+            except Exception as e:
+                logger.warning(f"Failed to fetch PI burndown for PI_dashboard: {e}")
+            
+            # 2. Fetch PI predictability (normalize pi_name to list)
+            predictability_data = []
+            try:
+                # Normalize to list (same logic as endpoint)
+                pi_names_list = [pi_name]  # Single PI for dashboard
+                predictability_data = fetch_pi_predictability_data(
+                    pi_names=pi_names_list,
+                    team_name=None,  # No team filter for dashboard
+                    conn=conn
+                )
+                logger.info(f"Fetched {len(predictability_data)} predictability records for PI_dashboard")
+            except Exception as e:
+                logger.warning(f"Failed to fetch PI predictability for PI_dashboard: {e}")
+            
+            # 3. Fetch scope changes (normalize pi_name to list for quarters)
+            scope_data = []
+            try:
+                # Normalize to list (same logic as endpoint)
+                quarters_list = [pi_name]  # Single PI/quarter for dashboard
+                scope_data = fetch_scope_changes_data(
+                    quarters=quarters_list,
+                    conn=conn
+                )
+                logger.info(f"Fetched {len(scope_data)} scope changes records for PI_dashboard")
+            except Exception as e:
+                logger.warning(f"Failed to fetch scope changes for PI_dashboard: {e}")
+            
+            # Format the data
+            formatted_data = format_pi_dashboard_data(
+                burndown_data,
+                predictability_data,
+                scope_data,
+                pi_name=pi_name
+            )
+            
+            # Combine with prompt text
+            if formatted_data:
+                if conversation_context:
+                    conversation_context = conversation_context + '\n\n' + formatted_data
+                else:
+                    conversation_context = formatted_data
+                logger.info(f"Combined prompt and formatted data for PI_dashboard (total length: {len(conversation_context)} chars)")
+            
+        except Exception as e:
+            logger.error(f"Error fetching PI metrics data for PI_dashboard: {e}")
+            # Continue with just prompt text if data fetching fails
+    else:
+        logger.warning("pi_name not provided for PI_dashboard, skipping data fetch")
     
     return conversation_context
 
@@ -594,6 +667,89 @@ def format_team_dashboard_data(
     else:
         formatted_parts.append("=== BUGS CREATED AND RESOLVED OVER TIME (Last 6 months) ===")
         formatted_parts.append("No bugs trend data found")
+    
+    return "\n".join(formatted_parts)
+
+
+def format_pi_dashboard_data(
+    burndown_data: list,
+    predictability_data: list,
+    scope_data: list,
+    pi_name: Optional[str] = None
+) -> str:
+    """
+    Format PI dashboard data for LLM context.
+    
+    Args:
+        burndown_data: List of PI burndown daily snapshots
+        predictability_data: List of PI predictability records
+        scope_data: List of scope changes records
+        pi_name: Optional PI name for section headers
+        
+    Returns:
+        Formatted string for LLM context
+    """
+    formatted_parts = []
+    
+    # Format PI burndown
+    if burndown_data:
+        header = f"=== PI BURNDOWN CHART (PI: {pi_name or 'Unknown'}) ==="
+        formatted_parts.append(header)
+        
+        for day in burndown_data:
+            # Generic: print all fields returned from database function
+            day_fields = []
+            for field_name, field_value in day.items():
+                if field_value is not None:
+                    day_fields.append(f"{field_name}: {field_value}")
+            
+            if day_fields:
+                formatted_parts.append(" | ".join(day_fields))
+            else:
+                formatted_parts.append("No data available")
+    else:
+        formatted_parts.append(f"=== PI BURNDOWN CHART (PI: {pi_name or 'N/A'}) ===")
+        formatted_parts.append("No burndown data found")
+    
+    formatted_parts.append("")  # Empty line
+    
+    # Format PI predictability
+    if predictability_data:
+        formatted_parts.append(f"=== PI PREDICTABILITY (PI: {pi_name or 'Unknown'}) ===")
+        for record in predictability_data:
+            # Generic: print all fields returned from database function
+            record_fields = []
+            for field_name, field_value in record.items():
+                if field_value is not None:
+                    record_fields.append(f"{field_name}: {field_value}")
+            
+            if record_fields:
+                formatted_parts.append(" | ".join(record_fields))
+            else:
+                formatted_parts.append("No data available")
+    else:
+        formatted_parts.append(f"=== PI PREDICTABILITY (PI: {pi_name or 'N/A'}) ===")
+        formatted_parts.append("No predictability data found")
+    
+    formatted_parts.append("")  # Empty line
+    
+    # Format epic scope changes
+    if scope_data:
+        formatted_parts.append(f"=== EPIC SCOPE CHANGES CHART (PI: {pi_name or 'Unknown'}) ===")
+        for record in scope_data:
+            # Generic: print all fields returned from database function
+            record_fields = []
+            for field_name, field_value in record.items():
+                if field_value is not None:
+                    record_fields.append(f"{field_name}: {field_value}")
+            
+            if record_fields:
+                formatted_parts.append(" | ".join(record_fields))
+            else:
+                formatted_parts.append("No data available")
+    else:
+        formatted_parts.append(f"=== EPIC SCOPE CHANGES CHART (PI: {pi_name or 'N/A'}) ===")
+        formatted_parts.append("No scope changes data found")
     
     return "\n".join(formatted_parts)
 
@@ -951,6 +1107,7 @@ async def ai_chat(
         elif chat_type_str == "PI_dashboard":
             if conversation_context is None:  # Only set if not already set by other chat types
                 conversation_context = build_pi_dashboard_context(
+                    pi_name=request.selected_pi,
                     prompt_name=request.prompt_name,
                     user_id=request.user_id,
                     conn=conn
