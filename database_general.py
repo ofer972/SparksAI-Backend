@@ -423,7 +423,7 @@ def get_formatted_job_data_for_llm_followup_insight(card_id: int, job_id: Option
         # The correct solution should be that we keep the original input that was sent to the LLM
         # and the result from the LLM without a prompt.
         input_sent_str = str(input_sent)
-        prompt_marker = "-- Prompt --"
+        prompt_marker = "===> Prompt:"
         if prompt_marker in input_sent_str:
             input_sent_str = input_sent_str.split(prompt_marker)[0].rstrip()
             logger.info(f"Removed prompt from input_sent (temporary fix)")
@@ -493,7 +493,7 @@ def get_formatted_job_data_for_llm_followup_recommendation(recommendation_id: in
         # The correct solution should be that we keep the original input that was sent to the LLM
         # and the result from the LLM without a prompt.
         input_sent_str = str(input_sent)
-        prompt_marker = "-- Prompt --"
+        prompt_marker = "===> Prompt:"
         if prompt_marker in input_sent_str:
             input_sent_str = input_sent_str.split(prompt_marker)[0].rstrip()
             logger.info(f"Removed prompt from input_sent (temporary fix)")
