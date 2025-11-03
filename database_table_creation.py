@@ -643,6 +643,7 @@ def create_recommendations_table_if_not_exists(engine=None) -> bool:
                     priority VARCHAR(50) NOT NULL,
                     status VARCHAR(50) NOT NULL,
                     source_job_id INTEGER,
+                    source_ai_summary_id INTEGER,
                     created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
                     updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
                 );
@@ -650,6 +651,7 @@ def create_recommendations_table_if_not_exists(engine=None) -> bool:
                 CREATE INDEX idx_recommendations_team_date ON public.recommendations(team_name, date DESC);
                 CREATE INDEX idx_recommendations_priority ON public.recommendations(priority);
                 CREATE INDEX idx_recommendations_status ON public.recommendations(status);
+                CREATE INDEX idx_recommendations_source_ai_summary_id ON public.recommendations(source_ai_summary_id);
                 """
                 conn.execute(text(create_table_sql))
                 conn.commit()
