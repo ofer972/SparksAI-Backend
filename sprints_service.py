@@ -11,6 +11,7 @@ from sqlalchemy.engine import Connection
 from typing import List, Dict, Any
 import logging
 import re
+from datetime import datetime, timedelta
 from database_connection import get_db_connection
 
 logger = logging.getLogger(__name__)
@@ -302,6 +303,84 @@ async def get_sprint_issues_with_epic_for_llm(
         raise HTTPException(
             status_code=500,
             detail=f"Failed to fetch sprint issues with epic for LLM: {str(e)}"
+        )
+
+@sprints_router.get("/sprints/sprint-predictability")
+async def get_sprint_predictability(
+    months: int = Query(3, description="Number of months to look back (1, 2, 3, 4, 6, 9)", ge=1, le=12),
+    conn: Connection = Depends(get_db_connection)
+):
+    """
+    Get sprint predictability metrics from the sprint_cycle_time_predictability_metrics view.
+    
+    Returns sprint_name, sprint_predictability, avg_story_cycle_time, sprint_official_start_date, 
+    and sprint_official_end_date for sprints within the specified time period.
+    
+    Args:
+        months: Number of months to look back (default: 3, valid: 1, 2, 3, 4, 6, 9)
+    
+    Returns:
+        JSON response with sprint predictability metrics
+    """
+    try:
+        # Validate months parameter
+        if months not in [1, 2, 3, 4, 6, 9]:
+            raise HTTPException(
+                status_code=400, 
+                detail="Months parameter must be one of: 1, 2, 3, 4, 6, 9"
+            )
+        
+        # Calculate start date based on months parameter
+        start_date = datetime.now().date() - timedelta(days=months * 30)
+        
+        # SECURE: Parameterized query prevents SQL injection
+        query = text("""
+            SELECT 
+                sprint_name, 
+                sprint_predictability, 
+                avg_story_cycle_time, 
+                sprint_official_start_date, 
+                sprint_official_end_date 
+            FROM public.sprint_cycle_time_predictability_metrics 
+            WHERE sprint_official_end_date >= :start_date
+            ORDER BY sprint_official_end_date DESC
+        """)
+        
+        logger.info(f"Executing query to get sprint predictability metrics: months={months}, start_date={start_date}")
+        
+        result = conn.execute(query, {"start_date": start_date.strftime("%Y-%m-%d")})
+        rows = result.fetchall()
+        
+        # Convert rows to list of dictionaries
+        predictability_data = []
+        for row in rows:
+            data_dict = dict(row._mapping)
+            
+            # Format date fields if they exist
+            for key, value in data_dict.items():
+                if value is not None and hasattr(value, 'strftime'):
+                    data_dict[key] = value.strftime('%Y-%m-%d')
+            
+            predictability_data.append(data_dict)
+        
+        return {
+            "success": True,
+            "data": {
+                "sprint_predictability": predictability_data,
+                "count": len(predictability_data),
+                "months": months
+            },
+            "message": f"Retrieved {len(predictability_data)} sprint predictability records (last {months} months)"
+        }
+    
+    except HTTPException:
+        # Re-raise HTTP exceptions (validation errors)
+        raise
+    except Exception as e:
+        logger.error(f"Error fetching sprint predictability metrics: {e}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to fetch sprint predictability metrics: {str(e)}"
         )
 
 @sprints_router.get("/sprints/{sprint_id}")
