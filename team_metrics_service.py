@@ -7,7 +7,7 @@ Uses FastAPI dependencies for clean connection management and SQL injection prot
 
 from fastapi import APIRouter, HTTPException, Depends, Query
 from sqlalchemy.engine import Connection
-from typing import Dict, Any
+from typing import Dict, Any, Optional
 from datetime import date, datetime
 import logging
 import re
@@ -212,21 +212,22 @@ def get_in_progress_issues_status(
         return "green"
 
 
-def calculate_days_left(end_date: date) -> str:
+def calculate_days_left(end_date: date) -> Optional[int]:
     """
-    Calculate and format days left in sprint as text.
+    Calculate days left in sprint as integer (inclusive counting).
     
     Args:
         end_date: Sprint end date (date or datetime object)
     
     Returns:
-        "Last day" if today is the end date
-        "X days left" if end date is in the future
-        "Unknown" if end date is None
-        "Sprint ended" if end date is in the past (edge case)
+        Integer representing days left (inclusive of today and end date)
+        - If today is end date: returns 1
+        - If end date is in future: returns (end_date - today).days + 1
+        - If sprint ended: returns 0
+        - If end_date is None: returns None
     """
     if end_date is None:
-        return "Unknown"
+        return None
     
     # Convert datetime to date if needed
     if isinstance(end_date, datetime):
@@ -234,16 +235,39 @@ def calculate_days_left(end_date: date) -> str:
     
     today = date.today()
     
-    if end_date == today:
-        return "Last day"
-    elif end_date < today:
-        return "Sprint ended"
+    if end_date < today:
+        return 0  # Sprint ended
     else:
-        days_diff = (end_date - today).days
-        if days_diff == 1:
-            return "1 day left"
-        else:
-            return f"{days_diff} days left"
+        # Inclusive counting: (end_date - today).days + 1
+        # If today is end_date, result is 1
+        # If today is Nov 3 and end is Nov 4, result is 2
+        return (end_date - today).days + 1
+
+
+def calculate_days_in_sprint(start_date: date, end_date: date) -> Optional[int]:
+    """
+    Calculate total days in sprint as integer (inclusive counting).
+    
+    Args:
+        start_date: Sprint start date (date or datetime object)
+        end_date: Sprint end date (date or datetime object)
+    
+    Returns:
+        Integer representing total days in sprint (inclusive of start and end dates)
+        - Returns (end_date - start_date).days + 1
+        - If either date is None: returns None
+    """
+    if start_date is None or end_date is None:
+        return None
+    
+    # Convert datetime to date if needed
+    if isinstance(start_date, datetime):
+        start_date = start_date.date()
+    if isinstance(end_date, datetime):
+        end_date = end_date.date()
+    
+    # Inclusive counting: (end_date - start_date).days + 1
+    return (end_date - start_date).days + 1
 
 
 @team_metrics_router.get("/team-metrics/get-avg-sprint-metrics")
@@ -362,7 +386,8 @@ async def get_current_sprint_progress(
     
     Returns:
         JSON response with sprint progress metrics including:
-        - days_left: Days remaining in sprint as text (e.g., "5 days left", "Last day")
+        - days_left: Days remaining in sprint as integer (inclusive counting, 1 = last day)
+        - days_in_sprint: Total days in sprint as integer (inclusive counting)
         - total_issues: Total number of issues in active sprint
         - completed_issues: Number of completed issues (status_category = 'Done')
         - in_progress_issues: Number of issues in progress
@@ -380,6 +405,10 @@ async def get_current_sprint_progress(
         
         # Calculate derived fields in service layer (business logic)
         days_left = calculate_days_left(progress_data['end_date'])
+        days_in_sprint = calculate_days_in_sprint(
+            progress_data['start_date'],
+            progress_data['end_date']
+        )
         percent_completed_status = get_percent_completed_status(
             progress_data['percent_completed'],
             progress_data['start_date'],
@@ -394,6 +423,7 @@ async def get_current_sprint_progress(
             "success": True,
             "data": {
                 "days_left": days_left,
+                "days_in_sprint": days_in_sprint,
                 "total_issues": progress_data['total_issues'],
                 "completed_issues": progress_data['completed_issues'],
                 "in_progress_issues": progress_data['in_progress_issues'],
