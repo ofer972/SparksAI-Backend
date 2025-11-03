@@ -59,6 +59,7 @@ def validate_limit(limit: int) -> int:
 async def get_top_recommendations(
     team_name: str = Query(..., description="Team name to get recommendations for"),
     limit: int = Query(4, description="Number of recommendations to return (default: 4, max: 50)"),
+    source_ai_summary_id: Optional[int] = Query(None, description="Optional: Filter by source AI summary ID"),
     conn: Connection = Depends(get_db_connection)
 ):
     """
@@ -72,6 +73,7 @@ async def get_top_recommendations(
     Args:
         team_name: Name of the team
         limit: Number of recommendations to return (default: 4)
+        source_ai_summary_id: Optional filter by source AI summary ID
     
     Returns:
         JSON response with recommendations list and metadata
@@ -82,7 +84,7 @@ async def get_top_recommendations(
         validated_limit = validate_limit(limit)
         
         # Get recommendations from database function
-        recommendations = get_top_ai_recommendations(validated_team_name, validated_limit, conn)
+        recommendations = get_top_ai_recommendations(validated_team_name, validated_limit, source_ai_summary_id, conn)
         
         return {
             "success": True,
@@ -109,6 +111,7 @@ async def get_top_recommendations(
 async def get_top_pi_recommendations(
     pi: str = Query(..., description="PI name to get recommendations for"),
     limit: int = Query(4, description="Number of recommendations to return (default: 4, max: 50)"),
+    source_ai_summary_id: Optional[int] = Query(None, description="Optional: Filter by source AI summary ID"),
     conn: Connection = Depends(get_db_connection)
 ):
     """
@@ -122,6 +125,7 @@ async def get_top_pi_recommendations(
     Args:
         pi: Name of the PI
         limit: Number of recommendations to return (default: 4)
+        source_ai_summary_id: Optional filter by source AI summary ID
     
     Returns:
         JSON response with recommendations list and metadata
@@ -132,7 +136,7 @@ async def get_top_pi_recommendations(
         validated_limit = validate_limit(limit)
         
         # Get recommendations from database function using PI name as team_name
-        recommendations = get_top_ai_recommendations(validated_pi_name, validated_limit, conn)
+        recommendations = get_top_ai_recommendations(validated_pi_name, validated_limit, source_ai_summary_id, conn)
         
         return {
             "success": True,
@@ -210,6 +214,7 @@ class RecommendationCreateRequest(BaseModel):
     status: Optional[str] = None
     information_json: Optional[str] = None
     source_job_id: Optional[int] = None
+    source_ai_summary_id: Optional[int] = None
 
 
 class RecommendationUpdateRequest(BaseModel):
@@ -222,6 +227,7 @@ class RecommendationUpdateRequest(BaseModel):
     status: Optional[str] = None
     information_json: Optional[str] = None
     source_job_id: Optional[int] = None
+    source_ai_summary_id: Optional[int] = None
 
 
 @recommendations_router.post("/recommendations")

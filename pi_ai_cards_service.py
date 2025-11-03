@@ -18,6 +18,7 @@ from database_general import (
     create_ai_card,
     update_ai_card_by_id,
     delete_ai_card_by_id,
+    get_top_ai_cards_filtered,
 )
 import config
 
@@ -82,48 +83,8 @@ async def get_pi_ai_cards(
         validated_pi_name = validate_pi_name(pi)
         validated_limit = validate_limit(limit)
         
-        # Get PI AI cards using direct SQL query (filter by pi field)
-        query = text(f"""
-            WITH ranked_cards AS (
-                SELECT *,
-                    ROW_NUMBER() OVER (
-                        PARTITION BY card_type 
-                        ORDER BY 
-                            CASE priority 
-                                WHEN 'Critical' THEN 1 
-                                WHEN 'High' THEN 2 
-                                WHEN 'Medium' THEN 3 
-                                ELSE 4 
-                            END,
-                            date DESC
-                    ) as rn
-                FROM {config.PI_AI_CARDS_TABLE}
-                WHERE pi = :pi_name
-            )
-            SELECT *
-            FROM ranked_cards
-            WHERE rn = 1
-            ORDER BY 
-                CASE priority 
-                    WHEN 'Critical' THEN 1 
-                    WHEN 'High' THEN 2 
-                    WHEN 'Medium' THEN 3 
-                    ELSE 4 
-                END,
-                date DESC
-            LIMIT :limit
-        """)
-        
-        logger.info(f"Executing query to get PI AI cards for PI '{validated_pi_name}'")
-        
-        result = conn.execute(query, {"pi_name": validated_pi_name, "limit": validated_limit})
-        rows = result.fetchall()
-        
-        # Convert rows to list of dictionaries
-        ai_cards = []
-        for row in rows:
-            card_dict = dict(row._mapping)
-            ai_cards.append(card_dict)
+        # Get PI AI cards using shared generic function
+        ai_cards = get_top_ai_cards_filtered('pi', validated_pi_name, validated_limit, conn)
         
         return {
             "success": True,

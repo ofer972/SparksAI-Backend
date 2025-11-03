@@ -14,7 +14,7 @@ import config
 logger = logging.getLogger(__name__)
 
 
-def get_top_ai_recommendations(team_name: str, limit: int = 4, conn: Connection = None) -> List[Dict[str, Any]]:
+def get_top_ai_recommendations(team_name: str, limit: int = 4, source_ai_summary_id: Optional[int] = None, conn: Connection = None) -> List[Dict[str, Any]]:
     """
     Get top AI recommendations for a specific team.
     
@@ -26,6 +26,7 @@ def get_top_ai_recommendations(team_name: str, limit: int = 4, conn: Connection 
     Args:
         team_name (str): Team name
         limit (int): Number of recommendations to return (default: 4)
+        source_ai_summary_id (Optional[int]): Optional filter by source AI summary ID
         conn (Connection): Database connection from FastAPI dependency
     
     Returns:
@@ -37,6 +38,7 @@ def get_top_ai_recommendations(team_name: str, limit: int = 4, conn: Connection 
             SELECT *
             FROM public.recommendations
             WHERE team_name = :team_name
+              AND (:source_ai_summary_id IS NULL OR source_ai_summary_id = :source_ai_summary_id)
             ORDER BY 
                 DATE(date) DESC,
                 CASE priority 
@@ -50,11 +52,12 @@ def get_top_ai_recommendations(team_name: str, limit: int = 4, conn: Connection 
         """
         
         logger.info(f"Executing query to get top AI recommendations for team: {team_name}")
-        logger.info(f"Parameters: team_name={team_name}, limit={limit}")
+        logger.info(f"Parameters: team_name={team_name}, limit={limit}, source_ai_summary_id={source_ai_summary_id}")
         
         result = conn.execute(text(sql_query), {
             'team_name': team_name, 
-            'limit': limit
+            'limit': limit,
+            'source_ai_summary_id': source_ai_summary_id
         })
         
         # Convert rows to list of dictionaries
@@ -67,6 +70,83 @@ def get_top_ai_recommendations(team_name: str, limit: int = 4, conn: Connection 
             
     except Exception as e:
         logger.error(f"Error fetching top AI recommendations for team {team_name}: {e}")
+        raise e
+
+
+def get_top_ai_cards_filtered(filter_column: str, filter_value: str, limit: int = 4, conn: Connection = None) -> List[Dict[str, Any]]:
+    """
+    Get top AI cards filtered by a specific column (e.g., team_name or pi).
+    
+    Returns the most recent + highest priority card for each type (max 1 per type).
+    Cards are ordered by:
+    1. Priority (Critical > High > Medium)
+    2. Date (newest first)
+    
+    Args:
+        filter_column (str): Column to filter by (must be 'team_name' or 'pi' for security)
+        filter_value (str): Value to filter by
+        limit (int): Number of AI cards to return (default: 4)
+        conn (Connection): Database connection from FastAPI dependency
+    
+    Returns:
+        list: List of AI card dictionaries with all columns
+    """
+    # Security: Only allow specific columns to prevent SQL injection
+    allowed_columns = {'team_name', 'pi'}
+    if filter_column not in allowed_columns:
+        raise ValueError(f"filter_column must be one of {allowed_columns}, got: {filter_column}")
+    
+    try:
+        # SECURE: Parameterized query prevents SQL injection
+        # Using filter_column with whitelist check above
+        sql_query = f"""
+            WITH ranked_cards AS (
+                SELECT *,
+                    ROW_NUMBER() OVER (
+                        PARTITION BY card_type 
+                        ORDER BY 
+                            CASE priority 
+                                WHEN 'Critical' THEN 1 
+                                WHEN 'High' THEN 2 
+                                WHEN 'Medium' THEN 3 
+                                ELSE 4 
+                            END,
+                            date DESC
+                    ) as rn
+                FROM public.ai_summary
+                WHERE {filter_column} = :filter_value
+            )
+            SELECT *
+            FROM ranked_cards
+            WHERE rn = 1
+            ORDER BY 
+                CASE priority 
+                    WHEN 'Critical' THEN 1 
+                    WHEN 'High' THEN 2 
+                    WHEN 'Medium' THEN 3 
+                    ELSE 4 
+                END,
+                date DESC
+            LIMIT :limit
+        """
+        
+        logger.info(f"Executing query to get top AI cards filtered by {filter_column}: {filter_value}")
+        logger.info(f"Parameters: filter_column={filter_column}, filter_value={filter_value}, limit={limit}")
+        
+        result = conn.execute(text(sql_query), {
+            'filter_value': filter_value,
+            'limit': limit
+        })
+        
+        # Convert rows to list of dictionaries
+        ai_cards = []
+        for row in result:
+            ai_cards.append(dict(row._mapping))
+        
+        return ai_cards
+            
+    except Exception as e:
+        logger.error(f"Error fetching top AI cards filtered by {filter_column}={filter_value}: {e}")
         raise e
 
 
@@ -87,67 +167,8 @@ def get_top_ai_cards(team_name: str, limit: int = 4, conn: Connection = None) ->
     Returns:
         list: List of AI card dictionaries
     """
-    try:
-        # SECURE: Parameterized query prevents SQL injection
-        sql_query = """
-            WITH ranked_cards AS (
-                SELECT *,
-                       ROW_NUMBER() OVER (
-                           PARTITION BY card_type 
-                           ORDER BY 
-                               date DESC,
-                               updated_at DESC,
-                               CASE priority 
-                                   WHEN 'Critical' THEN 1 
-                                   WHEN 'High' THEN 2 
-                                   WHEN 'Medium' THEN 3 
-                               END
-                       ) as rn
-                FROM public.ai_summary
-                WHERE team_name = :team_name
-            )
-            SELECT id, date, team_name, card_name, card_type, priority, source, description, full_information, information_json
-            FROM ranked_cards
-            WHERE rn = 1
-            ORDER BY 
-                CASE priority 
-                    WHEN 'Critical' THEN 1 
-                    WHEN 'High' THEN 2 
-                    WHEN 'Medium' THEN 3 
-                END,
-                date DESC
-            LIMIT :limit
-        """
-        
-        logger.info(f"Executing query to get top AI cards for team: {team_name}")
-        logger.info(f"Parameters: team_name={team_name}, limit={limit}")
-        
-        result = conn.execute(text(sql_query), {
-            'team_name': team_name, 
-            'limit': limit
-        })
-        
-        # Convert rows to list of dictionaries
-        ai_cards = []
-        for row in result:
-            ai_cards.append({
-                'id': row[0],
-                'date': row[1],
-                'team_name': row[2],
-                'card_name': row[3],
-                'card_type': row[4],
-                'priority': row[5],
-                'source': row[6],
-                'description': row[7],
-                'full_information': row[8],
-                'information_json': row[9]
-            })
-        
-        return ai_cards
-            
-    except Exception as e:
-        logger.error(f"Error fetching top AI cards for team {team_name}: {e}")
-        raise e
+    # Use the generic function for backward compatibility
+    return get_top_ai_cards_filtered('team_name', team_name, limit, conn)
 
 
 def get_team_ai_card_by_id(card_id: int, conn: Connection = None) -> Optional[Dict[str, Any]]:
@@ -603,7 +624,7 @@ def create_recommendation(data: Dict[str, Any], conn: Connection = None) -> Dict
     try:
         allowed_columns = {
             "team_name", "date", "action_text", "rational", "full_information",
-            "priority", "status", "information_json", "source_job_id"
+            "priority", "status", "information_json", "source_job_id", "source_ai_summary_id"
         }
         filtered = {k: v for k, v in data.items() if k in allowed_columns}
         if not filtered:
@@ -635,7 +656,7 @@ def update_recommendation_by_id(recommendation_id: int, updates: Dict[str, Any],
     try:
         allowed_columns = {
             "team_name", "date", "action_text", "rational", "full_information",
-            "priority", "status", "information_json", "source_job_id"
+            "priority", "status", "information_json", "source_job_id", "source_ai_summary_id"
         }
         filtered = {k: v for k, v in updates.items() if k in allowed_columns}
         if not filtered:
