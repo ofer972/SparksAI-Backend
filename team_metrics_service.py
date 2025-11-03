@@ -8,7 +8,7 @@ Uses FastAPI dependencies for clean connection management and SQL injection prot
 from fastapi import APIRouter, HTTPException, Depends, Query
 from sqlalchemy.engine import Connection
 from typing import Dict, Any
-from datetime import date
+from datetime import date, datetime
 import logging
 import re
 from database_connection import get_db_connection
@@ -127,8 +127,8 @@ def get_percent_completed_status(
     
     Args:
         percent_completed: Actual completion percentage (0-100)
-        start_date: Sprint start date
-        end_date: Sprint end date
+        start_date: Sprint start date (date or datetime object)
+        end_date: Sprint end date (date or datetime object)
         slack_threshold: Percentage slack allowed (default: 15%)
     
     Returns:
@@ -140,6 +140,12 @@ def get_percent_completed_status(
     # Handle edge cases
     if start_date is None or end_date is None:
         return "green"
+    
+    # Convert datetime to date if needed
+    if isinstance(start_date, datetime):
+        start_date = start_date.date()
+    if isinstance(end_date, datetime):
+        end_date = end_date.date()
     
     today = date.today()
     
@@ -211,7 +217,7 @@ def calculate_days_left(end_date: date) -> str:
     Calculate and format days left in sprint as text.
     
     Args:
-        end_date: Sprint end date
+        end_date: Sprint end date (date or datetime object)
     
     Returns:
         "Last day" if today is the end date
@@ -221,6 +227,10 @@ def calculate_days_left(end_date: date) -> str:
     """
     if end_date is None:
         return "Unknown"
+    
+    # Convert datetime to date if needed
+    if isinstance(end_date, datetime):
+        end_date = end_date.date()
     
     today = date.today()
     
