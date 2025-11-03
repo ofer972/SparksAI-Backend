@@ -396,19 +396,15 @@ def get_formatted_job_data_for_llm_followup_insight(card_id: int, job_id: Option
         if job_id is None:
             return f"No previous chat discussion was found in the previous job (no job ID)"
         
-        # Direct SELECT from ai_summary table (no view)
+        # Direct SELECT from agent_jobs table - only get input_sent (not full_information or other fields)
         query = text("""
-            SELECT ai.id AS ai_card_id,
-                aj.job_id,
-                ai.team_name,
-                ai.full_information,
-                aj.input_sent
+            SELECT aj.input_sent
             FROM ai_summary ai
             JOIN agent_jobs aj ON ai.source_job_id = aj.job_id
             WHERE ai.id = :card_id AND aj.job_id = :job_id
         """)
         
-        logger.info(f"Executing query to get formatted job data for LLM followup (card_id={card_id}, job_id={job_id})")
+        logger.info(f"Executing query to get input_sent for LLM followup (card_id={card_id}, job_id={job_id})")
         
         result = conn.execute(query, {"card_id": card_id, "job_id": job_id})
         row = result.fetchone()
@@ -417,11 +413,22 @@ def get_formatted_job_data_for_llm_followup_insight(card_id: int, job_id: Option
             logger.info(f"No data found for card_id={card_id}, job_id={job_id}")
             return f"No previous chat discussion was found in the previous job ({job_id})"
         
-        # Convert row to dictionary
-        row_dict = dict(row._mapping)
+        input_sent = row[0] if row[0] is not None else None
         
-        # Use shared formatting helper
-        return _format_job_data_for_llm(row_dict, "card", card_id, job_id)
+        if input_sent is None:
+            return f"No previous chat discussion was found in the previous job ({job_id})"
+        
+        # TEMPORARY FIX: Remove prompt from input_sent
+        # This is a temporary fix to remove the prompt from the input_sent.
+        # The correct solution should be that we keep the original input that was sent to the LLM
+        # and the result from the LLM without a prompt.
+        input_sent_str = str(input_sent)
+        prompt_marker = "-- Prompt --"
+        if prompt_marker in input_sent_str:
+            input_sent_str = input_sent_str.split(prompt_marker)[0].rstrip()
+            logger.info(f"Removed prompt from input_sent (temporary fix)")
+        
+        return input_sent_str
         
     except Exception as e:
         logger.error(f"Error fetching formatted job data for LLM followup (card_id={card_id}, job_id={job_id}): {e}")
@@ -448,20 +455,15 @@ def get_formatted_job_data_for_llm_followup_recommendation(recommendation_id: in
         if job_id is None:
             return f"No previous chat discussion was found in the previous job (no job ID)"
         
-        # Direct SELECT from recommendations table (no view)
-        # Only filter by recommendation_id since the JOIN already connects via source_job_id
+        # Direct SELECT from agent_jobs table - only get input_sent (not full_information or other fields)
         query = text("""
-            SELECT rec.id AS recommendation_id,
-                aj.job_id,
-                rec.team_name,
-                rec.full_information,
-                aj.input_sent
+            SELECT aj.input_sent
             FROM recommendations rec
             JOIN agent_jobs aj ON rec.source_job_id = aj.job_id
             WHERE rec.id = :recommendation_id
         """)
         
-        logger.info(f"Executing query to get formatted job data for LLM followup (recommendation_id={recommendation_id}, job_id={job_id})")
+        logger.info(f"Executing query to get input_sent for LLM followup (recommendation_id={recommendation_id}, job_id={job_id})")
         
         result = conn.execute(query, {"recommendation_id": recommendation_id})
         row = result.fetchone()
@@ -481,11 +483,22 @@ def get_formatted_job_data_for_llm_followup_recommendation(recommendation_id: in
             logger.info(f"No data found for recommendation_id={recommendation_id}, job_id={job_id}")
             return f"No previous chat discussion was found in the previous job ({job_id})"
         
-        # Convert row to dictionary
-        row_dict = dict(row._mapping)
+        input_sent = row[0] if row[0] is not None else None
         
-        # Use shared formatting helper
-        return _format_job_data_for_llm(row_dict, "recommendation", recommendation_id, job_id)
+        if input_sent is None:
+            return f"No previous chat discussion was found in the previous job ({job_id})"
+        
+        # TEMPORARY FIX: Remove prompt from input_sent
+        # This is a temporary fix to remove the prompt from the input_sent.
+        # The correct solution should be that we keep the original input that was sent to the LLM
+        # and the result from the LLM without a prompt.
+        input_sent_str = str(input_sent)
+        prompt_marker = "-- Prompt --"
+        if prompt_marker in input_sent_str:
+            input_sent_str = input_sent_str.split(prompt_marker)[0].rstrip()
+            logger.info(f"Removed prompt from input_sent (temporary fix)")
+        
+        return input_sent_str
             
     except Exception as e:
         logger.error(f"Error fetching formatted job data for LLM followup (recommendation_id={recommendation_id}, job_id={job_id}): {e}")

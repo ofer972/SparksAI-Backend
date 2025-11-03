@@ -414,7 +414,12 @@ async def ai_chat(
                     logger.warning(f"Failed to fetch DB content prompt for prompt_name='{content_prompt_name}': {e}. Using fallback.")
                 if not content_intro:
                     content_intro = "This is previous discussion we had in a different chat. Read this information as I want to ask follow up questions."
-                conversation_context = content_intro + '\n\n' + formatted_job_data
+                
+                # Extract description from card
+                description = card.get('description', '')
+                
+                # Build conversation_context: content_intro + description + input_sent
+                conversation_context = content_intro + '\n\n' + description + '\n\n' + formatted_job_data
                 logger.info(f"Built conversation context from team AI card {insights_id_int} with intro (length: {len(conversation_context)} chars)")
             except ValueError:
                 raise HTTPException(
@@ -469,7 +474,12 @@ async def ai_chat(
                     logger.warning(f"Failed to fetch DB content prompt for prompt_name='{content_prompt_name}': {e}. Using fallback.")
                 if not content_intro:
                     content_intro = "This is previous discussion we had in a different chat. Read this information as I want to ask follow up questions."
-                conversation_context = content_intro + '\n\n' + formatted_job_data
+                
+                # Extract description from card
+                description = card.get('description', '')
+                
+                # Build conversation_context: content_intro + description + input_sent
+                conversation_context = content_intro + '\n\n' + description + '\n\n' + formatted_job_data
                 logger.info(f"Built conversation context from PI AI card {insights_id_int} (length: {len(conversation_context)} chars)")
             except ValueError:
                 raise HTTPException(
@@ -532,7 +542,12 @@ async def ai_chat(
                     logger.warning(f"Failed to fetch DB content prompt for prompt_name='{content_prompt_name}': {e}. Using fallback.")
                 if not content_intro:
                     content_intro = "This is previous discussion we had in a different chat. Read this information as I want to ask follow up questions."
-                conversation_context = content_intro + '\n\n' + formatted_job_data
+                
+                # Extract action_text from recommendation
+                action_text = recommendation.get('action_text', '')
+                
+                # Build conversation_context: content_intro + action_text + input_sent
+                conversation_context = content_intro + '\n\n' + action_text + '\n\n' + formatted_job_data
                 logger.info(f"Built conversation context from recommendation {recommendation_id_int} with intro (length: {len(conversation_context)} chars)")
             except ValueError:
                 raise HTTPException(
