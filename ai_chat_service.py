@@ -16,7 +16,7 @@ import json
 import httpx
 import socket
 import os
-from datetime import datetime
+from datetime import datetime, date
 from pathlib import Path
 from database_connection import get_db_connection
 from database_general import get_team_ai_card_by_id, get_recommendation_by_id, get_prompt_by_email_and_name, get_pi_ai_card_by_id, get_formatted_job_data_for_llm_followup_insight, get_formatted_job_data_for_llm_followup_recommendation
@@ -440,13 +440,20 @@ def build_team_dashboard_context(
                 sprint_name=selected_sprint_name
             )
             
-            # Combine with prompt text
+            # Add today's date in markdown format
+            today_date_str = date.today().strftime('%Y-%m-%d')
+            today_date_markdown = f"## Today's date: {today_date_str}"
+            
+            # Combine with prompt text: prompt -> today's date -> formatted data
             if formatted_data:
                 if conversation_context:
-                    conversation_context = conversation_context + '\n\n' + formatted_data
+                    conversation_context = conversation_context + '\n\n' + today_date_markdown + '\n\n' + formatted_data
                 else:
-                    conversation_context = formatted_data
+                    conversation_context = today_date_markdown + '\n\n' + formatted_data
                 logger.info(f"Combined prompt and formatted data for Team_dashboard (total length: {len(conversation_context)} chars)")
+            elif conversation_context:
+                # If no formatted data but we have prompt, still add today's date
+                conversation_context = conversation_context + '\n\n' + today_date_markdown
             
         except Exception as e:
             logger.error(f"Error fetching team metrics data for Team_dashboard: {e}")
@@ -564,12 +571,19 @@ def build_pi_dashboard_context(
                 pi_name=pi_name
             )
             
-            # Combine with prompt text
+            # Add today's date in markdown format
+            today_date_str = date.today().strftime('%Y-%m-%d')
+            today_date_markdown = f"## Today's date: {today_date_str}"
+            
+            # Combine with prompt text: prompt -> today's date -> formatted data
             if formatted_data:
                 if conversation_context:
-                    conversation_context = conversation_context + '\n\n' + formatted_data
+                    conversation_context = conversation_context + '\n\n' + today_date_markdown + '\n\n' + formatted_data
                 else:
-                    conversation_context = formatted_data
+                    conversation_context = today_date_markdown + '\n\n' + formatted_data
+            elif conversation_context:
+                # If no formatted data but we have prompt, still add today's date
+                conversation_context = conversation_context + '\n\n' + today_date_markdown
                 logger.info(f"Combined prompt and formatted data for PI_dashboard (total length: {len(conversation_context)} chars)")
             
         except Exception as e:
