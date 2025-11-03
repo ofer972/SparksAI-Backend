@@ -29,6 +29,12 @@ class PIJobCreateRequest(BaseModel):
     pi: str
 
 
+class PIJobForTeamCreateRequest(BaseModel):
+    job_type: str
+    pi: str
+    team_name: str
+
+
 def validate_team_exists(team_name: str, conn: Connection):
     """Validate that the team exists in the database by checking jira_issues table"""
     try:
@@ -93,6 +99,24 @@ def validate_pi_job_request(job_type: str, pi: str, conn: Connection):
     
     # Validate PI exists in database
     validate_pi_exists(pi, conn)
+
+
+def validate_pi_job_for_team_request(job_type: str, pi: str, team_name: str, conn: Connection):
+    """Validate PI job for team creation request"""
+    if not job_type or not job_type.strip():
+        raise HTTPException(status_code=400, detail="job_type is required")
+    
+    if not pi or not pi.strip():
+        raise HTTPException(status_code=400, detail="pi is required")
+    
+    if not team_name or not team_name.strip():
+        raise HTTPException(status_code=400, detail="team_name is required")
+    
+    # Validate PI exists in database
+    validate_pi_exists(pi, conn)
+    
+    # Validate team exists in database
+    validate_team_exists(team_name, conn)
 
 @agent_jobs_router.get("/agent-jobs")
 async def get_agent_jobs(conn: Connection = Depends(get_db_connection)):
@@ -371,6 +395,66 @@ async def create_pi_job(
         raise HTTPException(
             status_code=500,
             detail=f"Failed to create PI job: {str(e)}"
+        )
+
+
+@agent_jobs_router.post("/agent-jobs/create-pi-job-for-team")
+async def create_pi_job_for_team(
+    request: PIJobForTeamCreateRequest,
+    conn: Connection = Depends(get_db_connection)
+):
+    """
+    Create a new PI-based agent job for a specific team.
+    
+    Args:
+        request: PIJobForTeamCreateRequest containing job_type, pi, and team_name
+        conn: Database connection from FastAPI dependency
+    
+    Returns:
+        JSON response with created job information
+    """
+    try:
+        # Validate request
+        validate_pi_job_for_team_request(request.job_type, request.pi, request.team_name, conn)
+        
+        # Create the job
+        insert_query = text(f"""
+            INSERT INTO {config.AGENT_JOBS_TABLE} 
+            (job_type, team_name, pi, status, created_at, updated_at)
+            VALUES (:job_type, :team_name, :pi, 'Pending', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+            RETURNING job_id, job_type, team_name, pi, status, created_at
+        """)
+        
+        logger.info(f"Creating PI job: {request.job_type} for PI: {request.pi} and team: {request.team_name}")
+        
+        result = conn.execute(insert_query, {
+            "job_type": request.job_type,
+            "team_name": request.team_name,
+            "pi": request.pi
+        })
+        
+        row = result.fetchone()
+        conn.commit()
+        
+        # Convert row to dictionary
+        job = dict(row._mapping)
+        
+        return {
+            "success": True,
+            "data": {
+                "job": job
+            },
+            "message": "PI job for team created successfully"
+        }
+    
+    except HTTPException:
+        # Re-raise HTTP exceptions (validation errors)
+        raise
+    except Exception as e:
+        logger.error(f"Error creating PI job for team: {e}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to create PI job for team: {str(e)}"
         )
 
 
