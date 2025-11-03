@@ -8,6 +8,7 @@ Uses FastAPI dependencies for clean connection management and SQL injection prot
 from fastapi import APIRouter, HTTPException, Depends, Query
 from sqlalchemy.engine import Connection
 from typing import Dict, Any
+from datetime import date
 import logging
 import re
 from database_connection import get_db_connection
@@ -110,6 +111,129 @@ def get_velocity_status(velocity: int) -> str:
         "green" (always for now)
     """
     return "green"
+
+
+def get_percent_completed_status(
+    percent_completed: float,
+    start_date: date,
+    end_date: date,
+    slack_threshold: float = 15.0
+) -> str:
+    """
+    Determine completion status based on sprint timeline vs actual completion.
+    
+    Compares actual completion percentage against expected completion based on
+    how much of the sprint has elapsed.
+    
+    Args:
+        percent_completed: Actual completion percentage (0-100)
+        start_date: Sprint start date
+        end_date: Sprint end date
+        slack_threshold: Percentage slack allowed (default: 15%)
+    
+    Returns:
+        "green" if ahead of schedule (actual >= expected - slack)
+        "yellow" if slightly behind (expected - 25% <= actual < expected - slack)
+        "red" if significantly behind (actual < expected - 25%)
+        "green" if unable to calculate (edge cases)
+    """
+    # Handle edge cases
+    if start_date is None or end_date is None:
+        return "green"
+    
+    today = date.today()
+    
+    # If sprint hasn't started yet
+    if today < start_date:
+        return "green"
+    
+    # If sprint has ended
+    if today >= end_date:
+        # Compare actual completion to 100% expected
+        if percent_completed >= 100 - slack_threshold:
+            return "green"
+        elif percent_completed >= 75:
+            return "yellow"
+        else:
+            return "red"
+    
+    # Calculate expected completion based on timeline
+    total_sprint_days = (end_date - start_date).days
+    if total_sprint_days <= 0:
+        return "green"
+    
+    days_elapsed = (today - start_date).days
+    expected_completion = (days_elapsed / total_sprint_days) * 100
+    
+    # Determine status with slack
+    if percent_completed >= expected_completion - slack_threshold:
+        return "green"
+    elif percent_completed >= expected_completion - 25.0:
+        return "yellow"
+    else:
+        return "red"
+
+
+def get_in_progress_issues_status(
+    in_progress_issues: int,
+    total_issues: int
+) -> str:
+    """
+    Determine in-progress issues status based on percentage of total issues.
+    
+    High WIP (work in progress) indicates potential bottlenecks.
+    
+    Args:
+        in_progress_issues: Number of issues in progress
+        total_issues: Total number of issues in sprint
+    
+    Returns:
+        "green" if < 40% of issues are in progress
+        "yellow" if 40-60% of issues are in progress
+        "red" if > 60% of issues are in progress
+    """
+    # Handle edge cases
+    if total_issues == 0:
+        return "green"
+    
+    in_progress_percent = (in_progress_issues / total_issues) * 100
+    
+    if in_progress_percent > 60:
+        return "red"
+    elif in_progress_percent >= 40:
+        return "yellow"
+    else:
+        return "green"
+
+
+def calculate_days_left(end_date: date) -> str:
+    """
+    Calculate and format days left in sprint as text.
+    
+    Args:
+        end_date: Sprint end date
+    
+    Returns:
+        "Last day" if today is the end date
+        "X days left" if end date is in the future
+        "Unknown" if end date is None
+        "Sprint ended" if end date is in the past (edge case)
+    """
+    if end_date is None:
+        return "Unknown"
+    
+    today = date.today()
+    
+    if end_date == today:
+        return "Last day"
+    elif end_date < today:
+        return "Sprint ended"
+    else:
+        days_diff = (end_date - today).days
+        if days_diff == 1:
+            return "1 day left"
+        else:
+            return f"{days_diff} days left"
 
 
 @team_metrics_router.get("/team-metrics/get-avg-sprint-metrics")
@@ -220,19 +344,22 @@ async def get_current_sprint_progress(
     """
     Get current sprint progress for a specific team with detailed breakdown.
     
-    Returns total issues, completed, in progress, to do counts, and completion percentage
-    for the current active sprint.
+    Returns days left, total issues, completed, in progress, to do counts, completion percentage,
+    and status indicators for the current active sprint.
     
     Args:
         team_name: Name of the team
     
     Returns:
         JSON response with sprint progress metrics including:
+        - days_left: Days remaining in sprint as text (e.g., "5 days left", "Last day")
         - total_issues: Total number of issues in active sprint
         - completed_issues: Number of completed issues (status_category = 'Done')
         - in_progress_issues: Number of issues in progress
         - todo_issues: Number of issues in to do status
         - percent_completed: Percentage of completed issues (0-100)
+        - percent_completed_status: Status indicator (green/yellow/red) based on timeline vs completion
+        - in_progress_issues_status: Status indicator (green/yellow/red) based on WIP percentage
     """
     try:
         # Validate inputs
@@ -241,14 +368,29 @@ async def get_current_sprint_progress(
         # Get sprint progress data from database function
         progress_data = get_team_current_sprint_progress(validated_team_name, conn)
         
+        # Calculate derived fields in service layer (business logic)
+        days_left = calculate_days_left(progress_data['end_date'])
+        percent_completed_status = get_percent_completed_status(
+            progress_data['percent_completed'],
+            progress_data['start_date'],
+            progress_data['end_date']
+        )
+        in_progress_issues_status = get_in_progress_issues_status(
+            progress_data['in_progress_issues'],
+            progress_data['total_issues']
+        )
+        
         return {
             "success": True,
             "data": {
+                "days_left": days_left,
                 "total_issues": progress_data['total_issues'],
                 "completed_issues": progress_data['completed_issues'],
                 "in_progress_issues": progress_data['in_progress_issues'],
                 "todo_issues": progress_data['todo_issues'],
                 "percent_completed": progress_data['percent_completed'],
+                "percent_completed_status": percent_completed_status,
+                "in_progress_issues_status": in_progress_issues_status,
                 "team_name": validated_team_name
             },
             "message": f"Retrieved current sprint progress for team '{validated_team_name}'"

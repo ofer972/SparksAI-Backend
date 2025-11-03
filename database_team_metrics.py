@@ -117,32 +117,38 @@ def get_team_count_in_progress(team_name: str, conn: Connection = None) -> Dict[
 def get_team_current_sprint_progress(team_name: str, conn: Connection = None) -> Dict[str, Any]:
     """
     Get current sprint progress for a team with detailed breakdown.
-    Returns total issues, completed, in progress, to do counts, and completion percentage.
+    Returns start date, end date, total issues, completed, in progress, to do counts, and completion percentage.
     
     Args:
         team_name (str): Team name
         conn (Connection): Database connection from FastAPI dependency
     
     Returns:
-        dict: Dictionary with 'total_issues', 'completed_issues', 'in_progress_issues', 
-              'todo_issues', and 'percent_completed' values
+        dict: Dictionary with 'start_date', 'end_date', 'total_issues', 'completed_issues', 
+              'in_progress_issues', 'todo_issues', and 'percent_completed' values
     """
     try:
         # SECURE: Parameterized query prevents SQL injection
         sql_query = """
             SELECT 
+                s.start_date,
+                s.end_date,
                 COUNT(*) as total_issues,
-                COUNT(CASE WHEN status_category = 'Done' THEN 1 END) as completed_issues,
-                COUNT(CASE WHEN status_category = 'In Progress' THEN 1 END) as in_progress_issues,
-                COUNT(CASE WHEN status_category = 'To Do' THEN 1 END) as todo_issues,
-                (COUNT(CASE WHEN status_category = 'Done' THEN 1 END)::numeric * 100) 
+                COUNT(CASE WHEN i.status_category = 'Done' THEN 1 END) as completed_issues,
+                COUNT(CASE WHEN i.status_category = 'In Progress' THEN 1 END) as in_progress_issues,
+                COUNT(CASE WHEN i.status_category = 'To Do' THEN 1 END) as todo_issues,
+                (COUNT(CASE WHEN i.status_category = 'Done' THEN 1 END)::numeric * 100) 
                     / NULLIF(COUNT(*), 0) as percent_completed
-            FROM public.jira_issues
-            WHERE team_name = :team_name
-            AND current_sprint_id IN (
-                SELECT sprint_id FROM public.jira_sprints 
-                WHERE state = 'active'
-            );
+            FROM 
+                public.jira_issues AS i
+            INNER JOIN 
+                public.jira_sprints AS s
+                ON i.current_sprint_id = s.sprint_id
+            WHERE 
+                i.team_name = :team_name
+                AND s.state = 'active'
+            GROUP BY 
+                s.start_date, s.end_date;
         """
         
         logger.info(f"Executing query to get current sprint progress for team: {team_name}")
@@ -152,15 +158,23 @@ def get_team_current_sprint_progress(team_name: str, conn: Connection = None) ->
         row = result.fetchone()
         
         if row:
+            # Keep dates as date objects (not strings) for calculations in service layer
+            start_date = row[0] if row[0] and hasattr(row[0], 'strftime') else None
+            end_date = row[1] if row[1] and hasattr(row[1], 'strftime') else None
+            
             return {
-                'total_issues': int(row[0]) if row[0] else 0,
-                'completed_issues': int(row[1]) if row[1] else 0,
-                'in_progress_issues': int(row[2]) if row[2] else 0,
-                'todo_issues': int(row[3]) if row[3] else 0,
-                'percent_completed': float(row[4]) if row[4] is not None else 0.0
+                'start_date': start_date,
+                'end_date': end_date,
+                'total_issues': int(row[2]) if row[2] else 0,
+                'completed_issues': int(row[3]) if row[3] else 0,
+                'in_progress_issues': int(row[4]) if row[4] else 0,
+                'todo_issues': int(row[5]) if row[5] else 0,
+                'percent_completed': float(row[6]) if row[6] is not None else 0.0
             }
         else:
             return {
+                'start_date': None,
+                'end_date': None,
                 'total_issues': 0,
                 'completed_issues': 0,
                 'in_progress_issues': 0,
