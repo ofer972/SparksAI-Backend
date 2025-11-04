@@ -311,16 +311,15 @@ async def get_sprint_predictability(
     conn: Connection = Depends(get_db_connection)
 ):
     """
-    Get sprint predictability metrics from the sprint_cycle_time_predictability_metrics view.
+    Get sprint predictability metrics from the get_sprint_predictability_metrics_with_issues database function.
     
-    Returns sprint_name, sprint_predictability, avg_story_cycle_time, sprint_official_start_date, 
-    and sprint_official_end_date for sprints within the specified time period.
+    Returns all columns from the function for sprints within the specified time period.
     
     Args:
         months: Number of months to look back (default: 3, valid: 1, 2, 3, 4, 6, 9)
     
     Returns:
-        JSON response with sprint predictability metrics
+        JSON response with sprint predictability metrics (all columns)
     """
     try:
         # Validate months parameter
@@ -330,25 +329,14 @@ async def get_sprint_predictability(
                 detail="Months parameter must be one of: 1, 2, 3, 4, 6, 9"
             )
         
-        # Calculate start date based on months parameter
-        start_date = datetime.now().date() - timedelta(days=months * 30)
-        
         # SECURE: Parameterized query prevents SQL injection
         query = text("""
-            SELECT 
-                sprint_name, 
-                sprint_predictability, 
-                avg_story_cycle_time, 
-                sprint_official_start_date, 
-                sprint_official_end_date 
-            FROM public.sprint_cycle_time_predictability_metrics 
-            WHERE sprint_official_end_date >= :start_date
-            ORDER BY sprint_official_end_date DESC
+            SELECT * FROM public.get_sprint_predictability_metrics_with_issues(:months)
         """)
         
-        logger.info(f"Executing query to get sprint predictability metrics: months={months}, start_date={start_date}")
+        logger.info(f"Executing query to get sprint predictability metrics: months={months}")
         
-        result = conn.execute(query, {"start_date": start_date.strftime("%Y-%m-%d")})
+        result = conn.execute(query, {"months": months})
         rows = result.fetchall()
         
         # Convert rows to list of dictionaries
