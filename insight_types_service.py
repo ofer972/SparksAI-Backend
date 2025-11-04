@@ -30,11 +30,15 @@ insight_types_router = APIRouter()
 # Each category has a name and a class (Team or PI)
 INSIGHT_CATEGORIES = [
     {"name": "Daily", "class": "Team"},
-    {"name": "Retrospective", "class": "Team"},
     {"name": "Planning", "class": "Team"},
-    {"name": "PI Sync", "class": "PI"},
-    {"name": "PI Planning", "class": "PI"},
-    {"name": "PI Retrospective", "class": "PI"}
+    {"name": "Retrospective", "class": "Team"},
+    {"name": "Sprint Review", "class": "Team"},
+    {"name": "Backlog Refinement", "class": "Team"},
+    {"name": "PI Sync", "class": "Team"},
+    {"name": "PI Retrospective-Train", "class": "PI"},
+    {"name": "PI Sync-Train", "class": "PI"},
+    {"name": "PI Planning-Train", "class": "PI"},
+    {"name": "PI Preparation-Train", "class": "PI"},
 ]
 
 

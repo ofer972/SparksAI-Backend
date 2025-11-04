@@ -28,10 +28,113 @@ DEFAULT_INSIGHT_TYPES = [
     {
         "insight_type": "Sprint Goal",
         "insight_description": "Assesses the team progress towards the defined sprint goal",
-        "insight_categories": ["Daily", "Planning"],
+        "insight_categories": ["Daily", "Planning", "Retrospective", "Sprint Review", "Backlog Refinement", "PI Sync"],
         "active": True
+    },
+    {
+        "insight_type": "Team PI Insight",
+        "insight_description": "Evaluates progress toward sprint goals",
+        "insight_categories": ["Daily", "Planning", "Retrospective", "Sprint Review", "Backlog Refinement", "PI Sync"],
+        "active": True
+    },
+    {
+        "insight_type": "Conversation Analysis",
+        "insight_description": "Analyzes team discussions for themes",
+        "insight_categories": ["Daily", "Retrospective"],
+        "active": False
+    },
+    {
+        "insight_type": "Team Blockers' Last Days",
+        "insight_description": "Lists recent blockers",
+        "insight_categories": ["Daily"],
+        "active": False
+    },
+    {
+        "insight_type": "WIP Level",
+        "insight_description": "Monitors active work items",
+        "insight_categories": ["Daily"],
+        "active": True
+    },
+    {
+        "insight_type": "Stories Aging (In Progress)",
+        "insight_description": "Tracks story age in progress",
+        "insight_categories": ["Daily"],
+        "active": False
+    },
+    {
+        "insight_type": "Defects Trend",
+        "insight_description": "Shows trend of bugs and quality issues",
+        "insight_categories": ["Retrospective", "Sprint Review"],
+        "active": False
+    },
+    {
+        "insight_type": "Team Metrics Insight",
+        "insight_description": "Summarizes key velocity and flow metrics",
+        "insight_categories": ["Retrospective"],
+        "active": False
+    },
+    {
+        "insight_type": "DORA Lite",
+        "insight_description": "Displays core DORA metrics for the sprint",
+        "insight_categories": ["Retrospective"],
+        "active": False
+    },
+    {
+        "insight_type": "Sprint Summary",
+        "insight_description": "Provides overall sprint summary and outcomes",
+        "insight_categories": ["Retrospective", "Sprint Review", "Planning", "PI Sync"],
+        "active": False
+    },
+    {
+        "insight_type": "Retro Topics Suggestions",
+        "insight_description": "Suggests focus topics for the next retrospective",
+        "insight_categories": ["Retrospective"],
+        "active": False
+    },
+    {
+        "insight_type": "Stories Readiness Gaps",
+        "insight_description": "Lists stories not ready for execution",
+        "insight_categories": ["Planning", "Backlog Refinement"],
+        "active": False
+    },
+    {
+        "insight_type": "Forecast (Velocity-Based)",
+        "insight_description": "Compares planned vs. forecasted work",
+        "insight_categories": ["Planning", "Backlog Refinement", "PI Sync"],
+        "active": False
+    },
+    {
+        "insight_type": "Epic Risk Scanner",
+        "insight_description": "Detects epics at delivery risk",
+        "insight_categories": ["Planning", "Backlog Refinement", "Sprint Review", "PI Sync"],
+        "active": False
+    },
+    {
+        "insight_type": "Sprint planning Suggestions Coaching",
+        "insight_description": "Provides AI-driven planning tips",
+        "insight_categories": ["Planning"],
+        "active": False
+    },
+    {
+        "insight_type": "Sprint Goal Suggestions",
+        "insight_description": "Suggests possible sprint goals from stories",
+        "insight_categories": ["Planning", "Backlog Refinement"],
+        "active": False
+    },
+    {
+        "insight_type": "Demo Suggestions",
+        "insight_description": "Suggests highlights for the sprint demo",
+        "insight_categories": ["Sprint Review"],
+        "active": False
+    },
+    {
+        "insight_type": "Dependency Radar",
+        "insight_description": "Highlights critical delivery dependencies",
+        "insight_categories": ["Planning", "Retrospective", "Sprint Review", "Backlog Refinement", "PI Sync"],
+        "active": False
     }
 ]
+
 
 
 def create_users_table_if_not_exists(engine=None) -> bool:

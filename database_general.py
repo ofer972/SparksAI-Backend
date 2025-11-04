@@ -20,7 +20,7 @@ def get_top_ai_recommendations(team_name: str, limit: int = 4, source_ai_summary
     
     Returns recommendations ordered by:
     1. Date (newest first)
-    2. Priority (High > Medium > Low)
+    2. Priority (Critical > High > Important)
     3. ID (descending)
     
     Args:
@@ -42,9 +42,9 @@ def get_top_ai_recommendations(team_name: str, limit: int = 4, source_ai_summary
             ORDER BY 
                 DATE(date) DESC,
                 CASE priority 
-                    WHEN 'High' THEN 1
-                    WHEN 'Medium' THEN 2
-                    WHEN 'Low' THEN 3
+                    WHEN 'Critical' THEN 1
+                    WHEN 'High' THEN 2
+                    WHEN 'Important' THEN 3
                     ELSE 4
                 END,
                 id DESC
@@ -118,7 +118,7 @@ def get_top_ai_cards_filtered(filter_column: str, filter_value: str, limit: int 
     
     Returns the most recent + highest priority card for each type (max 1 per type).
     Cards are ordered by:
-    1. Priority (Critical > High > Medium)
+    1. Priority (Critical > High > Important)
     2. Date (newest first)
     
     Args:
@@ -161,7 +161,7 @@ def get_top_ai_cards_filtered(filter_column: str, filter_value: str, limit: int 
                                 CASE priority 
                                     WHEN 'Critical' THEN 1 
                                     WHEN 'High' THEN 2 
-                                    WHEN 'Medium' THEN 3 
+                                    WHEN 'Important' THEN 3 
                                     ELSE 4 
                                 END,
                                 date DESC
@@ -177,7 +177,7 @@ def get_top_ai_cards_filtered(filter_column: str, filter_value: str, limit: int 
                     CASE priority 
                         WHEN 'Critical' THEN 1 
                         WHEN 'High' THEN 2 
-                        WHEN 'Medium' THEN 3 
+                        WHEN 'Important' THEN 3 
                         ELSE 4 
                     END,
                     date DESC
@@ -200,7 +200,7 @@ def get_top_ai_cards_filtered(filter_column: str, filter_value: str, limit: int 
                                 CASE priority 
                                     WHEN 'Critical' THEN 1 
                                     WHEN 'High' THEN 2 
-                                    WHEN 'Medium' THEN 3 
+                                    WHEN 'Important' THEN 3 
                                     ELSE 4 
                                 END,
                                 date DESC
@@ -215,7 +215,7 @@ def get_top_ai_cards_filtered(filter_column: str, filter_value: str, limit: int 
                     CASE priority 
                         WHEN 'Critical' THEN 1 
                         WHEN 'High' THEN 2 
-                        WHEN 'Medium' THEN 3 
+                        WHEN 'Important' THEN 3 
                         ELSE 4 
                     END,
                     date DESC
@@ -250,7 +250,7 @@ def get_top_ai_cards(team_name: str, limit: int = 4, conn: Connection = None) ->
     
     Returns the most recent + highest priority card for each type (max 1 per type).
     Cards are ordered by:
-    1. Priority (Critical > High > Medium)
+    1. Priority (Critical > High > Important)
     2. Date (newest first)
     
     Args:
@@ -275,7 +275,7 @@ def get_recommendations_by_ai_summary_id(
     
     Returns recommendations ordered by:
     1. Date (newest first)
-    2. Priority (High > Medium > Low)
+    2. Priority (Critical > High > Important)
     3. ID (descending)
     
     Args:
@@ -295,9 +295,9 @@ def get_recommendations_by_ai_summary_id(
             ORDER BY 
                 DATE(date) DESC,
                 CASE priority 
-                    WHEN 'High' THEN 1
-                    WHEN 'Medium' THEN 2
-                    WHEN 'Low' THEN 3
+                    WHEN 'Critical' THEN 1
+                    WHEN 'High' THEN 2
+                    WHEN 'Important' THEN 3
                     ELSE 4
                 END,
                 id DESC
