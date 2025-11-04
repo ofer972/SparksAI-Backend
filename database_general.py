@@ -119,7 +119,7 @@ def get_top_ai_cards_filtered(filter_column: str, filter_value: str, limit: int 
     Returns the most recent + highest priority card for each type (max 1 per type).
     Cards are ordered by:
     1. Priority (Critical > High > Important)
-    2. Date (newest first)
+    2. Created_at (newest first)
     
     Args:
         filter_column (str): Column to filter by (must be 'team_name' or 'pi' for security)
@@ -164,7 +164,7 @@ def get_top_ai_cards_filtered(filter_column: str, filter_value: str, limit: int 
                                     WHEN 'Important' THEN 3 
                                     ELSE 4 
                                 END,
-                                date DESC
+                                created_at DESC
                         ) as rn
                     FROM public.ai_summary
                     WHERE {filter_column} = :filter_value
@@ -180,7 +180,7 @@ def get_top_ai_cards_filtered(filter_column: str, filter_value: str, limit: int 
                         WHEN 'Important' THEN 3 
                         ELSE 4 
                     END,
-                    date DESC
+                    created_at DESC
                 LIMIT :limit
             """
             
@@ -203,7 +203,7 @@ def get_top_ai_cards_filtered(filter_column: str, filter_value: str, limit: int 
                                     WHEN 'Important' THEN 3 
                                     ELSE 4 
                                 END,
-                                date DESC
+                                created_at DESC
                         ) as rn
                     FROM public.ai_summary
                     WHERE {filter_column} = :filter_value
@@ -218,7 +218,7 @@ def get_top_ai_cards_filtered(filter_column: str, filter_value: str, limit: int 
                         WHEN 'Important' THEN 3 
                         ELSE 4 
                     END,
-                    date DESC
+                    created_at DESC
                 LIMIT :limit
             """
             

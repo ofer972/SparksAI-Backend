@@ -45,9 +45,9 @@ def receive_after_cursor_execute(conn, cursor, statement, parameters, context, e
             return  # Skip SQL logging for this path
         
         total_time = time.time() - context._query_start_time
-        # Truncate long queries for readability
-        query = statement if len(statement) < 200 else statement[:200] + "..."
-        logger.info(f"SQL: {query} - EXECUTE (Duration: {total_time:.3f}s)")
+        # Format SQL with proper indentation for readability
+        formatted_query = statement.replace('\n', '\n            ')
+        logger.info(f"SQL:\n            {formatted_query}\n            - EXECUTE (Duration: {total_time:.3f}s)")
 
 
 def get_db_engine() -> Optional[create_engine]:
