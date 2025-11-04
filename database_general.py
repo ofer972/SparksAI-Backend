@@ -73,7 +73,46 @@ def get_top_ai_recommendations(team_name: str, limit: int = 4, source_ai_summary
         raise e
 
 
-def get_top_ai_cards_filtered(filter_column: str, filter_value: str, limit: int = 4, conn: Connection = None) -> List[Dict[str, Any]]:
+def get_insight_types_by_category(category: str, conn: Connection = None) -> List[str]:
+    """
+    Get all insight type names that have the specified category in their insight_categories.
+    
+    Args:
+        category (str): Category name (e.g., "Daily", "Planning")
+        conn (Connection): Database connection from FastAPI dependency
+    
+    Returns:
+        list: List of insight_type strings that match the category
+    """
+    try:
+        import json
+        # SECURE: Parameterized query prevents SQL injection
+        # Use CAST function instead of ::jsonb syntax in parameterized queries
+        query = text("""
+            SELECT insight_type
+            FROM public.insight_types
+            WHERE active = TRUE
+              AND insight_categories @> CAST(:category AS jsonb)
+        """)
+        
+        logger.info(f"Executing query to get insight types for category: {category}")
+        
+        result = conn.execute(query, {"category": json.dumps([category])})
+        rows = result.fetchall()
+        
+        # Extract insight_type values
+        insight_types = [row[0] for row in rows]
+        
+        logger.info(f"Found {len(insight_types)} insight types for category '{category}': {insight_types}")
+        
+        return insight_types
+            
+    except Exception as e:
+        logger.error(f"Error fetching insight types for category {category}: {e}")
+        raise e
+
+
+def get_top_ai_cards_filtered(filter_column: str, filter_value: str, limit: int = 4, category: Optional[str] = None, conn: Connection = None) -> List[Dict[str, Any]]:
     """
     Get top AI cards filtered by a specific column (e.g., team_name or pi).
     
@@ -86,6 +125,7 @@ def get_top_ai_cards_filtered(filter_column: str, filter_value: str, limit: int 
         filter_column (str): Column to filter by (must be 'team_name' or 'pi' for security)
         filter_value (str): Value to filter by
         limit (int): Number of AI cards to return (default: 4)
+        category (Optional[str]): Optional category filter - only return cards with card_type matching insight types for this category
         conn (Connection): Database connection from FastAPI dependency
     
     Returns:
@@ -97,46 +137,100 @@ def get_top_ai_cards_filtered(filter_column: str, filter_value: str, limit: int 
         raise ValueError(f"filter_column must be one of {allowed_columns}, got: {filter_column}")
     
     try:
-        # SECURE: Parameterized query prevents SQL injection
-        # Using filter_column with whitelist check above
-        sql_query = f"""
-            WITH ranked_cards AS (
-                SELECT *,
-                    ROW_NUMBER() OVER (
-                        PARTITION BY card_type 
-                        ORDER BY 
-                            CASE priority 
-                                WHEN 'Critical' THEN 1 
-                                WHEN 'High' THEN 2 
-                                WHEN 'Medium' THEN 3 
-                                ELSE 4 
-                            END,
-                            date DESC
-                    ) as rn
-                FROM public.ai_summary
-                WHERE {filter_column} = :filter_value
-            )
-            SELECT *
-            FROM ranked_cards
-            WHERE rn = 1
-            ORDER BY 
-                CASE priority 
-                    WHEN 'Critical' THEN 1 
-                    WHEN 'High' THEN 2 
-                    WHEN 'Medium' THEN 3 
-                    ELSE 4 
-                END,
-                date DESC
-            LIMIT :limit
-        """
+        import json
         
-        logger.info(f"Executing query to get top AI cards filtered by {filter_column}: {filter_value}")
-        logger.info(f"Parameters: filter_column={filter_column}, filter_value={filter_value}, limit={limit}")
+        # If category provided, get insight types for that category
+        insight_types_list = []
+        if category:
+            insight_types_list = get_insight_types_by_category(category, conn)
+            if not insight_types_list:
+                # No insight types found for category, return empty result
+                logger.info(f"No insight types found for category '{category}', returning empty result")
+                return []
         
-        result = conn.execute(text(sql_query), {
-            'filter_value': filter_value,
-            'limit': limit
-        })
+        # Build SQL query with optional category filter
+        if category and insight_types_list:
+            # Build IN clause for card_type filtering
+            # Use parameterized query with array
+            sql_query = f"""
+                WITH ranked_cards AS (
+                    SELECT *,
+                        ROW_NUMBER() OVER (
+                            PARTITION BY card_type 
+                            ORDER BY 
+                                CASE priority 
+                                    WHEN 'Critical' THEN 1 
+                                    WHEN 'High' THEN 2 
+                                    WHEN 'Medium' THEN 3 
+                                    ELSE 4 
+                                END,
+                                date DESC
+                        ) as rn
+                    FROM public.ai_summary
+                    WHERE {filter_column} = :filter_value
+                      AND card_type = ANY(:card_types)
+                )
+                SELECT *
+                FROM ranked_cards
+                WHERE rn = 1
+                ORDER BY 
+                    CASE priority 
+                        WHEN 'Critical' THEN 1 
+                        WHEN 'High' THEN 2 
+                        WHEN 'Medium' THEN 3 
+                        ELSE 4 
+                    END,
+                    date DESC
+                LIMIT :limit
+            """
+            
+            params = {
+                'filter_value': filter_value,
+                'card_types': insight_types_list,
+                'limit': limit
+            }
+        else:
+            # No category filter - original query
+            sql_query = f"""
+                WITH ranked_cards AS (
+                    SELECT *,
+                        ROW_NUMBER() OVER (
+                            PARTITION BY card_type 
+                            ORDER BY 
+                                CASE priority 
+                                    WHEN 'Critical' THEN 1 
+                                    WHEN 'High' THEN 2 
+                                    WHEN 'Medium' THEN 3 
+                                    ELSE 4 
+                                END,
+                                date DESC
+                        ) as rn
+                    FROM public.ai_summary
+                    WHERE {filter_column} = :filter_value
+                )
+                SELECT *
+                FROM ranked_cards
+                WHERE rn = 1
+                ORDER BY 
+                    CASE priority 
+                        WHEN 'Critical' THEN 1 
+                        WHEN 'High' THEN 2 
+                        WHEN 'Medium' THEN 3 
+                        ELSE 4 
+                    END,
+                    date DESC
+                LIMIT :limit
+            """
+            
+            params = {
+                'filter_value': filter_value,
+                'limit': limit
+            }
+        
+        logger.info(f"Executing query to get top AI cards filtered by {filter_column}: {filter_value}, category: {category}")
+        logger.info(f"Parameters: filter_column={filter_column}, filter_value={filter_value}, limit={limit}, category={category}")
+        
+        result = conn.execute(text(sql_query), params)
         
         # Convert rows to list of dictionaries
         ai_cards = []
@@ -168,7 +262,7 @@ def get_top_ai_cards(team_name: str, limit: int = 4, conn: Connection = None) ->
         list: List of AI card dictionaries
     """
     # Use the generic function for backward compatibility
-    return get_top_ai_cards_filtered('team_name', team_name, limit, conn)
+    return get_top_ai_cards_filtered('team_name', team_name, limit, category=None, conn=conn)
 
 
 def get_recommendations_by_ai_summary_id(
@@ -235,6 +329,7 @@ def get_top_ai_cards_with_recommendations_filtered(
     filter_value: str,
     limit: int = 4,
     recommendations_limit: int = 4,
+    category: Optional[str] = None,
     conn: Connection = None
 ) -> List[Dict[str, Any]]:
     """
@@ -248,6 +343,7 @@ def get_top_ai_cards_with_recommendations_filtered(
         filter_value (str): Value to filter by
         limit (int): Number of AI cards to return (default: 4)
         recommendations_limit (int): Maximum recommendations per card (default: 4)
+        category (Optional[str]): Optional category filter - only return cards with card_type matching insight types for this category
         conn (Connection): Database connection from FastAPI dependency
     
     Returns:
@@ -255,7 +351,7 @@ def get_top_ai_cards_with_recommendations_filtered(
     """
     try:
         # Get top AI cards using existing function
-        ai_cards = get_top_ai_cards_filtered(filter_column, filter_value, limit, conn)
+        ai_cards = get_top_ai_cards_filtered(filter_column, filter_value, limit, category=category, conn=conn)
         
         # For each card, fetch and attach recommendations
         for card in ai_cards:
@@ -266,8 +362,13 @@ def get_top_ai_cards_with_recommendations_filtered(
                     recommendations_limit,
                     conn
                 )
-                card['recommendations'] = recommendations
-                card['recommendations_count'] = len(recommendations)
+                # Remove full_information and information_json from each recommendation
+                filtered_recommendations = []
+                for rec in recommendations:
+                    filtered_rec = {k: v for k, v in rec.items() if k not in ['full_information', 'information_json']}
+                    filtered_recommendations.append(filtered_rec)
+                card['recommendations'] = filtered_recommendations
+                card['recommendations_count'] = len(filtered_recommendations)
             else:
                 card['recommendations'] = []
                 card['recommendations_count'] = 0
@@ -1032,7 +1133,7 @@ def get_insight_types(
         
         if insight_category:
             # Filter by category in JSONB array using @> operator
-            where_conditions.append("insight_categories @> :insight_category::jsonb")
+            where_conditions.append("insight_categories @> CAST(:insight_category AS jsonb)")
             params["insight_category"] = json.dumps([insight_category])
         
         if active is not None:

@@ -19,6 +19,7 @@ from database_general import (
     delete_ai_card_by_id,
     get_top_ai_cards_with_recommendations_filtered,
 )
+from insight_types_service import get_insight_category_names
 import config
 
 logger = logging.getLogger(__name__)
@@ -112,6 +113,7 @@ async def get_team_ai_cards_with_recommendations(
     team_name: str = Query(..., description="Team name to get AI cards for"),
     limit: int = Query(4, description="Number of AI cards to return (default: 4, max: 50)"),
     recommendations_limit: int = Query(4, description="Max recommendations per card (default: 4)"),
+    category: Optional[str] = Query(None, description="Filter by insight category (e.g., 'Daily', 'Planning')"),
     conn: Connection = Depends(get_db_connection)
 ):
     """
@@ -127,6 +129,7 @@ async def get_team_ai_cards_with_recommendations(
         team_name: Name of the team
         limit: Number of AI cards to return (default: 4)
         recommendations_limit: Maximum recommendations per card (default: 4)
+        category: Optional category filter - only return cards with card_type matching insight types for this category
     
     Returns:
         JSON response with AI cards list (each with recommendations) and metadata
@@ -137,12 +140,24 @@ async def get_team_ai_cards_with_recommendations(
         validated_limit = validate_limit(limit)
         validated_recommendations_limit = validate_limit(recommendations_limit)
         
+        # Validate category if provided
+        validated_category = None
+        if category:
+            allowed_categories = get_insight_category_names()
+            if category not in allowed_categories:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Invalid insight category: '{category}'. Allowed categories: {allowed_categories}"
+                )
+            validated_category = category.strip()
+        
         # Get AI cards with recommendations using shared generic function
         ai_cards = get_top_ai_cards_with_recommendations_filtered(
             'team_name',
             validated_team_name,
             validated_limit,
             validated_recommendations_limit,
+            validated_category,
             conn
         )
         
