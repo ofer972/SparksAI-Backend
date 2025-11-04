@@ -27,6 +27,7 @@ TRANSCRIPTS_TABLE = "transcripts"  # Transcripts table
 AI_SUMMARY_TABLE = "ai_summary"  # AI summary table
 PROMPTS_TABLE = "prompts"  # Prompts table
 CHAT_HISTORY_TABLE = "chat_history"  # Chat history table
+INSIGHT_TYPES_TABLE = "insight_types"  # Insight types table
 
 # --- Service Configuration ---
 # Teams Service
@@ -57,6 +58,8 @@ AI_CHAT_SERVICE_PREFIX = "/ai-chat"
 ISSUES_SERVICE_PREFIX = "/issues"
 # Sprints Service
 SPRINTS_SERVICE_PREFIX = "/sprints"
+# Insight Types Service
+INSIGHT_TYPES_SERVICE_PREFIX = "/insight-types"
 
 # --- Error Handling Configuration ---
 DEFAULT_ERROR_MESSAGE = "An unexpected error occurred"

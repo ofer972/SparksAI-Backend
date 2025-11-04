@@ -902,7 +902,7 @@ def set_settings_batch_db(
         settings (Dict[str, str]): Dictionary of setting_key: setting_value pairs
         updated_by (str): Email of user making the change (default: 'admin')
         conn (Connection): Database connection from FastAPI dependency
-        
+    
     Returns:
         Dict[str, bool]: Dictionary of setting_key: success_status pairs
     """
@@ -942,6 +942,300 @@ def set_settings_batch_db(
         
     except Exception as e:
         logger.error(f"Error in batch settings update: {e}")
+        conn.rollback()
+        raise e
+
+
+# -------------------------------------------------------------
+# CRUD helpers for insight_types
+# -------------------------------------------------------------
+def get_insight_type_by_id(insight_type_id: int, conn: Connection = None) -> Optional[Dict[str, Any]]:
+    """
+    Get a single insight type by ID from insight_types table.
+    Uses parameterized queries to prevent SQL injection.
+    
+    Args:
+        insight_type_id (int): The ID of the insight type to retrieve
+        conn (Connection): Database connection from FastAPI dependency
+        
+    Returns:
+        dict: Insight type dictionary or None if not found
+    """
+    try:
+        # SECURE: Parameterized query prevents SQL injection
+        query = text(f"""
+            SELECT * 
+            FROM {config.INSIGHT_TYPES_TABLE} 
+            WHERE id = :id
+        """)
+        
+        logger.info(f"Executing query to get insight type with ID {insight_type_id} from {config.INSIGHT_TYPES_TABLE}")
+        
+        result = conn.execute(query, {"id": insight_type_id})
+        row = result.fetchone()
+        
+        if not row:
+            return None
+        
+        # Convert row to dictionary - get all fields from database
+        row_dict = dict(row._mapping)
+        # Convert JSONB insight_categories to Python list
+        import json
+        if 'insight_categories' in row_dict:
+            if isinstance(row_dict['insight_categories'], str):
+                try:
+                    row_dict['insight_categories'] = json.loads(row_dict['insight_categories'])
+                except:
+                    row_dict['insight_categories'] = []
+            elif hasattr(row_dict['insight_categories'], '__iter__') and not isinstance(row_dict['insight_categories'], str):
+                row_dict['insight_categories'] = list(row_dict['insight_categories'])
+        return row_dict
+        
+    except Exception as e:
+        logger.error(f"Error fetching insight type {insight_type_id}: {e}")
+        raise e
+
+
+def get_insight_types(
+    insight_type: Optional[str] = None,
+    insight_category: Optional[str] = None,
+    active: Optional[bool] = None,
+    search: Optional[str] = None,
+    limit: int = 100,
+    offset: int = 0,
+    conn: Connection = None
+) -> List[Dict[str, Any]]:
+    """
+    Get collection of insight types with optional filtering.
+    
+    Args:
+        insight_type (Optional[str]): Filter by insight type (exact match)
+        insight_category (Optional[str]): Filter by insight category (exact match - checks if category exists in JSONB array)
+        active (Optional[bool]): Filter by active status
+        search (Optional[str]): Search term for insight_type (ILIKE search)
+        limit (int): Maximum number of results
+        offset (int): Number of results to skip
+        conn (Connection): Database connection from FastAPI dependency
+    
+    Returns:
+        list: List of insight type dictionaries
+    """
+    try:
+        import json
+        # Build WHERE clause dynamically based on filters
+        where_conditions = []
+        params = {}
+        
+        if insight_type:
+            where_conditions.append("insight_type = :insight_type")
+            params["insight_type"] = insight_type
+        
+        if insight_category:
+            # Filter by category in JSONB array using @> operator
+            where_conditions.append("insight_categories @> :insight_category::jsonb")
+            params["insight_category"] = json.dumps([insight_category])
+        
+        if active is not None:
+            where_conditions.append("active = :active")
+            params["active"] = active
+        
+        if search:
+            where_conditions.append("insight_type ILIKE :search")
+            params["search"] = f"%{search}%"
+        
+        where_clause = ""
+        if where_conditions:
+            where_clause = "WHERE " + " AND ".join(where_conditions)
+        
+        # SECURE: Parameterized query prevents SQL injection
+        query = text(f"""
+            SELECT *
+            FROM {config.INSIGHT_TYPES_TABLE}
+            {where_clause}
+            ORDER BY updated_at DESC
+            LIMIT :limit OFFSET :offset
+        """)
+        
+        params["limit"] = limit
+        params["offset"] = offset
+        
+        logger.info(f"Executing query to get insight types from {config.INSIGHT_TYPES_TABLE}")
+        
+        result = conn.execute(query, params)
+        rows = result.fetchall()
+        
+        # Convert rows to list of dictionaries
+        # Parse JSONB arrays to Python lists
+        import json
+        insight_types = []
+        for row in rows:
+            row_dict = dict(row._mapping)
+            # Convert JSONB insight_categories to Python list
+            if 'insight_categories' in row_dict:
+                if isinstance(row_dict['insight_categories'], str):
+                    try:
+                        row_dict['insight_categories'] = json.loads(row_dict['insight_categories'])
+                    except:
+                        row_dict['insight_categories'] = []
+                elif hasattr(row_dict['insight_categories'], '__iter__') and not isinstance(row_dict['insight_categories'], str):
+                    # Already a list/array
+                    row_dict['insight_categories'] = list(row_dict['insight_categories'])
+            insight_types.append(row_dict)
+        
+        return insight_types
+            
+    except Exception as e:
+        logger.error(f"Error fetching insight types: {e}")
+        raise e
+
+
+def create_insight_type(data: Dict[str, Any], conn: Connection = None) -> Dict[str, Any]:
+    """
+    Insert a new insight type and return the created row.
+    
+    Args:
+        data (Dict[str, Any]): Dictionary containing insight type data
+        conn (Connection): Database connection from FastAPI dependency
+    
+    Returns:
+        dict: Created insight type dictionary
+    """
+    try:
+        import json
+        allowed_columns = {
+            "insight_type", "insight_description", "insight_categories", "active"
+        }
+        
+        filtered = {k: v for k, v in data.items() if k in allowed_columns}
+        if not filtered:
+            raise ValueError("No valid fields provided for insight_types insert")
+        
+        # Convert insight_categories list to JSON string for JSONB
+        if "insight_categories" in filtered and isinstance(filtered["insight_categories"], list):
+            filtered["insight_categories"] = json.dumps(filtered["insight_categories"])
+        
+        columns_sql = ", ".join(filtered.keys())
+        # Use CAST for JSONB column
+        values_sql_parts = []
+        for k in filtered.keys():
+            if k == "insight_categories":
+                values_sql_parts.append("CAST(:insight_categories AS jsonb)")
+            else:
+                values_sql_parts.append(f":{k}")
+        values_sql = ", ".join(values_sql_parts)
+        
+        query = text(f"""
+            INSERT INTO {config.INSIGHT_TYPES_TABLE} ({columns_sql})
+            VALUES ({values_sql})
+            RETURNING *
+        """)
+        
+        result = conn.execute(query, filtered)
+        row = result.fetchone()
+        conn.commit()
+        
+        # Convert result to dict and parse JSONB
+        row_dict = dict(row._mapping)
+        if 'insight_categories' in row_dict:
+            if isinstance(row_dict['insight_categories'], str):
+                try:
+                    row_dict['insight_categories'] = json.loads(row_dict['insight_categories'])
+                except:
+                    row_dict['insight_categories'] = []
+            elif hasattr(row_dict['insight_categories'], '__iter__') and not isinstance(row_dict['insight_categories'], str):
+                row_dict['insight_categories'] = list(row_dict['insight_categories'])
+        return row_dict
+    except Exception as e:
+        logger.error(f"Error creating insight type: {e}")
+        conn.rollback()
+        raise e
+
+
+def update_insight_type_by_id(insight_type_id: int, updates: Dict[str, Any], conn: Connection = None) -> Optional[Dict[str, Any]]:
+    """
+    Update an existing insight type by id and return the updated row, or None if not found.
+    
+    Args:
+        insight_type_id (int): The ID of the insight type to update
+        updates (Dict[str, Any]): Dictionary containing fields to update
+        conn (Connection): Database connection from FastAPI dependency
+    
+    Returns:
+        dict: Updated insight type dictionary or None if not found
+    """
+    try:
+        import json
+        allowed_columns = {
+            "insight_type", "insight_description", "insight_categories", "active"
+        }
+        filtered = {k: v for k, v in updates.items() if k in allowed_columns}
+        if not filtered:
+            raise ValueError("No valid fields provided for insight_types update")
+        
+        # Convert insight_categories list to JSON string for JSONB
+        if "insight_categories" in filtered and isinstance(filtered["insight_categories"], list):
+            filtered["insight_categories"] = json.dumps(filtered["insight_categories"])
+        
+        # Build SET clause with CAST for JSONB
+        set_clauses_parts = []
+        for k in filtered.keys():
+            if k == "insight_categories":
+                set_clauses_parts.append("insight_categories = CAST(:insight_categories AS jsonb)")
+            else:
+                set_clauses_parts.append(f"{k} = :{k}")
+        set_clauses = ", ".join(set_clauses_parts)
+        
+        params = dict(filtered)
+        params["id"] = insight_type_id
+        
+        query = text(f"""
+            UPDATE {config.INSIGHT_TYPES_TABLE}
+            SET {set_clauses}, updated_at = CURRENT_TIMESTAMP
+            WHERE id = :id
+            RETURNING *
+        """)
+        
+        result = conn.execute(query, params)
+        row = result.fetchone()
+        conn.commit()
+        if not row:
+            return None
+        
+        # Convert result to dict and parse JSONB
+        row_dict = dict(row._mapping)
+        if 'insight_categories' in row_dict:
+            if isinstance(row_dict['insight_categories'], str):
+                try:
+                    row_dict['insight_categories'] = json.loads(row_dict['insight_categories'])
+                except:
+                    row_dict['insight_categories'] = []
+            elif hasattr(row_dict['insight_categories'], '__iter__') and not isinstance(row_dict['insight_categories'], str):
+                row_dict['insight_categories'] = list(row_dict['insight_categories'])
+        return row_dict
+    except Exception as e:
+        logger.error(f"Error updating insight type {insight_type_id}: {e}")
+        conn.rollback()
+        raise e
+
+
+def delete_insight_type_by_id(insight_type_id: int, conn: Connection = None) -> bool:
+    """
+    Hard delete an insight type by id. Returns True if deleted, False if not found.
+    
+    Args:
+        insight_type_id (int): The ID of the insight type to delete
+        conn (Connection): Database connection from FastAPI dependency
+    
+    Returns:
+        bool: True if deleted, False if not found
+    """
+    try:
+        query = text(f"DELETE FROM {config.INSIGHT_TYPES_TABLE} WHERE id = :id")
+        result = conn.execute(query, {"id": insight_type_id})
+        conn.commit()
+        return result.rowcount > 0
+    except Exception as e:
+        logger.error(f"Error deleting insight type {insight_type_id}: {e}")
         conn.rollback()
         raise e
 

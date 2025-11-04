@@ -16,6 +16,23 @@ from typing import Optional
 # Global flag to ensure tables are created only once
 _tables_initialized = False
 
+# Default insight types data - easy to update
+# Note: insight_categories is now a list (array) that will be stored as JSONB
+DEFAULT_INSIGHT_TYPES = [
+    {
+        "insight_type": "Daily Progress",
+        "insight_description": "Analysis of team progress in the sprint",
+        "insight_categories": ["Daily"],
+        "active": True
+    },
+    {
+        "insight_type": "Sprint Goal",
+        "insight_description": "Assesses the team progress towards the defined sprint goal",
+        "insight_categories": ["Daily", "Planning"],
+        "active": True
+    }
+]
+
 
 def create_users_table_if_not_exists(engine=None) -> bool:
     """Create users table if it doesn't exist"""
@@ -779,9 +796,75 @@ def add_input_sent_column_to_agent_jobs(engine=None) -> bool:
 
 
 # Test data insertion functions (copied from original)
+def create_insight_types_table_if_not_exists(engine=None) -> bool:
+    """Create insight_types table if it doesn't exist"""
+    # Skip if tables are already initialized (no need to check again)
+    global _tables_initialized
+    if _tables_initialized:
+        return True
+    
+    import database_connection
+    
+    if engine is None:
+        engine = database_connection.get_db_engine()
+    if engine is None:
+        print("Warning: Database engine not available, cannot create insight_types table")
+        return False
+    
+    try:
+        with engine.connect() as conn:
+            # Check if table exists
+            check_table_sql = """
+            SELECT EXISTS (
+                SELECT FROM information_schema.tables 
+                WHERE table_schema = 'public' 
+                AND table_name = 'insight_types'
+            );
+            """
+            result = conn.execute(text(check_table_sql))
+            table_exists = result.scalar()
+            
+            if not table_exists:
+                print("Creating insight_types table...")
+                create_table_sql = """
+                CREATE TABLE public.insight_types (
+                    id SERIAL PRIMARY KEY,
+                    insight_type VARCHAR(255) NOT NULL,
+                    insight_description TEXT,
+                    insight_categories JSONB NOT NULL DEFAULT '[]'::jsonb,
+                    active BOOLEAN DEFAULT TRUE NOT NULL,
+                    created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP NOT NULL,
+                    updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP NOT NULL
+                );
+                
+                CREATE INDEX idx_insight_types_type ON public.insight_types(insight_type);
+                CREATE INDEX idx_insight_types_categories ON public.insight_types USING GIN (insight_categories);
+                """
+                conn.execute(text(create_table_sql))
+                conn.commit()
+                print("Insight types table created successfully")
+                
+                # Insert default insight types data
+                insert_default_insight_types(engine)
+            else:
+                print("Insight types table already exists")
+            
+            return True
+            
+    except Exception as e:
+        print(f"Error creating insight_types table: {e}")
+        traceback.print_exc()
+        return False
+
+
 def insert_test_data_for_users():
     """Insert test data for users table"""
     import database_connection
+    
+    engine = database_connection.get_db_engine()
+    if engine is None:
+        print("Warning: Database engine not available, cannot insert test user data")
+        return
     
     try:
         with engine.connect() as conn:
@@ -801,6 +884,11 @@ def insert_test_data_for_prompts():
     """Insert test data for prompts table"""
     import database_connection
     
+    engine = database_connection.get_db_engine()
+    if engine is None:
+        print("Warning: Database engine not available, cannot insert test prompt data")
+        return
+    
     try:
         with engine.connect() as conn:
             insert_sql = """
@@ -818,6 +906,11 @@ def insert_test_data_for_prompts():
 def insert_test_data_for_team_ai_summary_cards():
     """Insert test data for team_ai_summary_cards table"""
     import database_connection
+    
+    engine = database_connection.get_db_engine()
+    if engine is None:
+        print("Warning: Database engine not available, cannot insert test AI card data")
+        return
     
     try:
         with engine.connect() as conn:
@@ -837,6 +930,11 @@ def insert_default_global_settings():
     """Insert default global settings"""
     import database_connection
     
+    engine = database_connection.get_db_engine()
+    if engine is None:
+        print("Warning: Database engine not available, cannot insert default global settings")
+        return
+    
     try:
         with engine.connect() as conn:
             insert_sql = """
@@ -852,6 +950,76 @@ def insert_default_global_settings():
             print("Default global settings inserted")
     except Exception as e:
         print(f"Error inserting default global settings: {e}")
+
+
+def insert_default_insight_types(engine=None):
+    """Insert default insight types from DEFAULT_INSIGHT_TYPES array"""
+    import database_connection
+    
+    if engine is None:
+        engine = database_connection.get_db_engine()
+    if engine is None:
+        print("Warning: Database engine not available, cannot insert default insight types")
+        return
+    
+    try:
+        with engine.connect() as conn:
+            if not DEFAULT_INSIGHT_TYPES:
+                print("No default insight types to insert")
+                return
+            
+            # Insert each insight type using parameterized queries
+            inserted_count = 0
+            import json
+            for insight_type_data in DEFAULT_INSIGHT_TYPES:
+                try:
+                    insight_type = insight_type_data.get("insight_type", "")
+                    insight_description = insight_type_data.get("insight_description")
+                    insight_categories = insight_type_data.get("insight_categories", [])
+                    active = insight_type_data.get("active", True)
+                    
+                    # Validate categories is a list
+                    if not isinstance(insight_categories, list):
+                        print(f"Warning: insight_categories must be a list for '{insight_type}', skipping")
+                        continue
+                    
+                    # Check if it already exists to avoid duplicates
+                    check_sql = """
+                    SELECT EXISTS (
+                        SELECT 1 FROM public.insight_types 
+                        WHERE insight_type = :insight_type
+                    );
+                    """
+                    result = conn.execute(text(check_sql), {"insight_type": insight_type})
+                    exists = result.scalar()
+                    
+                    if not exists:
+                        # Insert using parameterized query with JSONB
+                        # Convert list to JSON string for JSONB column
+                        insert_sql = """
+                        INSERT INTO public.insight_types 
+                        (insight_type, insight_description, insight_categories, active) 
+                        VALUES (:insight_type, :insight_description, CAST(:insight_categories AS jsonb), :active)
+                        """
+                        conn.execute(text(insert_sql), {
+                            "insight_type": insight_type,
+                            "insight_description": insight_description,
+                            "insight_categories": json.dumps(insight_categories),
+                            "active": active
+                        })
+                        inserted_count += 1
+                except Exception as e:
+                    print(f"Error inserting insight type '{insight_type_data.get('insight_type', 'unknown')}': {e}")
+                    continue
+            
+            if inserted_count > 0:
+                conn.commit()
+                print(f"Inserted {inserted_count} default insight types")
+            else:
+                print("No new insight types inserted (all already exist)")
+    except Exception as e:
+        print(f"Error inserting default insight types: {e}")
+        traceback.print_exc()
 
 
 def initialize_database_tables_with_engine(engine) -> None:
@@ -873,6 +1041,7 @@ def initialize_database_tables_with_engine(engine) -> None:
     create_transcripts_table_if_not_exists(engine)
     create_recommendations_table_if_not_exists(engine)
     create_chat_history_table_if_not_exists(engine)
+    create_insight_types_table_if_not_exists(engine)
     _tables_initialized = True
     print("=== DATABASE TABLES INITIALIZATION COMPLETE ===")
 
@@ -896,5 +1065,6 @@ def initialize_database_tables() -> None:
     create_transcripts_table_if_not_exists()
     create_recommendations_table_if_not_exists()
     create_chat_history_table_if_not_exists()
+    create_insight_types_table_if_not_exists()
     _tables_initialized = True
     print("=== DATABASE TABLES INITIALIZATION COMPLETE ===")
