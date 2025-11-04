@@ -27,14 +27,20 @@ logger = logging.getLogger(__name__)
 insight_types_router = APIRouter()
 
 # Fixed list of insight categories - available for import by other services
+# Each category has a name and a class (Team or PI)
 INSIGHT_CATEGORIES = [
-    "Daily",
-    "Retrospective",
-    "Planning",
-    "PI Sync",
-    "PI Planning",
-    "PI Retrospective"
+    {"name": "Daily", "class": "Team"},
+    {"name": "Retrospective", "class": "Team"},
+    {"name": "Planning", "class": "Team"},
+    {"name": "PI Sync", "class": "PI"},
+    {"name": "PI Planning", "class": "PI"},
+    {"name": "PI Retrospective", "class": "PI"}
 ]
+
+
+def get_insight_category_names() -> List[str]:
+    """Extract just the category names from INSIGHT_CATEGORIES for validation"""
+    return [cat["name"] for cat in INSIGHT_CATEGORIES]
 
 
 def validate_insight_type(insight_type: str) -> str:
@@ -60,7 +66,7 @@ def validate_insight_type(insight_type: str) -> str:
 def validate_insight_categories(insight_categories: List[str]) -> List[str]:
     """
     Validate and sanitize insight categories list.
-    Each category must be in the allowed INSIGHT_CATEGORIES list.
+    Each category must be in the allowed INSIGHT_CATEGORIES list (by name).
     """
     if not insight_categories or not isinstance(insight_categories, list):
         raise HTTPException(status_code=400, detail="Insight categories must be a list")
@@ -68,6 +74,7 @@ def validate_insight_categories(insight_categories: List[str]) -> List[str]:
     if len(insight_categories) == 0:
         raise HTTPException(status_code=400, detail="At least one insight category is required")
     
+    allowed_names = get_insight_category_names()
     validated = []
     for category in insight_categories:
         if not isinstance(category, str):
@@ -75,11 +82,11 @@ def validate_insight_categories(insight_categories: List[str]) -> List[str]:
         
         category = category.strip()
         
-        # Validate category is in allowed list
-        if category not in INSIGHT_CATEGORIES:
+        # Validate category name is in allowed list
+        if category not in allowed_names:
             raise HTTPException(
                 status_code=400,
-                detail=f"Invalid insight category: '{category}'. Allowed categories: {INSIGHT_CATEGORIES}"
+                detail=f"Invalid insight category: '{category}'. Allowed categories: {allowed_names}"
             )
         
         validated.append(category)
@@ -138,11 +145,12 @@ async def get_insight_types_endpoint(
         
         validated_category = None
         if insight_category:
-            # Validate category is in allowed list
-            if insight_category not in INSIGHT_CATEGORIES:
+            # Validate category name is in allowed list
+            allowed_names = get_insight_category_names()
+            if insight_category not in allowed_names:
                 raise HTTPException(
                     status_code=400,
-                    detail=f"Invalid insight category: '{insight_category}'. Allowed categories: {INSIGHT_CATEGORIES}"
+                    detail=f"Invalid insight category: '{insight_category}'. Allowed categories: {allowed_names}"
                 )
             validated_category = insight_category.strip()
         
