@@ -326,6 +326,83 @@ async def get_issue_status_duration(
         )
 
 
+@issues_router.get("/issues/release-predictability")
+async def get_release_predictability(
+    months: int = Query(3, description="Number of months to look back", ge=1, le=12),
+    conn: Connection = Depends(get_db_connection)
+):
+    """
+    Get release predictability analysis from the release_predictability_analysis table.
+    
+    Returns release predictability metrics including version name, project key, dates,
+    epic completion percentages, and other issues completion percentages.
+    
+    Args:
+        months: Number of months to look back (default: 3)
+    
+    Returns:
+        JSON response with release predictability data list and metadata
+    """
+    try:
+        # Calculate start date based on months parameter
+        start_date = datetime.now().date() - timedelta(days=months * 30)
+        
+        # SECURE: Parameterized query prevents SQL injection
+        query = text("""
+            SELECT 
+                version_name, 
+                project_key, 
+                release_start_date, 
+                release_date, 
+                total_epics_in_scope, 
+                epics_completed, 
+                epic_percent_completed, 
+                total_other_issues_in_scope, 
+                other_issues_completed, 
+                other_issues_percent_completed 
+            FROM public.release_predictability_analysis 
+            WHERE release_start_date >= :start_date
+            ORDER BY release_start_date DESC
+        """)
+        
+        logger.info(f"Executing query to get release predictability: months={months}")
+        
+        result = conn.execute(query, {"start_date": start_date.strftime("%Y-%m-%d")})
+        rows = result.fetchall()
+        
+        # Convert rows to list of dictionaries
+        predictability_data = []
+        for row in rows:
+            data_dict = dict(row._mapping)
+            
+            # Format date fields if they exist
+            for key, value in data_dict.items():
+                if value is not None and hasattr(value, 'strftime'):
+                    data_dict[key] = value.strftime('%Y-%m-%d')
+            
+            predictability_data.append(data_dict)
+        
+        return {
+            "success": True,
+            "data": {
+                "release_predictability": predictability_data,
+                "count": len(predictability_data),
+                "months": months
+            },
+            "message": f"Retrieved {len(predictability_data)} release predictability records (last {months} months)"
+        }
+    
+    except HTTPException:
+        # Re-raise HTTP exceptions (validation errors)
+        raise
+    except Exception as e:
+        logger.error(f"Error fetching release predictability: {e}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to fetch release predictability: {str(e)}"
+        )
+
+
 @issues_router.get("/issues/{issue_id}")
 async def get_issue(
     issue_id: str,
