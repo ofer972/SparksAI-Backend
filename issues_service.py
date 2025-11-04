@@ -403,6 +403,195 @@ async def get_release_predictability(
         )
 
 
+@issues_router.get("/issues/issues-grouped-by-priority")
+async def get_issues_grouped_by_priority(
+    issue_type: Optional[str] = Query(None, description="Filter by issue type"),
+    team_name: Optional[str] = Query(None, description="Filter by team name"),
+    status_category: Optional[str] = Query(None, description="Filter by status category"),
+    conn: Connection = Depends(get_db_connection)
+):
+    """
+    Get issues grouped by priority from the jira_issues table.
+    
+    Returns the count of issues per priority level, with optional filtering by issue_type, team_name, and/or status_category.
+    
+    Args:
+        issue_type: Optional filter by issue type
+        team_name: Optional filter by team name
+        status_category: Optional filter by status category
+    
+    Returns:
+        JSON response with issues grouped by priority (priority, status_category, and issue_count)
+    """
+    try:
+        # Build WHERE clause conditions based on provided filters
+        where_conditions = []
+        params = {}
+        
+        if issue_type:
+            where_conditions.append("issue_type = :issue_type")
+            params["issue_type"] = issue_type
+        
+        if team_name:
+            where_conditions.append("team_name = :team_name")
+            params["team_name"] = team_name
+        
+        if status_category:
+            where_conditions.append("status_category = :status_category")
+            params["status_category"] = status_category
+        else:
+            # Default: exclude "Done" to get only open issues
+            where_conditions.append("status_category != 'Done'")
+        
+        # Build SQL query
+        where_clause = " AND ".join(where_conditions) if where_conditions else "1=1"
+        
+        # SECURE: Parameterized query prevents SQL injection
+        query = text(f"""
+            SELECT 
+                priority,
+                status_category,
+                COUNT(*) as issue_count
+            FROM {config.WORK_ITEMS_TABLE}
+            WHERE {where_clause}
+            GROUP BY priority, status_category
+            ORDER BY priority, status_category
+        """)
+        
+        logger.info(f"Executing query to get issues grouped by priority: issue_type={issue_type}, team_name={team_name}, status_category={status_category}")
+        
+        result = conn.execute(query, params)
+        rows = result.fetchall()
+        
+        # Convert rows to list of dictionaries
+        issues_by_priority = []
+        for row in rows:
+            issues_by_priority.append({
+                "priority": row[0] if row[0] is not None else "Unspecified",
+                "status_category": row[1] if row[1] is not None else "Unspecified",
+                "issue_count": int(row[2])
+            })
+        
+        return {
+            "success": True,
+            "data": {
+                "issues_by_priority": issues_by_priority,
+                "count": len(issues_by_priority)
+            },
+            "message": f"Retrieved {len(issues_by_priority)} priority groups"
+        }
+    
+    except HTTPException:
+        # Re-raise HTTP exceptions (validation errors)
+        raise
+    except Exception as e:
+        logger.error(f"Error fetching issues grouped by priority: {e}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to fetch issues grouped by priority: {str(e)}"
+        )
+
+
+@issues_router.get("/issues/issues-grouped-by-team")
+async def get_issues_grouped_by_team(
+    issue_type: Optional[str] = Query(None, description="Filter by issue type"),
+    status_category: Optional[str] = Query(None, description="Filter by status category"),
+    conn: Connection = Depends(get_db_connection)
+):
+    """
+    Get issues grouped by team with priority breakdown from the jira_issues table.
+    
+    Returns issues grouped by team_name, with each team containing a breakdown of priorities and counts.
+    Optional filtering by issue_type and/or status_category.
+    
+    Args:
+        issue_type: Optional filter by issue type
+        status_category: Optional filter by status category (default: excludes "Done" to get only open issues)
+    
+    Returns:
+        JSON response with issues grouped by team, each team containing priorities array with counts
+    """
+    try:
+        # Build WHERE clause conditions based on provided filters
+        where_conditions = []
+        params = {}
+        
+        if issue_type:
+            where_conditions.append("issue_type = :issue_type")
+            params["issue_type"] = issue_type
+        
+        if status_category:
+            where_conditions.append("status_category = :status_category")
+            params["status_category"] = status_category
+        else:
+            # Default: exclude "Done" to get only open issues
+            where_conditions.append("status_category != 'Done'")
+        
+        # Build SQL query
+        where_clause = " AND ".join(where_conditions) if where_conditions else "1=1"
+        
+        # SECURE: Parameterized query prevents SQL injection
+        query = text(f"""
+            SELECT 
+                team_name,
+                priority,
+                COUNT(*) as issue_count
+            FROM {config.WORK_ITEMS_TABLE}
+            WHERE {where_clause}
+            GROUP BY team_name, priority
+            ORDER BY team_name, priority
+        """)
+        
+        logger.info(f"Executing query to get issues grouped by team: issue_type={issue_type}, status_category={status_category}")
+        
+        result = conn.execute(query, params)
+        rows = result.fetchall()
+        
+        # Group by team_name into nested structure
+        teams_dict = {}
+        for row in rows:
+            team = row[0] if row[0] is not None else "Unspecified"
+            priority = row[1] if row[1] is not None else "Unspecified"
+            count = int(row[2])
+            
+            if team not in teams_dict:
+                teams_dict[team] = {"priorities": [], "total_issues": 0}
+            
+            teams_dict[team]["priorities"].append({
+                "priority": priority,
+                "issue_count": count
+            })
+            teams_dict[team]["total_issues"] += count
+        
+        # Convert to list format
+        issues_by_team = []
+        for team_name, data in teams_dict.items():
+            issues_by_team.append({
+                "team_name": team_name,
+                "priorities": data["priorities"],
+                "total_issues": data["total_issues"]
+            })
+        
+        return {
+            "success": True,
+            "data": {
+                "issues_by_team": issues_by_team,
+                "count": len(issues_by_team)
+            },
+            "message": f"Retrieved {len(issues_by_team)} teams with priority breakdown"
+        }
+    
+    except HTTPException:
+        # Re-raise HTTP exceptions (validation errors)
+        raise
+    except Exception as e:
+        logger.error(f"Error fetching issues grouped by team: {e}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to fetch issues grouped by team: {str(e)}"
+        )
+
+
 @issues_router.get("/issues/{issue_id}")
 async def get_issue(
     issue_id: str,
