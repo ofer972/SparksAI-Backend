@@ -142,6 +142,58 @@ def get_pi_percent_completed_status(
         return "red"
 
 
+def get_wip_count_status(in_progress_count: int, total_count: int) -> str:
+    """
+    Calculate WIP count status color based on percentage of epics in progress.
+    
+    Args:
+        in_progress_count: Number of epics in progress
+        total_count: Total number of epics
+    
+    Returns:
+        str: "green", "yellow", or "red" based on the percentage
+        - "green" if in-progress epics <= 30% of total
+        - "yellow" if in-progress epics > 30% and <= 50% of total
+        - "red" if in-progress epics > 50% of total
+    """
+    # Handle edge cases
+    if total_count == 0:
+        return "green"
+    
+    in_progress_percent = (in_progress_count / total_count) * 100
+    
+    if in_progress_percent <= 30:
+        return "green"
+    elif in_progress_percent <= 50:
+        return "yellow"
+    else:  # > 50%
+        return "red"
+
+
+def get_progress_delta_pct_status(progress_delta_pct: Optional[float]) -> str:
+    """
+    Calculate status color based on progress_delta_pct value.
+    
+    Args:
+        progress_delta_pct: Progress delta percentage value
+    
+    Returns:
+        str: "green", "yellow", or "red" based on the value
+        - "green" if progress_delta_pct > -20
+        - "yellow" if progress_delta_pct >= -40 and <= -20
+        - "red" if progress_delta_pct < -40
+    """
+    if progress_delta_pct is None:
+        return "green"  # Default to green if value is None
+    
+    if progress_delta_pct > -20:
+        return "green"
+    elif progress_delta_pct >= -40 and progress_delta_pct <= -20:
+        return "yellow"
+    else:  # progress_delta_pct < -40
+        return "red"
+
+
 def get_pi_in_progress_issues_status(
     in_progress_issues: int,
     total_issues: int
@@ -470,6 +522,11 @@ async def get_pi_status_for_today(
             conn=conn
         )
         
+        # Add progress_delta_pct_status field to each record
+        for record in summary_data:
+            progress_delta_pct = record.get('progress_delta_pct')
+            record['progress_delta_pct_status'] = get_progress_delta_pct_status(progress_delta_pct)
+        
         return {
             "success": True,
             "data": summary_data,
@@ -485,6 +542,115 @@ async def get_pi_status_for_today(
         raise HTTPException(
             status_code=500,
             detail=f"Failed to fetch PI status for today: {str(e)}"
+        )
+
+
+@pis_router.get("/pis/WIP")
+async def get_pi_wip(
+    pi: str = Query(..., description="PI name (mandatory)"),
+    team: str = Query(None, description="Team name filter (optional)"),
+    project: str = Query(None, description="Project key filter (optional)"),
+    conn: Connection = Depends(get_db_connection)
+):
+    """
+    Get WIP (Work In Progress) counts for epics in a specific PI.
+    
+    Returns counts of total epics and epics in progress, along with status color
+    based on the percentage of epics in progress.
+    
+    Parameters:
+        pi: PI name (mandatory)
+        team: Team name filter (optional)
+        project: Project key filter (optional)
+    
+    Returns:
+        JSON response with:
+        - count_in_progress: Number of epics with status_category = 'In Progress'
+        - count_in_progress_status: "green", "yellow", or "red" based on percentage
+        - total_epics: Total number of epics
+        - in_progress_percentage: Percentage of epics in progress
+    """
+    try:
+        # Validate pi parameter (mandatory)
+        if not pi:
+            raise HTTPException(
+                status_code=400,
+                detail="pi parameter is required"
+            )
+        
+        # Build WHERE clause conditions
+        where_conditions = [
+            "issue_type = 'Epic'",
+            "quarter_pi = :pi"
+        ]
+        
+        params = {
+            "pi": pi
+        }
+        
+        # Add optional filters
+        if team:
+            where_conditions.append("team_name = :team")
+            params["team"] = team
+        
+        if project:
+            # Try project_key first, if column doesn't exist, we'll handle it
+            where_conditions.append("project_key = :project")
+            params["project"] = project
+        
+        # Build SQL query
+        where_clause = " AND ".join(where_conditions)
+        
+        query = text(f"""
+            SELECT 
+                COUNT(*) as total_epics,
+                COUNT(CASE WHEN status_category = 'In Progress' THEN 1 END) as in_progress_epics
+            FROM public.jira_issues
+            WHERE {where_clause}
+        """)
+        
+        logger.info(f"Executing query to get PI WIP counts for PI: {pi}")
+        logger.info(f"Filters: team={team}, project={project}")
+        
+        result = conn.execute(query, params)
+        row = result.fetchone()
+        
+        if not row:
+            # Return zeros if no data found
+            total_epics = 0
+            in_progress_epics = 0
+        else:
+            total_epics = int(row[0]) if row[0] else 0
+            in_progress_epics = int(row[1]) if row[1] else 0
+        
+        # Calculate percentage
+        in_progress_percentage = (in_progress_epics / total_epics * 100) if total_epics > 0 else 0.0
+        
+        # Calculate status
+        count_in_progress_status = get_wip_count_status(in_progress_epics, total_epics)
+        
+        return {
+            "success": True,
+            "data": {
+                "count_in_progress": in_progress_epics,
+                "count_in_progress_status": count_in_progress_status,
+                "total_epics": total_epics,
+                "in_progress_percentage": round(in_progress_percentage, 2),
+                "pi": pi,
+                "team": team,
+                "project": project
+            },
+            "message": f"Retrieved WIP counts: {in_progress_epics} epics in progress out of {total_epics} total epics ({in_progress_percentage:.2f}%)"
+        }
+    
+    except HTTPException:
+        # Re-raise HTTP exceptions
+        raise
+    except Exception as e:
+        logger.error(f"Error fetching PI WIP counts: {e}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to fetch PI WIP counts: {str(e)}"
         )
 
 
