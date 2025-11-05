@@ -152,7 +152,7 @@ def fetch_scope_changes_data(quarters: List[str], conn: Connection = None) -> Li
     Fetch scope changes data for specified quarters.
     Copied EXACT logic from JiraDashboard-NEWUI _db_data_fetchers.py lines 792-832
     
-    Uses the view: public.epic_pi_scope_changes_long
+    Uses the view: public.epic_pi_scope_changes_long_with_issues
     Columns: "Quarter Name" (as quarter), "Metric Name" (as metric_name), "Value" (as value)
     
     Args:
@@ -170,7 +170,7 @@ def fetch_scope_changes_data(quarters: List[str], conn: Connection = None) -> Li
         
         # SECURITY: Use parameterized query with PostgreSQL array handling for IN clause
         sql_query_text = text("""
-            SELECT * FROM public.epic_pi_scope_changes_long
+            SELECT * FROM public.epic_pi_scope_changes_long_with_issues
             WHERE "Quarter Name" = ANY(:quarters)
             ORDER BY "Quarter Name", "Metric Name"
         """)
