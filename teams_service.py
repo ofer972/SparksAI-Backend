@@ -288,6 +288,7 @@ async def create_group(
         row = result.fetchone()
         conn.commit()
         
+        # Return database field names to match pattern in other services
         group = {
             "group_key": row[0],
             "group_name": row[1],
@@ -401,6 +402,7 @@ async def update_group(
                 detail=f"Group with ID {validated_group_id} not found"
             )
         
+        # Return database field names to match pattern in other services
         group = {
             "group_key": row[0],
             "group_name": row[1],
@@ -990,5 +992,83 @@ async def remove_team_from_group(
         raise HTTPException(
             status_code=500,
             detail=f"Failed to remove team from group: {str(e)}"
+        )
+
+
+@teams_router.post("/teams/populate-teams-from-jira-issues")
+async def populate_teams_from_jira_issues(
+    conn: Connection = Depends(get_db_connection)
+):
+    """
+    Populate teams table from distinct team names in jira_issues table.
+    Uses UPSERT to insert new teams without touching existing group connections.
+    
+    Returns:
+        JSON response with count of teams processed
+    """
+    try:
+        # First, get all distinct team names from jira_issues
+        select_query = text(f"""
+            SELECT DISTINCT team_name 
+            FROM {config.WORK_ITEMS_TABLE} 
+            WHERE team_name IS NOT NULL 
+            AND team_name != ''
+            ORDER BY team_name
+        """)
+        
+        logger.info("Fetching distinct team names from jira_issues table")
+        
+        result = conn.execute(select_query)
+        rows = result.fetchall()
+        team_names = [row[0] for row in rows]
+        
+        if not team_names:
+            return {
+                "success": True,
+                "data": {
+                    "teams_processed": 0,
+                    "teams_inserted": 0,
+                    "teams_existed": 0
+                },
+                "message": "No team names found in jira_issues table"
+            }
+        
+        # UPSERT each team name
+        # Use ON CONFLICT DO NOTHING to preserve existing group_key
+        insert_query = text("""
+            INSERT INTO public.teams (team_name, number_of_team_members, group_key)
+            VALUES (:team_name, 0, NULL)
+            ON CONFLICT (team_name) DO NOTHING
+        """)
+        
+        inserted_count = 0
+        existed_count = 0
+        
+        for team_name in team_names:
+            result = conn.execute(insert_query, {"team_name": team_name})
+            if result.rowcount > 0:
+                inserted_count += 1
+            else:
+                existed_count += 1
+        
+        conn.commit()
+        
+        logger.info(f"Populated teams: {inserted_count} inserted, {existed_count} already existed")
+        
+        return {
+            "success": True,
+            "data": {
+                "teams_processed": len(team_names),
+                "teams_inserted": inserted_count,
+                "teams_existed": existed_count
+            },
+            "message": f"Processed {len(team_names)} teams: {inserted_count} inserted, {existed_count} already existed"
+        }
+    
+    except Exception as e:
+        logger.error(f"Error populating teams from jira_issues: {e}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to populate teams from jira_issues: {str(e)}"
         )
 
