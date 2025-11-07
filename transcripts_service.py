@@ -10,6 +10,8 @@ from sqlalchemy import text
 from sqlalchemy.engine import Connection
 from typing import List, Dict, Any, Optional
 import logging
+from datetime import datetime
+import re
 from database_connection import get_db_connection
 import config
 
@@ -22,13 +24,74 @@ def validate_name(value: Optional[str], field: str) -> str:
     """Basic non-empty validation and sanitization similar to other services."""
     if value is None or not isinstance(value, str) or value.strip() == "":
         raise HTTPException(status_code=400, detail=f"{field} is required")
-    import re
     sanitized = re.sub(r'[^a-zA-Z0-9\s\-_]', '', value.strip())
     if not sanitized:
         raise HTTPException(status_code=400, detail=f"{field} contains invalid characters")
     if len(sanitized) > 255:
         raise HTTPException(status_code=400, detail=f"{field} is too long (max 255 characters)")
     return sanitized
+
+
+def parse_date_from_filename(filename: str) -> Optional[str]:
+    """
+    Parse date from filename.
+    
+    Checks beginning and end of filename for date patterns.
+    Supports formats: DDMMYYYY, DD-MM-YYYY, DD/MM/YYYY, DD.MM.YYYY,
+                      YYYYMMDD, YYYY-MM-DD, YYYY/MM/DD, YYYY.MM.DD
+    
+    Args:
+        filename: The filename to parse (without path)
+        
+    Returns:
+        Date string in YYYY-MM-DD format, or None if not found
+    """
+    if not filename:
+        return None
+    
+    # Remove file extension
+    name_without_ext = re.sub(r'\.[^.]*$', '', filename)
+    
+    # Date format patterns to try (pattern, format_string)
+    # Order matters: try more specific patterns first
+    date_formats = [
+        # DD-MM-YYYY, DD/MM/YYYY, DD.MM.YYYY (07-11-2025, 07/11/2025, 07.11.2025) - beginning
+        (r'^\d{2}[-/.]\d{2}[-/.]\d{4}', '%d-%m-%Y'),
+        # DD-MM-YYYY, DD/MM/YYYY, DD.MM.YYYY - end
+        (r'\d{2}[-/.]\d{2}[-/.]\d{4}$', '%d-%m-%Y'),
+        # YYYY-MM-DD, YYYY/MM/DD, YYYY.MM.DD (2025-11-07, 2025/11/07, 2025.11.07) - beginning
+        (r'^\d{4}[-/.]\d{2}[-/.]\d{2}', '%Y-%m-%d'),
+        # YYYY-MM-DD, YYYY/MM/DD, YYYY.MM.DD - end
+        (r'\d{4}[-/.]\d{2}[-/.]\d{2}$', '%Y-%m-%d'),
+        # DDMMYYYY (07112025) - beginning - try this before YYYYMMDD
+        (r'^\d{8}', '%d%m%Y'),
+        # DDMMYYYY (07112025) - end
+        (r'\d{8}$', '%d%m%Y'),
+        # YYYYMMDD (20251107) - beginning
+        (r'^\d{8}', '%Y%m%d'),
+        # YYYYMMDD (20251107) - end
+        (r'\d{8}$', '%Y%m%d'),
+    ]
+    
+    # Try each pattern
+    for pattern, date_format in date_formats:
+        match = re.search(pattern, name_without_ext)
+        if match:
+            # Extract the matched date string
+            date_str = match.group(0)
+            # Normalize separators to match format (replace / and . with -)
+            normalized_date = re.sub(r'[/.]', '-', date_str)
+            
+            try:
+                # Parse the date
+                parsed_date = datetime.strptime(normalized_date, date_format)
+                # Return in YYYY-MM-DD format
+                return parsed_date.strftime('%Y-%m-%d')
+            except ValueError:
+                # Invalid date (e.g., 32nd day, 13th month), try next pattern
+                continue
+    
+    return None
 
 @transcripts_router.get("/transcripts")
 async def get_transcripts(conn: Connection = Depends(get_db_connection)):
@@ -326,10 +389,21 @@ async def upload_team_transcript(
         # Use provided file_name or fallback to uploaded filename
         final_file_name = file_name if file_name else raw_data.filename
         
-        # Use provided transcript_date or fallback to current date
-        final_date = transcript_date if transcript_date else "CURRENT_DATE"
+        # Determine transcript_date: first try filename, then parameter, then current date
+        date_source = None
+        parsed_date = parse_date_from_filename(final_file_name)
         
-        logger.info(f"Uploading transcript file: {final_file_name}")
+        if parsed_date:
+            final_date = parsed_date
+            date_source = "filename"
+        elif transcript_date:
+            final_date = transcript_date
+            date_source = "parameter"
+        else:
+            final_date = "CURRENT_DATE"
+            date_source = "current_date"
+        
+        logger.info(f"Uploading transcript file: {final_file_name}, transcript_date: {final_date} (source: {date_source}), team_name: {team_name}, type: {type}, pi: None")
         
         result = conn.execute(query, {
             "transcript_date": final_date,
@@ -430,10 +504,21 @@ async def upload_pi_transcript(
         # Use provided file_name or fallback to uploaded filename
         final_file_name = file_name if file_name else raw_data.filename
         
-        # Use provided transcript_date or fallback to current date
-        final_date = transcript_date if transcript_date else "CURRENT_DATE"
+        # Determine transcript_date: first try filename, then parameter, then current date
+        date_source = None
+        parsed_date = parse_date_from_filename(final_file_name)
         
-        logger.info(f"Uploading PI transcript file: {final_file_name} for PI: {pi}")
+        if parsed_date:
+            final_date = parsed_date
+            date_source = "filename"
+        elif transcript_date:
+            final_date = transcript_date
+            date_source = "parameter"
+        else:
+            final_date = "CURRENT_DATE"
+            date_source = "current_date"
+        
+        logger.info(f"Uploading transcript file: {final_file_name}, transcript_date: {final_date} (source: {date_source}), team_name: None, type: {type}, pi: {pi}")
         
         result = conn.execute(query, {
             "transcript_date": final_date,

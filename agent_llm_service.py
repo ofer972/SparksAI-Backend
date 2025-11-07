@@ -24,12 +24,13 @@ class JobType(str, Enum):
     SPRINT_GOAL = "Sprint Goal"
     PI_SYNC = "PI Sync"
     TEAM_PI_INSIGHT = "Team PI Insight"
+    TEAM_RETROSPECTIVE_PREPARATION = "Team Retrospective Preparation"
 
 
 class AgentLLMProcessRequest(BaseModel):
     """Request model for agent LLM process endpoint"""
     prompt: str = Field(..., description="Complete formatted prompt prepared by agent")
-    job_type: JobType = Field(..., description="Type of job: Daily Agent, Sprint Goal, PI Sync, or Team PI Insight")
+    job_type: JobType = Field(..., description="Type of job: Daily Agent, Sprint Goal, PI Sync, Team PI Insight, or Team Retrospective Preparation")
     system_prompt: Optional[str] = Field(None, description="System prompt for AI behavior/context")
     job_id: Optional[int] = Field(None, description="Job ID for logging/tracking")
     metadata: Optional[Dict[str, Any]] = Field(None, description="Additional context for logging")
