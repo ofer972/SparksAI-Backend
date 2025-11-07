@@ -169,3 +169,7 @@ temp/
 
 # LLM context debug files (temporary debug output)
 llm_context_debug*.txt
+
+# Combined backend files
+combined_backend.txt
+combined_backend.*
