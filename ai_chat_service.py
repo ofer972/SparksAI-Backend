@@ -820,12 +820,19 @@ async def call_llm_service(
     if conversation_context:
         logger.info(f"Conversation context included: {len(conversation_context)} chars")
         logger.debug(f"Conversation context preview: {conversation_context[:200]}...")
+        # Show last 200 characters of conversation context
+        if len(conversation_context) > 200:
+            last_200 = conversation_context[-200:]
+            logger.info(f"This is the end of the this is the last 200 of characters of the message sent to the LLM: {last_200}")
+        else:
+            logger.info(f"Full conversation context (less than 200 chars): {conversation_context}")
     else:
         logger.info("No conversation context provided")
     if system_message:
         logger.info(f"System message included: {len(system_message)} chars")
     else:
         logger.info("No system message provided")
+    logger.info(f"Question being sent to LLM: {question}")
     logger.debug(f"Payload: {payload}")
     
     try:
@@ -1182,6 +1189,10 @@ async def ai_chat(
             )
 
         # 2.11. Check for Vanna AI trigger and process if needed
+        # Initialize variables to track Vanna data for chat history
+        vanna_was_triggered = False
+        vanna_formatted_for_history = None
+        
         if request.question and VANNA_AI_TRIGGER in request.question:
             try:
                 logger.info(f"Vanna AI trigger detected in question: {request.question[:100]}...")
@@ -1197,9 +1208,42 @@ async def ai_chat(
                     conn=conn
                 )
                 
-                # Format Vanna results and append to conversation context
-                vanna_formatted = format_vanna_results_for_llm(vanna_result)
+                # Log what Vanna returned
+                logger.info(f"=== VANNA AI RETURNED ===")
+                logger.info(f"Status: {vanna_result.get('status')}")
+                logger.info(f"SQL: {vanna_result.get('sql', 'N/A')}")
+                logger.info(f"Results count: {len(vanna_result.get('results', []))}")
+                if vanna_result.get('error'):
+                    logger.info(f"Error: {vanna_result.get('error')}")
+                logger.info(f"=== END VANNA AI RETURNED ===")
                 
+                # Clean question for Vanna formatting (remove trigger)
+                clean_question_for_vanna = request.question.replace(VANNA_AI_TRIGGER, "").strip()
+                # Remove any remaining standalone "X" at the start
+                if clean_question_for_vanna.startswith("X "):
+                    clean_question_for_vanna = clean_question_for_vanna[2:].strip()
+                elif clean_question_for_vanna.startswith("X"):
+                    clean_question_for_vanna = clean_question_for_vanna[1:].strip()
+                
+                # Format Vanna results with question explicitly paired
+                vanna_formatted = format_vanna_results_for_llm(vanna_result, question=clean_question_for_vanna)
+                
+                # Store Vanna data for chat history
+                vanna_was_triggered = True
+                vanna_formatted_for_history = vanna_formatted
+                
+                # CRITICAL FIX: Inject Vanna results into history_json BEFORE calling LLM
+                # The LLM service processes history_json correctly, but doesn't process conversation_context correctly
+                # So we add Vanna data as a user message in history so LLM sees it immediately
+                # Format: Make it clear this is the answer to the upcoming question
+                history_json.setdefault('messages', [])
+                history_json['messages'].append({
+                    'role': 'user',
+                    'content': f"Here is the database query result that answers the question '{clean_question_for_vanna}':\n\n{vanna_formatted}"
+                })
+                logger.info(f"Injected Vanna results into history_json (status: {vanna_result.get('status')})")
+                
+                # Also add to conversation_context for backward compatibility
                 if conversation_context:
                     conversation_context = conversation_context + '\n\n' + vanna_formatted
                 else:
@@ -1218,9 +1262,21 @@ async def ai_chat(
                     conversation_context = vanna_error_msg
 
         # 3. Call LLM service
+        # Remove "XXX" trigger from question if present before sending to LLM
+        question_to_send = request.question
+        if request.question and VANNA_AI_TRIGGER in request.question:
+            # Remove all occurrences of "XXX" and clean up any remaining X's
+            question_to_send = request.question.replace(VANNA_AI_TRIGGER, "").strip()
+            # Remove any remaining standalone "X" at the start (in case user typed "XXXX" or "XXX X")
+            if question_to_send.startswith("X "):
+                question_to_send = question_to_send[2:].strip()
+            elif question_to_send.startswith("X"):
+                question_to_send = question_to_send[1:].strip()
+            logger.info(f"Cleaned question for LLM (removed trigger): '{question_to_send}'")
+        
         llm_response = await call_llm_service(
             conversation_id=conversation_id,
-            question=request.question,
+            question=question_to_send,
             history_json=history_json,
             user_id=request.user_id,
             selected_team=request.selected_team,
@@ -1239,9 +1295,29 @@ async def ai_chat(
         ai_response = llm_response.get("response", "")
         
         # 4. Update chat history with new exchange
+        # Remove "XXX" trigger from question before saving to history
+        clean_question_for_history = request.question
+        if request.question and VANNA_AI_TRIGGER in request.question:
+            # Remove all occurrences of "XXX" and clean up any remaining X's
+            clean_question_for_history = request.question.replace(VANNA_AI_TRIGGER, "").strip()
+            # Remove any remaining standalone "X" at the start (in case user typed "XXXX" or "XXX X")
+            if clean_question_for_history.startswith("X "):
+                clean_question_for_history = clean_question_for_history[2:].strip()
+            elif clean_question_for_history.startswith("X"):
+                clean_question_for_history = clean_question_for_history[1:].strip()
+        
+        # If Vanna was triggered, append Vanna results to user message
+        if vanna_was_triggered and vanna_formatted_for_history:
+            # Combine cleaned question + Vanna results
+            user_message_with_vanna = f"{clean_question_for_history}\n\n{vanna_formatted_for_history}"
+            user_message_to_save = user_message_with_vanna
+            logger.info(f"Appending Vanna results to chat history (question length: {len(clean_question_for_history)}, Vanna data length: {len(vanna_formatted_for_history)})")
+        else:
+            user_message_to_save = clean_question_for_history
+        
         update_chat_history(
             conversation_id=conversation_id,
-            user_message=request.question,
+            user_message=user_message_to_save,
             assistant_response=ai_response,
             conn=conn
         )
