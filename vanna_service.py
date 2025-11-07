@@ -206,6 +206,11 @@ async def call_vanna_ai(
     try:
         # Remove trigger from question
         clean_question = question.replace(VANNA_AI_TRIGGER, "").strip()
+        # Remove any remaining standalone "X" at the start (in case user typed "XXXX" or "XXX X")
+        if clean_question.startswith("X "):
+            clean_question = clean_question[2:].strip()
+        elif clean_question.startswith("X"):
+            clean_question = clean_question[1:].strip()
         if not clean_question:
             return {
                 'sql': None,
@@ -273,6 +278,9 @@ async def call_vanna_ai(
             sql = '\n'.join(lines).strip()
         
         logger.info(f"Generated SQL: {sql[:200]}...")
+        logger.info(f"=== VANNA AI SQL STATEMENT ===")
+        logger.info(f"{sql}")
+        logger.info(f"=== END VANNA AI SQL STATEMENT ===")
         
         # Execute SQL query
         try:
@@ -335,12 +343,14 @@ async def call_vanna_ai(
         }
 
 
-def format_vanna_results_for_llm(vanna_result: Dict[str, Any]) -> str:
+def format_vanna_results_for_llm(vanna_result: Dict[str, Any], question: Optional[str] = None) -> str:
     """
     Format Vanna AI results as text to include in LLM conversation context.
+    Explicitly pairs the question with the answer so LLM understands the relationship.
     
     Args:
         vanna_result: Result dictionary from call_vanna_ai()
+        question: Optional cleaned question (without trigger) to pair with results
         
     Returns:
         Formatted text string for LLM context
@@ -348,7 +358,14 @@ def format_vanna_results_for_llm(vanna_result: Dict[str, Any]) -> str:
     if vanna_result.get('status') != 'success':
         error = vanna_result.get('error', 'Unknown error')
         sql = vanna_result.get('sql', 'N/A')
-        return f"""=== DATABASE QUERY ATTEMPT ===
+        if question:
+            return f"""=== DATABASE QUERY ATTEMPT ===
+Question: {question}
+SQL Query: {sql}
+Error: {error}
+=== END DATABASE QUERY ATTEMPT ==="""
+        else:
+            return f"""=== DATABASE QUERY ATTEMPT ===
 SQL Query: {sql}
 Error: {error}
 === END DATABASE QUERY ATTEMPT ==="""
@@ -361,7 +378,17 @@ Error: {error}
     results_to_show = results[:100]
     results_json = json.dumps(results_to_show, indent=2, default=str)
     
-    formatted_text = f"""=== DATABASE QUERY RESULTS ===
+    # Format with explicit Question/Answer pairing
+    if question:
+        formatted_text = f"""=== DATABASE QUERY ===
+Question: {question}
+Answer:
+SQL Query:
+{sql}
+
+Results ({row_count} row{'s' if row_count != 1 else ''}):"""
+    else:
+        formatted_text = f"""=== DATABASE QUERY RESULTS ===
 SQL Query:
 {sql}
 
@@ -374,7 +401,10 @@ Results ({row_count} row{'s' if row_count != 1 else ''}):"""
     else:
         formatted_text += "\nNo data returned"
     
-    formatted_text += "\n=== END DATABASE QUERY RESULTS ==="
+    if question:
+        formatted_text += "\n=== END DATABASE QUERY ==="
+    else:
+        formatted_text += "\n=== END DATABASE QUERY RESULTS ==="
     
     return formatted_text
 
