@@ -80,3 +80,6 @@ DEFAULT_HOST = "0.0.0.0"
 
 # --- LLM Service Configuration ---
 LLM_SERVICE_URL = os.getenv("LLM_SERVICE_URL", "http://localhost:8001")
+
+# --- Vanna AI Configuration ---
+VANNA_AI_TRIGGER = "XXX"  # Trigger string to detect Vanna AI queries in user questions

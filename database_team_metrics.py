@@ -117,20 +117,22 @@ def get_team_count_in_progress(team_name: str, conn: Connection = None) -> Dict[
 def get_team_current_sprint_progress(team_name: str, conn: Connection = None) -> Dict[str, Any]:
     """
     Get current sprint progress for a team with detailed breakdown.
-    Returns start date, end date, total issues, completed, in progress, to do counts, and completion percentage.
+    Returns sprint ID, sprint name, start date, end date, total issues, completed, in progress, to do counts, and completion percentage.
     
     Args:
         team_name (str): Team name
         conn (Connection): Database connection from FastAPI dependency
     
     Returns:
-        dict: Dictionary with 'start_date', 'end_date', 'total_issues', 'completed_issues', 
+        dict: Dictionary with 'sprint_id', 'sprint_name', 'start_date', 'end_date', 'total_issues', 'completed_issues', 
               'in_progress_issues', 'todo_issues', and 'percent_completed' values
     """
     try:
         # SECURE: Parameterized query prevents SQL injection
         sql_query = """
             SELECT 
+                s.sprint_id,
+                s.name as sprint_name,
                 s.start_date,
                 s.end_date,
                 COUNT(*) as total_issues,
@@ -148,7 +150,7 @@ def get_team_current_sprint_progress(team_name: str, conn: Connection = None) ->
                 i.team_name = :team_name
                 AND s.state = 'active'
             GROUP BY 
-                s.start_date, s.end_date;
+                s.sprint_id, s.name, s.start_date, s.end_date;
         """
         
         logger.info(f"Executing query to get current sprint progress for team: {team_name}")
@@ -159,20 +161,26 @@ def get_team_current_sprint_progress(team_name: str, conn: Connection = None) ->
         
         if row:
             # Keep dates as date objects (not strings) for calculations in service layer
-            start_date = row[0] if row[0] and hasattr(row[0], 'strftime') else None
-            end_date = row[1] if row[1] and hasattr(row[1], 'strftime') else None
+            sprint_id = int(row[0]) if row[0] else None
+            sprint_name = str(row[1]) if row[1] else None
+            start_date = row[2] if row[2] and hasattr(row[2], 'strftime') else None
+            end_date = row[3] if row[3] and hasattr(row[3], 'strftime') else None
             
             return {
+                'sprint_id': sprint_id,
+                'sprint_name': sprint_name,
                 'start_date': start_date,
                 'end_date': end_date,
-                'total_issues': int(row[2]) if row[2] else 0,
-                'completed_issues': int(row[3]) if row[3] else 0,
-                'in_progress_issues': int(row[4]) if row[4] else 0,
-                'todo_issues': int(row[5]) if row[5] else 0,
-                'percent_completed': float(row[6]) if row[6] is not None else 0.0
+                'total_issues': int(row[4]) if row[4] else 0,
+                'completed_issues': int(row[5]) if row[5] else 0,
+                'in_progress_issues': int(row[6]) if row[6] else 0,
+                'todo_issues': int(row[7]) if row[7] else 0,
+                'percent_completed': float(row[8]) if row[8] is not None else 0.0
             }
         else:
             return {
+                'sprint_id': None,
+                'sprint_name': None,
                 'start_date': None,
                 'end_date': None,
                 'total_issues': 0,

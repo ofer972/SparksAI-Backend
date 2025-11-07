@@ -101,74 +101,112 @@ async def get_transcripts(conn: Connection = Depends(get_db_connection)):
             detail=f"Failed to fetch transcripts: {str(e)}"
         )
 
-@transcripts_router.get("/transcripts/getLatestDaily")
-async def get_latest_daily_transcript(
-    team_name: str = Query(..., description="Team name for Daily transcript"),
+@transcripts_router.get("/transcripts/getLatest")
+async def get_latest_transcripts(
+    type: Optional[str] = Query(None, description="Transcript type: 'Daily' or 'PI Sync'"),
+    team_name: Optional[str] = Query(None, description="Team name (required if type='Daily')"),
+    pi_name: Optional[str] = Query(None, description="PI name (required if type='PI Sync')"),
+    limit: int = Query(1, ge=1, le=100, description="Number of transcripts to return (default: 1, max: 100)"),
     conn: Connection = Depends(get_db_connection)
 ):
     """
-    Get the latest Daily transcript for a team. Returns 204 if none.
+    Get latest transcripts with optional filtering by type, team, or PI.
+    
+    Args:
+        type: Transcript type ('Daily' or 'PI Sync'). If not provided, returns all types.
+        team_name: Team name (required if type='Daily')
+        pi_name: PI name (required if type='PI Sync')
+        limit: Number of transcripts to return (default: 1, max: 100)
+    
+    Returns:
+        JSON response with transcripts list and count, or 204 if no results found
     """
     try:
-        validated_team = validate_name(team_name, "team_name")
+        # Validate type if provided
+        if type:
+            type = type.strip()
+            if type not in ['Daily', 'PI Sync']:
+                raise HTTPException(
+                    status_code=400,
+                    detail="type must be 'Daily' or 'PI Sync'"
+                )
+        
+        # Validate required parameters based on type
+        if type == 'Daily':
+            if not team_name:
+                raise HTTPException(
+                    status_code=400,
+                    detail="team_name is required when type='Daily'"
+                )
+            validated_team = validate_name(team_name, "team_name")
+        elif type == 'PI Sync':
+            if not pi_name:
+                raise HTTPException(
+                    status_code=400,
+                    detail="pi_name is required when type='PI Sync'"
+                )
+            validated_pi = validate_name(pi_name, "pi_name")
+        
+        # Build WHERE clause conditions
+        where_conditions = []
+        params = {"limit": limit}
+        
+        if type:
+            where_conditions.append("type = :type")
+            params["type"] = type
+        
+        if type == 'Daily' and team_name:
+            where_conditions.append("team_name = :team_name")
+            params["team_name"] = validated_team
+        elif type == 'PI Sync' and pi_name:
+            where_conditions.append("pi = :pi_name")
+            params["pi_name"] = validated_pi
+        
+        # Build WHERE clause
+        where_clause = ""
+        if where_conditions:
+            where_clause = "WHERE " + " AND ".join(where_conditions)
+        
+        # Build query
         query = text(f"""
             SELECT *
             FROM {config.TRANSCRIPTS_TABLE}
-            WHERE type = 'Daily'
-              AND team_name = :team_name
+            {where_clause}
             ORDER BY transcript_date DESC
-            LIMIT 1
+            LIMIT :limit
         """)
-        result = conn.execute(query, {"team_name": validated_team})
-        row = result.fetchone()
-        if not row:
+        
+        logger.info(f"Executing query to get latest transcripts: type={type}, team_name={team_name}, pi_name={pi_name}, limit={limit}")
+        
+        result = conn.execute(query, params)
+        rows = result.fetchall()
+        
+        if not rows:
             from fastapi import Response
             return Response(status_code=204)
+        
+        # Convert rows to list of dictionaries
+        transcripts = []
+        for row in rows:
+            transcripts.append(dict(row._mapping))
+        
         return {
             "success": True,
-            "data": {"transcript": dict(row._mapping)},
-            "message": f"Retrieved latest Daily transcript for team '{validated_team}'"
+            "data": {
+                "transcripts": transcripts,
+                "count": len(transcripts)
+            },
+            "message": f"Retrieved {len(transcripts)} transcript(s)"
         }
+    
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"Error fetching latest Daily transcript for {team_name}: {e}")
-        raise HTTPException(status_code=500, detail=f"Failed to fetch latest Daily transcript: {str(e)}")
-
-
-@transcripts_router.get("/transcripts/getLatestPISync")
-async def get_latest_pi_sync_transcript(
-    pi_name: str = Query(..., description="PI name for PI sync transcript"),
-    conn: Connection = Depends(get_db_connection)
-):
-    """
-    Get the latest PI sync transcript. Returns 204 if none.
-    """
-    try:
-        validated_pi = validate_name(pi_name, "pi_name")
-        query = text(f"""
-            SELECT *
-            FROM {config.TRANSCRIPTS_TABLE}
-            WHERE type = 'PI Sync'
-              AND pi = :pi_name
-            ORDER BY transcript_date DESC
-            LIMIT 1
-        """)
-        result = conn.execute(query, {"pi_name": validated_pi})
-        row = result.fetchone()
-        if not row:
-            from fastapi import Response
-            return Response(status_code=204)
-        return {
-            "success": True,
-            "data": {"transcript": dict(row._mapping)},
-            "message": f"Retrieved latest PI sync transcript for '{validated_pi}'"
-        }
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error(f"Error fetching latest PI sync transcript for {pi_name}: {e}")
-        raise HTTPException(status_code=500, detail=f"Failed to fetch latest PI sync transcript: {str(e)}")
+        logger.error(f"Error fetching latest transcripts: {e}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to fetch latest transcripts: {str(e)}"
+        )
 
 
 @transcripts_router.get("/transcripts/{id}")

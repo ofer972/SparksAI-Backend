@@ -32,6 +32,12 @@ from database_pi import (
     fetch_scope_changes_data
 )
 import config
+from vanna_service import (
+    call_vanna_ai,
+    convert_history_to_vanna_format,
+    format_vanna_results_for_llm,
+    VANNA_AI_TRIGGER
+)
 
 logger = logging.getLogger(__name__)
 
@@ -1174,6 +1180,42 @@ async def ai_chat(
                 request=request,
                 history_json=history_json
             )
+
+        # 2.11. Check for Vanna AI trigger and process if needed
+        if request.question and VANNA_AI_TRIGGER in request.question:
+            try:
+                logger.info(f"Vanna AI trigger detected in question: {request.question[:100]}...")
+                
+                # Convert history to Vanna format
+                vanna_history = convert_history_to_vanna_format(history_json)
+                logger.info(f"Converted {len(vanna_history)} previous Vanna exchanges to history")
+                
+                # Call Vanna AI
+                vanna_result = await call_vanna_ai(
+                    question=request.question,
+                    conversation_history=vanna_history if vanna_history else None,
+                    conn=conn
+                )
+                
+                # Format Vanna results and append to conversation context
+                vanna_formatted = format_vanna_results_for_llm(vanna_result)
+                
+                if conversation_context:
+                    conversation_context = conversation_context + '\n\n' + vanna_formatted
+                else:
+                    conversation_context = vanna_formatted
+                
+                logger.info(f"Vanna AI results appended to conversation context (status: {vanna_result.get('status')})")
+                
+            except Exception as e:
+                logger.warning(f"Vanna AI processing failed: {e}")
+                # Continue without Vanna data - don't block the chat flow
+                # Optionally add error message to context
+                vanna_error_msg = f"\n\n=== Vanna AI Error ===\nFailed to process database query: {str(e)}\n=== End Vanna AI Error ==="
+                if conversation_context:
+                    conversation_context = conversation_context + vanna_error_msg
+                else:
+                    conversation_context = vanna_error_msg
 
         # 3. Call LLM service
         llm_response = await call_llm_service(

@@ -378,7 +378,7 @@ async def get_current_sprint_progress(
     """
     Get current sprint progress for a specific team with detailed breakdown.
     
-    Returns days left, total issues, completed, in progress, to do counts, completion percentage,
+    Returns sprint ID, sprint name, days left, total issues, completed, in progress, to do counts, completion percentage,
     and status indicators for the current active sprint.
     
     Args:
@@ -386,6 +386,8 @@ async def get_current_sprint_progress(
     
     Returns:
         JSON response with sprint progress metrics including:
+        - sprint_id: Sprint ID
+        - sprint_name: Sprint name
         - days_left: Days remaining in sprint as integer (inclusive counting, 1 = last day)
         - days_in_sprint: Total days in sprint as integer (inclusive counting)
         - total_issues: Total number of issues in active sprint
@@ -422,6 +424,8 @@ async def get_current_sprint_progress(
         return {
             "success": True,
             "data": {
+                "sprint_id": progress_data['sprint_id'],
+                "sprint_name": progress_data['sprint_name'],
                 "days_left": days_left,
                 "days_in_sprint": days_in_sprint,
                 "total_issues": progress_data['total_issues'],

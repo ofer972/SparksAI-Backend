@@ -8,7 +8,7 @@ Uses FastAPI dependencies for clean connection management and SQL injection prot
 from fastapi import APIRouter, HTTPException, Depends, Query
 from sqlalchemy import text
 from sqlalchemy.engine import Connection
-from typing import List, Dict, Any
+from typing import List, Dict, Any, Optional
 import logging
 import re
 from datetime import datetime, timedelta
@@ -308,15 +308,18 @@ async def get_sprint_issues_with_epic_for_llm(
 @sprints_router.get("/sprints/sprint-predictability")
 async def get_sprint_predictability(
     months: int = Query(3, description="Number of months to look back (1, 2, 3, 4, 6, 9)", ge=1, le=12),
+    team_name: Optional[str] = Query(None, description="Optional filter by team name"),
     conn: Connection = Depends(get_db_connection)
 ):
     """
     Get sprint predictability metrics from the get_sprint_predictability_metrics_with_issues database function.
     
     Returns all columns from the function for sprints within the specified time period.
+    Optionally filters by team name if provided.
     
     Args:
         months: Number of months to look back (default: 3, valid: 1, 2, 3, 4, 6, 9)
+        team_name: Optional team name to filter by
     
     Returns:
         JSON response with sprint predictability metrics (all columns)
@@ -329,14 +332,26 @@ async def get_sprint_predictability(
                 detail="Months parameter must be one of: 1, 2, 3, 4, 6, 9"
             )
         
-        # SECURE: Parameterized query prevents SQL injection
-        query = text("""
-            SELECT * FROM public.get_sprint_predictability_metrics_with_issues(:months)
-        """)
+        # Build parameters dict
+        params = {"months": months}
+        validated_team_name = None
         
-        logger.info(f"Executing query to get sprint predictability metrics: months={months}")
+        # Validate and add team_name if provided
+        if team_name:
+            validated_team_name = validate_team_name(team_name)
+            params["team_name"] = validated_team_name
+            query = text("""
+                SELECT * FROM public.get_sprint_predictability_metrics_with_issues(:months, :team_name)
+            """)
+            logger.info(f"Executing query to get sprint predictability metrics: months={months}, team_name={validated_team_name}")
+        else:
+            # Pass NULL for team_name when not provided
+            query = text("""
+                SELECT * FROM public.get_sprint_predictability_metrics_with_issues(:months, NULL)
+            """)
+            logger.info(f"Executing query to get sprint predictability metrics: months={months}, team_name=NULL")
         
-        result = conn.execute(query, {"months": months})
+        result = conn.execute(query, params)
         rows = result.fetchall()
         
         # Convert rows to list of dictionaries
@@ -351,14 +366,25 @@ async def get_sprint_predictability(
             
             predictability_data.append(data_dict)
         
+        # Build response message
+        message = f"Retrieved {len(predictability_data)} sprint predictability records (last {months} months)"
+        if validated_team_name:
+            message += f" for team '{validated_team_name}'"
+        
+        response_data = {
+            "sprint_predictability": predictability_data,
+            "count": len(predictability_data),
+            "months": months
+        }
+        
+        # Add team_name to response if provided
+        if validated_team_name:
+            response_data["team_name"] = validated_team_name
+        
         return {
             "success": True,
-            "data": {
-                "sprint_predictability": predictability_data,
-                "count": len(predictability_data),
-                "months": months
-            },
-            "message": f"Retrieved {len(predictability_data)} sprint predictability records (last {months} months)"
+            "data": response_data,
+            "message": message
         }
     
     except HTTPException:
