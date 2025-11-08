@@ -10,6 +10,7 @@ from sqlalchemy import text
 from sqlalchemy.engine import Connection
 from typing import List, Dict, Any, Optional
 import logging
+import time
 from pydantic import BaseModel
 from database_connection import get_db_connection
 import config
@@ -207,6 +208,7 @@ async def claim_next_pending_job(
     Uses FOR UPDATE SKIP LOCKED to prevent race conditions when multiple agents are working.
     Returns the claimed job or 204 if no pending jobs available.
     """
+    endpoint_start = time.time()
     try:
         # Parameterized query prevents SQL injection
         claim_query = text(f"""
@@ -227,15 +229,21 @@ async def claim_next_pending_job(
             RETURNING *
         """)
 
+        # Time the database operation
+        db_start = time.time()
         result = conn.execute(claim_query, {"claimed_by": request.claimed_by})
         row = result.fetchone()
         conn.commit()
+        db_duration = time.time() - db_start
 
         if not row:
+            endpoint_duration = time.time() - endpoint_start
+            logger.info(f"claim-next: Total={endpoint_duration*1000:.1f}ms (204)")
             return Response(status_code=204)
 
         job = dict(row._mapping)
-        logger.info(f"Successfully claimed job {job.get('job_id')} for {request.claimed_by}")
+        endpoint_duration = time.time() - endpoint_start
+        logger.info(f"claim-next: Total={endpoint_duration*1000:.1f}ms, job_id={job.get('job_id')}")
 
         return {
             "success": True,
@@ -243,9 +251,12 @@ async def claim_next_pending_job(
             "message": "Job claimed successfully"
         }
     except HTTPException:
+        endpoint_duration = time.time() - endpoint_start
+        logger.info(f"claim-next: Total={endpoint_duration*1000:.1f}ms (HTTP error)")
         raise
     except Exception as e:
-        logger.error(f"Error claiming next pending job: {e}")
+        endpoint_duration = time.time() - endpoint_start
+        logger.error(f"claim-next: Total={endpoint_duration*1000:.1f}ms, Error: {e}")
         conn.rollback()
         raise HTTPException(status_code=500, detail=f"Failed to claim next pending job: {str(e)}")
 

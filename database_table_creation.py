@@ -443,6 +443,7 @@ def create_agent_jobs_table_if_not_exists(engine=None) -> bool:
                 CREATE INDEX idx_agent_jobs_type ON public.agent_jobs(job_type);
                 CREATE INDEX idx_agent_jobs_team ON public.agent_jobs(team_name);
                 CREATE INDEX idx_agent_jobs_created ON public.agent_jobs(created_at DESC);
+                CREATE INDEX idx_agent_jobs_status_created_jobid ON public.agent_jobs(status, created_at ASC, job_id ASC);
                 """
                 conn.execute(text(create_table_sql))
                 conn.commit()

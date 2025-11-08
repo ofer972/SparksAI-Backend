@@ -24,7 +24,8 @@ SQL_LOG_ENABLED = _sql_log_env in ('1', 'true', 'yes', 'on')
 _current_request_path: ContextVar[Optional[str]] = ContextVar('current_request_path', default=None)
 
 # Paths that should skip SQL logging
-_SKIP_SQL_LOG_PATHS = {"/api/v1/agent-jobs/claim-next"}
+# Temporarily removed claim-next to see database query timing
+_SKIP_SQL_LOG_PATHS = set()
 
 # Global engine cache to prevent multiple engine creation
 _cached_engine = None
