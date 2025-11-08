@@ -238,7 +238,7 @@ async def claim_next_pending_job(
 
         if not row:
             endpoint_duration = time.time() - endpoint_start
-            logger.info(f"claim-next: Total={endpoint_duration*1000:.1f}ms (204)")
+            # logger.info(f"claim-next: Total={endpoint_duration*1000:.1f}ms (204)")
             return Response(status_code=204)
 
         job = dict(row._mapping)
