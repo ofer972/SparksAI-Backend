@@ -86,10 +86,10 @@ DEFAULT_INSIGHT_TYPES = [
         "active": False
     },
     {
-        "insight_type": "Retro Topics Suggestions",
+        "insight_type": "Team Retro Topics",
         "insight_description": "Suggests focus topics for the next retrospective",
         "insight_categories": ["Retrospective"],
-        "active": False
+        "active": True
     },
     {
         "insight_type": "Stories Readiness Gaps",
