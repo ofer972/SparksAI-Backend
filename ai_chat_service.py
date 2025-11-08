@@ -507,10 +507,11 @@ def build_team_dashboard_context(
             today_date_str = date.today().strftime('%Y-%m-%d')
             today_date_markdown = f"## Today's date: {today_date_str}"
             
-            # Combine with prompt text: prompt -> today's date -> formatted data
+            # Combine with prompt text: prompt -> marker -> today's date -> formatted data
             if formatted_data:
                 if conversation_context:
-                    conversation_context = conversation_context + '\n\n' + today_date_markdown + '\n\n' + formatted_data
+                    # Add marker to separate prompt from data
+                    conversation_context = conversation_context + '\n\n=== DATA_STARTS_HERE ===\n\n' + today_date_markdown + '\n\n' + formatted_data
                 else:
                     conversation_context = today_date_markdown + '\n\n' + formatted_data
                 logger.info(f"Combined prompt and formatted data for Team_dashboard (total length: {len(conversation_context)} chars)")
@@ -638,10 +639,11 @@ def build_pi_dashboard_context(
             today_date_str = date.today().strftime('%Y-%m-%d')
             today_date_markdown = f"## Today's date: {today_date_str}"
             
-            # Combine with prompt text: prompt -> today's date -> formatted data
+            # Combine with prompt text: prompt -> marker -> today's date -> formatted data
             if formatted_data:
                 if conversation_context:
-                    conversation_context = conversation_context + '\n\n' + today_date_markdown + '\n\n' + formatted_data
+                    # Add marker to separate prompt from data
+                    conversation_context = conversation_context + '\n\n=== DATA_STARTS_HERE ===\n\n' + today_date_markdown + '\n\n' + formatted_data
                 else:
                     conversation_context = today_date_markdown + '\n\n' + formatted_data
             elif conversation_context:
@@ -1013,8 +1015,9 @@ async def ai_chat(
                 # Extract description from card
                 description = card.get('description', '')
                 
-                # Build conversation_context: content_intro + description + input_sent
-                conversation_context = content_intro + '\n\n' + description + '\n\n' + formatted_job_data
+                # Build conversation_context: content_intro + marker + description + input_sent
+                # Add marker to separate prompt from data
+                conversation_context = content_intro + '\n\n=== DATA_STARTS_HERE ===\n\n' + description + '\n\n' + formatted_job_data
                 logger.info(f"Built conversation context from team AI card {insights_id_int} with intro (length: {len(conversation_context)} chars)")
             except ValueError:
                 raise HTTPException(
@@ -1073,8 +1076,9 @@ async def ai_chat(
                 # Extract description from card
                 description = card.get('description', '')
                 
-                # Build conversation_context: content_intro + description + input_sent
-                conversation_context = content_intro + '\n\n' + description + '\n\n' + formatted_job_data
+                # Build conversation_context: content_intro + marker + description + input_sent
+                # Add marker to separate prompt from data
+                conversation_context = content_intro + '\n\n=== DATA_STARTS_HERE ===\n\n' + description + '\n\n' + formatted_job_data
                 logger.info(f"Built conversation context from PI AI card {insights_id_int} (length: {len(conversation_context)} chars)")
             except ValueError:
                 raise HTTPException(
@@ -1141,8 +1145,9 @@ async def ai_chat(
                 # Extract action_text from recommendation
                 action_text = recommendation.get('action_text', '')
                 
-                # Build conversation_context: content_intro + action_text + input_sent
-                conversation_context = content_intro + '\n\n' + action_text + '\n\n' + formatted_job_data
+                # Build conversation_context: content_intro + marker + action_text + input_sent
+                # Add marker to separate prompt from data
+                conversation_context = content_intro + '\n\n=== DATA_STARTS_HERE ===\n\n' + action_text + '\n\n' + formatted_job_data
                 logger.info(f"Built conversation context from recommendation {recommendation_id_int} with intro (length: {len(conversation_context)} chars)")
             except ValueError:
                 raise HTTPException(
@@ -1207,6 +1212,61 @@ async def ai_chat(
                     history_json['initial_request_system_message'] = system_message
                 if 'initial_request_conversation_context' not in history_json:
                     history_json['initial_request_conversation_context'] = conversation_context
+                # Store data-only version (without content_intro) for follow-up calls
+                # This allows LLM to access data without the confusing prompt instructions
+                # Applies to: Team_insights, PI_insights, Recommendation_reason, Team_dashboard, PI_dashboard
+                if 'initial_request_data_only' not in history_json and conversation_context:
+                    # Extract data-only version using marker: find "=== DATA_STARTS_HERE ===" and take everything after it
+                    # This works for all chat types: Team_insights, PI_insights, Recommendation_reason, Team_dashboard, PI_dashboard
+                    marker = "=== DATA_STARTS_HERE ==="
+                    if marker in conversation_context:
+                        marker_index = conversation_context.find(marker)
+                        data_only = conversation_context[marker_index + len(marker):].strip()
+                        history_json['initial_request_data_only'] = data_only
+                        logger.info(f"Stored data-only context for {chat_type_str} follow-ups using marker (length: {len(data_only)} chars)")
+                    else:
+                        # Fallback: if marker not found, try old method (for backward compatibility)
+                        logger.warning(f"Marker not found in {chat_type_str} context, trying fallback method")
+                        if chat_type_str == "Team_insights" and request.insights_id:
+                            try:
+                                insights_id_int = int(request.insights_id)
+                                card = get_team_ai_card_by_id(insights_id_int, conn)
+                                description = card.get('description', '')
+                                source_job_id = card.get('source_job_id')
+                                formatted_job_data = get_formatted_job_data_for_llm_followup_insight(insights_id_int, source_job_id, conn)
+                                data_only = description + '\n\n' + formatted_job_data if description else formatted_job_data
+                                history_json['initial_request_data_only'] = data_only
+                                logger.info(f"Stored data-only context for Team_insights follow-ups using fallback (length: {len(data_only)} chars)")
+                            except Exception as e:
+                                logger.warning(f"Failed to build data-only context for Team_insights: {e}")
+                        elif chat_type_str == "PI_insights" and request.insights_id:
+                            try:
+                                insights_id_int = int(request.insights_id)
+                                card = get_pi_ai_card_by_id(insights_id_int, conn)
+                                description = card.get('description', '')
+                                source_job_id = card.get('source_job_id')
+                                formatted_job_data = get_formatted_job_data_for_llm_followup_insight(insights_id_int, source_job_id, conn)
+                                data_only = description + '\n\n' + formatted_job_data if description else formatted_job_data
+                                history_json['initial_request_data_only'] = data_only
+                                logger.info(f"Stored data-only context for PI_insights follow-ups using fallback (length: {len(data_only)} chars)")
+                            except Exception as e:
+                                logger.warning(f"Failed to build data-only context for PI_insights: {e}")
+                        elif chat_type_str == "Recommendation_reason" and request.recommendation_id:
+                            try:
+                                recommendation_id_int = int(request.recommendation_id)
+                                recommendation = get_recommendation_by_id(recommendation_id_int, conn)
+                                action_text = recommendation.get('action_text', '')
+                                source_job_id = recommendation.get('source_job_id')
+                                formatted_job_data = get_formatted_job_data_for_llm_followup_recommendation(recommendation_id_int, source_job_id, conn)
+                                data_only = action_text + '\n\n' + formatted_job_data if action_text else formatted_job_data
+                                history_json['initial_request_data_only'] = data_only
+                                logger.info(f"Stored data-only context for Recommendation_reason follow-ups using fallback (length: {len(data_only)} chars)")
+                            except Exception as e:
+                                logger.warning(f"Failed to build data-only context for Recommendation_reason: {e}")
+                        elif chat_type_str in ["Team_dashboard", "PI_dashboard"]:
+                            # Fallback: if marker not found, use full context (shouldn't happen but safe fallback)
+                            history_json['initial_request_data_only'] = conversation_context
+                            logger.warning(f"Marker not found in {chat_type_str} context, using full context as fallback")
 
                 # Seed initial messages into history_json for follow-ups
                 history_json.setdefault('messages', [])
@@ -1358,13 +1418,21 @@ Results ({row_count} row{'s' if row_count != 1 else ''}):
             conversation_context_for_llm = None
         else:
             # All other calls (initial and follow-up): send conversation_context
-            # For follow-ups, retrieve from stored context if available, otherwise use current
             if is_initial_call:
+                # Initial call: send full conversation_context (with content_intro prompt)
                 conversation_context_for_llm = conversation_context
             else:
-                # Follow-up: retrieve stored context, fallback to current if not found
-                stored_context = history_json.get('initial_request_conversation_context')
-                conversation_context_for_llm = stored_context if stored_context else conversation_context
+                # Follow-up: send data-only version (without content_intro prompt)
+                # This gives LLM access to data without confusing prompt instructions
+                data_only = history_json.get('initial_request_data_only')
+                if data_only:
+                    conversation_context_for_llm = data_only
+                    logger.info(f"Using data-only context for follow-up (length: {len(data_only)} chars, no prompt)")
+                else:
+                    # Fallback: use full context if data-only not available
+                    stored_context = history_json.get('initial_request_conversation_context')
+                    conversation_context_for_llm = stored_context if stored_context else conversation_context
+                    logger.warning("Data-only context not found, using full context as fallback")
         
         # DIAGNOSTIC LOGGING: Verify what's in history_json for follow-up calls
         if not is_initial_call:
