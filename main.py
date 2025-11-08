@@ -123,7 +123,7 @@ app.add_middleware(
 )
 
 # Paths that should skip START and END message logging
-_SKIP_LOG_PATHS = {"/api/v1/agent-jobs/next-pending"}
+_SKIP_LOG_PATHS = {"/api/v1/agent-jobs/claim-next"}
 
 # Add timing middleware to log request/response times
 @app.middleware("http")

@@ -35,6 +35,10 @@ class PIJobForTeamCreateRequest(BaseModel):
     team_name: str
 
 
+class ClaimNextJobRequest(BaseModel):
+    claimed_by: str  # Mandatory, no validation - write whatever is provided
+
+
 def validate_team_exists(team_name: str, conn: Connection):
     """Validate that the team exists in the database by checking jira_issues table"""
     try:
@@ -190,40 +194,60 @@ async def get_agent_jobs(conn: Connection = Depends(get_db_connection)):
         )
 
 # -----------------------
-# Next pending job (static path) - must be BEFORE dynamic {job_id}
+# Claim next pending job (static path) - must be BEFORE dynamic {job_id}
 # -----------------------
 
-@agent_jobs_router.get("/agent-jobs/next-pending")
-async def get_next_pending_job(conn: Connection = Depends(get_db_connection)):
+@agent_jobs_router.post("/agent-jobs/claim-next")
+async def claim_next_pending_job(
+    request: ClaimNextJobRequest,
+    conn: Connection = Depends(get_db_connection)
+):
     """
-    Get the oldest pending agent job (status Pending/pending).
-    Returns a single row or 404 if none.
+    Atomically claim the next pending agent job.
+    Uses FOR UPDATE SKIP LOCKED to prevent race conditions when multiple agents are working.
+    Returns the claimed job or 204 if no pending jobs available.
     """
     try:
-        query = text(f"""
-            SELECT *
-            FROM {config.AGENT_JOBS_TABLE}
-            WHERE status IN ('pending','Pending')
-            ORDER BY created_at ASC, job_id ASC
-            LIMIT 1
+        # Parameterized query prevents SQL injection
+        claim_query = text(f"""
+            UPDATE {config.AGENT_JOBS_TABLE}
+            SET 
+                status = 'claimed',
+                claimed_by = :claimed_by,
+                claimed_at = NOW(),
+                updated_at = NOW()
+            WHERE job_id = (
+                SELECT job_id
+                FROM {config.AGENT_JOBS_TABLE}
+                WHERE status IN ('pending', 'Pending')
+                ORDER BY created_at ASC, job_id ASC
+                LIMIT 1
+                FOR UPDATE SKIP LOCKED
+            )
+            RETURNING *
         """)
 
-        result = conn.execute(query)
+        result = conn.execute(claim_query, {"claimed_by": request.claimed_by})
         row = result.fetchone()
+        conn.commit()
+
         if not row:
             return Response(status_code=204)
 
         job = dict(row._mapping)
+        logger.info(f"Successfully claimed job {job.get('job_id')} for {request.claimed_by}")
+
         return {
             "success": True,
             "data": {"job": job},
-            "message": "Retrieved next pending job"
+            "message": "Job claimed successfully"
         }
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"Error fetching next pending job: {e}")
-        raise HTTPException(status_code=500, detail=f"Failed to fetch next pending job: {str(e)}")
+        logger.error(f"Error claiming next pending job: {e}")
+        conn.rollback()
+        raise HTTPException(status_code=500, detail=f"Failed to claim next pending job: {str(e)}")
 
 
 @agent_jobs_router.get("/agent-jobs/{job_id}")
