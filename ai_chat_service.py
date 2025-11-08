@@ -1198,26 +1198,25 @@ async def ai_chat(
                 )
 
         # 2.9. On initial call, persist initial system/context snapshot into chat history
+        # Determine if this is the initial call (no messages in history yet)
+        is_initial_call = not history_json.get('messages') or len(history_json.get('messages', [])) == 0
+        
         try:
-            is_initial_call = not history_json.get('messages')
             if is_initial_call:
                 if 'initial_request_system_message' not in history_json:
                     history_json['initial_request_system_message'] = system_message
                 if 'initial_request_conversation_context' not in history_json:
                     history_json['initial_request_conversation_context'] = conversation_context
 
-                # Also seed initial messages so follow-ups carry full context
+                # Seed initial messages into history_json for follow-ups
                 history_json.setdefault('messages', [])
                 if system_message:
                     history_json['messages'].append({
                         'role': 'system',
                         'content': system_message
                     })
-                if conversation_context:
-                    history_json['messages'].append({
-                        'role': 'user',
-                        'content': conversation_context
-                    })
+                # Note: conversation_context is sent as a parameter, not seeded into history_json
+                # This matches the original working approach
                 snapshot_update_query = text(f"""
                     UPDATE {config.CHAT_HISTORY_TABLE}
                     SET history_json = CAST(:history_json AS jsonb)
@@ -1248,9 +1247,11 @@ async def ai_chat(
         # 2.11. Check for SQL AI trigger and process if needed
         # Initialize variables to track SQL data for chat history
         sql_was_triggered = False
+        sql_was_attempted = False  # Track if SQL was attempted (even if it failed)
         sql_formatted_for_history = None
         
         if request.question and request.question.startswith(config.SQL_AI_TRIGGER):
+            sql_was_attempted = True  # Mark that SQL was attempted
             try:
                 logger.info(f"SQL AI trigger detected in question: {request.question[:100]}...")
                 
@@ -1320,23 +1321,17 @@ Results ({row_count} row{'s' if row_count != 1 else ''}):
                 })
                 logger.info(f"Injected SQL results into history_json (status: {sql_status})")
                 
-                # Also add to conversation_context for backward compatibility
-                if conversation_context:
-                    conversation_context = conversation_context + '\n\n' + sql_formatted
-                else:
-                    conversation_context = sql_formatted
-                
-                logger.info(f"SQL service results appended to conversation context (status: {sql_status})")
-                
             except Exception as e:
                 logger.warning(f"SQL service processing failed: {e}")
                 # Continue without SQL data - don't block the chat flow
-                # Optionally add error message to context
-                sql_error_msg = f"\n\n=== SQL Service Error ===\nFailed to process database query: {str(e)}\n=== End SQL Service Error ==="
-                if conversation_context:
-                    conversation_context = conversation_context + sql_error_msg
-                else:
-                    conversation_context = sql_error_msg
+                # Inject error message into history_json so LLM can see it
+                sql_error_msg = f"=== SQL Service Error ===\nFailed to process database query: {str(e)}\n=== End SQL Service Error ==="
+                history_json.setdefault('messages', [])
+                history_json['messages'].append({
+                    'role': 'user',
+                    'content': sql_error_msg
+                })
+                logger.info(f"Injected SQL error message into history_json")
 
         # 3. Call LLM service
         # Remove "!" trigger from question if present before sending to LLM
@@ -1346,6 +1341,73 @@ Results ({row_count} row{'s' if row_count != 1 else ''}):
             question_to_send = request.question[1:].strip()
             logger.info(f"Cleaned question for LLM (removed trigger): '{question_to_send}'")
         
+        # HYBRID APPROACH: Combine SQL results with question parameter for immediate LLM visibility
+        # This ensures LLM sees SQL results both in the question parameter AND in history_json
+        if sql_was_triggered and sql_formatted_for_history:
+            # Combine question + SQL results so LLM sees them together
+            question_to_send = f"{question_to_send}\n\n=== DATABASE QUERY RESULTS ===\n{sql_formatted_for_history}\n=== END DATABASE QUERY RESULTS ==="
+            logger.info(f"Combined SQL results with question for LLM (question length: {len(question_to_send)} chars)")
+        
+        # Determine conversation_context parameter
+        # REVERTED TO SIMPLE APPROACH: Always send conversation_context (except for SQL calls)
+        # This matches the original working behavior before recent changes
+        # SQL calls: Don't send conversation_context (SQL results are in question parameter)
+        if sql_was_attempted:
+            # SQL calls: don't send conversation_context parameter
+            # SQL results are already combined with question parameter
+            conversation_context_for_llm = None
+        else:
+            # All other calls (initial and follow-up): send conversation_context
+            # For follow-ups, retrieve from stored context if available, otherwise use current
+            if is_initial_call:
+                conversation_context_for_llm = conversation_context
+            else:
+                # Follow-up: retrieve stored context, fallback to current if not found
+                stored_context = history_json.get('initial_request_conversation_context')
+                conversation_context_for_llm = stored_context if stored_context else conversation_context
+        
+        # DIAGNOSTIC LOGGING: Verify what's in history_json for follow-up calls
+        if not is_initial_call:
+            logger.info("=" * 80)
+            logger.info("FOLLOW-UP CALL DIAGNOSTICS")
+            logger.info("=" * 80)
+            messages = history_json.get('messages', [])
+            logger.info(f"Total messages in history_json: {len(messages)}")
+            logger.info(f"SQL was attempted: {sql_was_attempted}")
+            logger.info(f"conversation_context_for_llm: {'SET' if conversation_context_for_llm else 'None'}")
+            
+            # Log first few messages to see if context is there
+            if messages:
+                logger.info("First 3 messages in history_json['messages']:")
+                for i, msg in enumerate(messages[:3]):
+                    role = msg.get('role', 'unknown')
+                    content_preview = msg.get('content', '')[:200] if msg.get('content') else '(empty)'
+                    logger.info(f"  [{i}] role={role}, content_length={len(msg.get('content', ''))}, preview={content_preview}...")
+            
+            # Check if initial context is stored
+            stored_context = history_json.get('initial_request_conversation_context')
+            if stored_context:
+                logger.info(f"initial_request_conversation_context found: length={len(stored_context)} chars")
+                logger.info(f"  Preview: {stored_context[:200]}...")
+            else:
+                logger.warning("initial_request_conversation_context NOT found in history_json")
+            
+            logger.info("=" * 80)
+        
+        # DIAGNOSTIC LOGGING: Show what we're sending to LLM service
+        logger.info("=" * 80)
+        logger.info("SENDING TO LLM SERVICE")
+        logger.info("=" * 80)
+        logger.info(f"question length: {len(question_to_send)} chars")
+        logger.info(f"question preview: {question_to_send[:200]}...")
+        logger.info(f"conversation_context: {'SET' if conversation_context_for_llm else 'None'}")
+        if conversation_context_for_llm:
+            logger.info(f"conversation_context length: {len(conversation_context_for_llm)} chars")
+            logger.info(f"conversation_context preview: {conversation_context_for_llm[:200]}...")
+        logger.info(f"history_json['messages'] count: {len(history_json.get('messages', []))}")
+        logger.info(f"system_message: {'SET' if system_message else 'None'}")
+        logger.info("=" * 80)
+        
         llm_response = await call_llm_service(
             conversation_id=conversation_id,
             question=question_to_send,
@@ -1354,7 +1416,7 @@ Results ({row_count} row{'s' if row_count != 1 else ''}):
             selected_team=request.selected_team,
             selected_pi=request.selected_pi,
             chat_type=chat_type_str,
-            conversation_context=conversation_context,
+            conversation_context=conversation_context_for_llm,
             system_message=system_message
         )
         
