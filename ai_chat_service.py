@@ -9,7 +9,7 @@ from fastapi import APIRouter, HTTPException, Depends
 from pydantic import BaseModel, Field
 from sqlalchemy.engine import Connection
 from sqlalchemy import text
-from typing import Optional, Dict, Any, Tuple
+from typing import Optional, Dict, Any, Tuple, List
 from enum import Enum
 import logging
 import json
@@ -32,16 +32,73 @@ from database_pi import (
     fetch_scope_changes_data
 )
 import config
-from vanna_service import (
-    call_vanna_ai,
-    convert_history_to_vanna_format,
-    format_vanna_results_for_llm,
-    VANNA_AI_TRIGGER
-)
+from sparksai_sql_client import call_sparksai_sql_execute
 
 logger = logging.getLogger(__name__)
 
 ai_chat_router = APIRouter()
+
+
+def convert_history_to_sql_format(history_json: Dict[str, Any]) -> List[Dict[str, Any]]:
+    """
+    Convert chat history_json format to SQL service conversation history format.
+    
+    Args:
+        history_json: Chat history in format {'messages': [{'role': str, 'content': str}, ...]}
+        
+    Returns:
+        List of conversation exchanges in format [{'question': str, 'sql': str, 'answer': str}]
+    """
+    sql_history = []
+    
+    if not history_json or 'messages' not in history_json:
+        return sql_history
+    
+    messages = history_json.get('messages', [])
+    
+    # Extract last few exchanges (user/assistant pairs) that contain SQL trigger queries
+    i = 0
+    while i < len(messages):
+        # Check if message starts with trigger "!"
+        if messages[i].get('role') == 'user' and messages[i].get('content', '').startswith(config.SQL_AI_TRIGGER):
+            # Found a SQL question
+            question = messages[i].get('content', '')
+            
+            # Look for assistant response
+            if i + 1 < len(messages) and messages[i + 1].get('role') == 'assistant':
+                answer = messages[i + 1].get('content', '')
+                
+                # Try to extract SQL from answer (look for code blocks or formatted_for_llm format)
+                sql = None
+                if '```sql' in answer:
+                    sql_start = answer.find('```sql') + 6
+                    sql_end = answer.find('```', sql_start)
+                    if sql_end > sql_start:
+                        sql = answer[sql_start:sql_end].strip()
+                elif '```' in answer:
+                    sql_start = answer.find('```') + 3
+                    sql_end = answer.find('```', sql_start)
+                    if sql_end > sql_start:
+                        sql = answer[sql_start:sql_end].strip()
+                # Also check for SQL in formatted_for_llm format (from SQL service response)
+                elif 'SQL Query:' in answer:
+                    sql_start = answer.find('SQL Query:') + 10
+                    sql_end = answer.find('\n\n', sql_start)
+                    if sql_end > sql_start:
+                        sql = answer[sql_start:sql_end].strip()
+                
+                sql_history.append({
+                    'question': question,
+                    'sql': sql,
+                    'answer': answer[:200] if answer else None  # Summarize to avoid token bloat
+                })
+            
+            i += 2
+        else:
+            i += 1
+    
+    # Return last 3 exchanges to keep token count reasonable
+    return sql_history[-3:] if len(sql_history) > 3 else sql_history
 
 
 def is_localhost():
@@ -1188,90 +1245,105 @@ async def ai_chat(
                 history_json=history_json
             )
 
-        # 2.11. Check for Vanna AI trigger and process if needed
-        # Initialize variables to track Vanna data for chat history
-        vanna_was_triggered = False
-        vanna_formatted_for_history = None
+        # 2.11. Check for SQL AI trigger and process if needed
+        # Initialize variables to track SQL data for chat history
+        sql_was_triggered = False
+        sql_formatted_for_history = None
         
-        if request.question and VANNA_AI_TRIGGER in request.question:
+        if request.question and request.question.startswith(config.SQL_AI_TRIGGER):
             try:
-                logger.info(f"Vanna AI trigger detected in question: {request.question[:100]}...")
+                logger.info(f"SQL AI trigger detected in question: {request.question[:100]}...")
                 
-                # Convert history to Vanna format
-                vanna_history = convert_history_to_vanna_format(history_json)
-                logger.info(f"Converted {len(vanna_history)} previous Vanna exchanges to history")
+                # Convert history to SQL service format
+                sql_history = convert_history_to_sql_format(history_json)
+                logger.info(f"Converted {len(sql_history)} previous SQL exchanges to history")
                 
-                # Call Vanna AI
-                vanna_result = await call_vanna_ai(
+                # Call SparksAI-SQL service
+                sql_response = await call_sparksai_sql_execute(
                     question=request.question,
-                    conversation_history=vanna_history if vanna_history else None,
-                    conn=conn
+                    conversation_history=sql_history if sql_history else None,
+                    include_formatted=True
                 )
                 
-                # Log what Vanna returned
-                logger.info(f"=== VANNA AI RETURNED ===")
-                logger.info(f"Status: {vanna_result.get('status')}")
-                logger.info(f"SQL: {vanna_result.get('sql', 'N/A')}")
-                logger.info(f"Results count: {len(vanna_result.get('results', []))}")
-                if vanna_result.get('error'):
-                    logger.info(f"Error: {vanna_result.get('error')}")
-                logger.info(f"=== END VANNA AI RETURNED ===")
+                # Extract data from response
+                if not sql_response.get("success"):
+                    raise Exception(f"SQL service returned error: {sql_response.get('data', {}).get('error', 'Unknown error')}")
                 
-                # Clean question for Vanna formatting (remove trigger)
-                clean_question_for_vanna = request.question.replace(VANNA_AI_TRIGGER, "").strip()
-                # Remove any remaining standalone "X" at the start
-                if clean_question_for_vanna.startswith("X "):
-                    clean_question_for_vanna = clean_question_for_vanna[2:].strip()
-                elif clean_question_for_vanna.startswith("X"):
-                    clean_question_for_vanna = clean_question_for_vanna[1:].strip()
+                sql_data = sql_response.get("data", {})
+                sql_status = sql_data.get("status", "error")
                 
-                # Format Vanna results with question explicitly paired
-                vanna_formatted = format_vanna_results_for_llm(vanna_result, question=clean_question_for_vanna)
+                # Log what SQL service returned
+                logger.info(f"=== SPARKSAI-SQL SERVICE RETURNED ===")
+                logger.info(f"Status: {sql_status}")
+                logger.info(f"SQL: {sql_data.get('sql', 'N/A')}")
+                logger.info(f"Results count: {len(sql_data.get('results', []))}")
+                if sql_data.get('error'):
+                    logger.info(f"Error: {sql_data.get('error')}")
+                logger.info(f"=== END SPARKSAI-SQL SERVICE RETURNED ===")
                 
-                # Store Vanna data for chat history
-                vanna_was_triggered = True
-                vanna_formatted_for_history = vanna_formatted
+                # Clean question for formatting (remove trigger from start)
+                clean_question_for_sql = request.question
+                if clean_question_for_sql.startswith(config.SQL_AI_TRIGGER):
+                    clean_question_for_sql = clean_question_for_sql[1:].strip()
                 
-                # CRITICAL FIX: Inject Vanna results into history_json BEFORE calling LLM
+                # Get formatted_for_llm from response (already formatted by SQL service)
+                sql_formatted = sql_data.get("formatted_for_llm")
+                if not sql_formatted:
+                    # Fallback: format manually if not provided
+                    logger.warning("formatted_for_llm not in response, formatting manually")
+                    sql = sql_data.get('sql', 'N/A')
+                    results = sql_data.get('results', [])
+                    row_count = len(results)
+                    results_json = json.dumps(results[:100], indent=2, default=str) if results else "[]"
+                    sql_formatted = f"""=== DATABASE QUERY ===
+Question: {clean_question_for_sql}
+Answer:
+SQL Query:
+{sql}
+
+Results ({row_count} row{'s' if row_count != 1 else ''}):
+{results_json}
+=== END DATABASE QUERY ==="""
+                
+                # Store SQL data for chat history
+                sql_was_triggered = True
+                sql_formatted_for_history = sql_formatted
+                
+                # CRITICAL FIX: Inject SQL results into history_json BEFORE calling LLM
                 # The LLM service processes history_json correctly, but doesn't process conversation_context correctly
-                # So we add Vanna data as a user message in history so LLM sees it immediately
+                # So we add SQL data as a user message in history so LLM sees it immediately
                 # Format: Make it clear this is the answer to the upcoming question
                 history_json.setdefault('messages', [])
                 history_json['messages'].append({
                     'role': 'user',
-                    'content': f"Here is the database query result that answers the question '{clean_question_for_vanna}':\n\n{vanna_formatted}"
+                    'content': f"Here is the database query result that answers the question '{clean_question_for_sql}':\n\n{sql_formatted}"
                 })
-                logger.info(f"Injected Vanna results into history_json (status: {vanna_result.get('status')})")
+                logger.info(f"Injected SQL results into history_json (status: {sql_status})")
                 
                 # Also add to conversation_context for backward compatibility
                 if conversation_context:
-                    conversation_context = conversation_context + '\n\n' + vanna_formatted
+                    conversation_context = conversation_context + '\n\n' + sql_formatted
                 else:
-                    conversation_context = vanna_formatted
+                    conversation_context = sql_formatted
                 
-                logger.info(f"Vanna AI results appended to conversation context (status: {vanna_result.get('status')})")
+                logger.info(f"SQL service results appended to conversation context (status: {sql_status})")
                 
             except Exception as e:
-                logger.warning(f"Vanna AI processing failed: {e}")
-                # Continue without Vanna data - don't block the chat flow
+                logger.warning(f"SQL service processing failed: {e}")
+                # Continue without SQL data - don't block the chat flow
                 # Optionally add error message to context
-                vanna_error_msg = f"\n\n=== Vanna AI Error ===\nFailed to process database query: {str(e)}\n=== End Vanna AI Error ==="
+                sql_error_msg = f"\n\n=== SQL Service Error ===\nFailed to process database query: {str(e)}\n=== End SQL Service Error ==="
                 if conversation_context:
-                    conversation_context = conversation_context + vanna_error_msg
+                    conversation_context = conversation_context + sql_error_msg
                 else:
-                    conversation_context = vanna_error_msg
+                    conversation_context = sql_error_msg
 
         # 3. Call LLM service
-        # Remove "XXX" trigger from question if present before sending to LLM
+        # Remove "!" trigger from question if present before sending to LLM
         question_to_send = request.question
-        if request.question and VANNA_AI_TRIGGER in request.question:
-            # Remove all occurrences of "XXX" and clean up any remaining X's
-            question_to_send = request.question.replace(VANNA_AI_TRIGGER, "").strip()
-            # Remove any remaining standalone "X" at the start (in case user typed "XXXX" or "XXX X")
-            if question_to_send.startswith("X "):
-                question_to_send = question_to_send[2:].strip()
-            elif question_to_send.startswith("X"):
-                question_to_send = question_to_send[1:].strip()
+        if request.question and request.question.startswith(config.SQL_AI_TRIGGER):
+            # Remove trigger from start
+            question_to_send = request.question[1:].strip()
             logger.info(f"Cleaned question for LLM (removed trigger): '{question_to_send}'")
         
         llm_response = await call_llm_service(
@@ -1295,23 +1367,18 @@ async def ai_chat(
         ai_response = llm_response.get("response", "")
         
         # 4. Update chat history with new exchange
-        # Remove "XXX" trigger from question before saving to history
+        # Remove "!" trigger from question before saving to history
         clean_question_for_history = request.question
-        if request.question and VANNA_AI_TRIGGER in request.question:
-            # Remove all occurrences of "XXX" and clean up any remaining X's
-            clean_question_for_history = request.question.replace(VANNA_AI_TRIGGER, "").strip()
-            # Remove any remaining standalone "X" at the start (in case user typed "XXXX" or "XXX X")
-            if clean_question_for_history.startswith("X "):
-                clean_question_for_history = clean_question_for_history[2:].strip()
-            elif clean_question_for_history.startswith("X"):
-                clean_question_for_history = clean_question_for_history[1:].strip()
+        if request.question and request.question.startswith(config.SQL_AI_TRIGGER):
+            # Remove trigger from start
+            clean_question_for_history = request.question[1:].strip()
         
-        # If Vanna was triggered, append Vanna results to user message
-        if vanna_was_triggered and vanna_formatted_for_history:
-            # Combine cleaned question + Vanna results
-            user_message_with_vanna = f"{clean_question_for_history}\n\n{vanna_formatted_for_history}"
-            user_message_to_save = user_message_with_vanna
-            logger.info(f"Appending Vanna results to chat history (question length: {len(clean_question_for_history)}, Vanna data length: {len(vanna_formatted_for_history)})")
+        # If SQL was triggered, append SQL results to user message
+        if sql_was_triggered and sql_formatted_for_history:
+            # Combine cleaned question + SQL results
+            user_message_with_sql = f"{clean_question_for_history}\n\n{sql_formatted_for_history}"
+            user_message_to_save = user_message_with_sql
+            logger.info(f"Appending SQL results to chat history (question length: {len(clean_question_for_history)}, SQL data length: {len(sql_formatted_for_history)})")
         else:
             user_message_to_save = clean_question_for_history
         

@@ -81,5 +81,8 @@ DEFAULT_HOST = "0.0.0.0"
 # --- LLM Service Configuration ---
 LLM_SERVICE_URL = os.getenv("LLM_SERVICE_URL", "http://localhost:8001")
 
-# --- Vanna AI Configuration ---
-VANNA_AI_TRIGGER = "XXX"  # Trigger string to detect Vanna AI queries in user questions
+# --- SparksAI-SQL Service Configuration ---
+SPARKSAI_SQL_SERVICE_URL = os.getenv("SPARKSAI_SQL_SERVICE_URL", "http://localhost:8002")
+
+# --- SQL AI Trigger Configuration ---
+SQL_AI_TRIGGER = "!"  # Trigger character to detect SQL queries in user questions (first character check)
