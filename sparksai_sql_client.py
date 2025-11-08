@@ -34,7 +34,7 @@ async def call_sparksai_sql_execute(
         - 'error': Error message if status is 'error'
         - 'formatted_for_llm': Formatted text string for LLM context (if include_formatted=True)
     """
-    sql_service_url = f"{config.SPARKSAI_SQL_SERVICE_URL}/sql/execute"
+    sql_service_url = f"{config.LLM_SQL_SERVICE_URL}/sql/execute"
     
     payload = {
         "question": question,

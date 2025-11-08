@@ -82,7 +82,7 @@ DEFAULT_HOST = "0.0.0.0"
 LLM_SERVICE_URL = os.getenv("LLM_SERVICE_URL", "http://localhost:8001")
 
 # --- SparksAI-SQL Service Configuration ---
-SPARKSAI_SQL_SERVICE_URL = os.getenv("SPARKSAI_SQL_SERVICE_URL", "http://localhost:8002")
+LLM_SQL_SERVICE_URL = os.getenv("LLM_SQL_SERVICE_URL", "http://localhost:8002")
 
 # --- SQL AI Trigger Configuration ---
 SQL_AI_TRIGGER = "!"  # Trigger character to detect SQL queries in user questions (first character check)
