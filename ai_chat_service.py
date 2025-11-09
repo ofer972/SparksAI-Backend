@@ -932,19 +932,6 @@ async def ai_chat(
         if not request.question or not request.question.strip():
             logger.info("Empty question received; continuing without user question")
         
-        # DEBUG: Log incoming parameters
-        logger.info("=" * 60)
-        logger.info("AI CHAT SERVICE - Incoming Request")
-        logger.info("=" * 60)
-        logger.info(f"  conversation_id: {request.conversation_id}")
-        logger.info(f"  question: {request.question}")
-        logger.info(f"  user_id: {request.user_id}")
-        logger.info(f"  prompt_name: {request.prompt_name}")
-        logger.info(f"  selected_team: {request.selected_team}")
-        logger.info(f"  selected_pi: {request.selected_pi}")
-        logger.info(f"  chat_type: {request.chat_type}")
-        logger.info("=" * 60)
-        
         # Normalize chat_type to a string for downstream usage
         chat_type_str = None
         if request.chat_type is not None:
