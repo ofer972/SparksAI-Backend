@@ -58,13 +58,6 @@ def validate_limit(limit: int) -> int:
     
     return limit
 
-def validate_offset(offset: int) -> int:
-    """
-    Validate offset parameter.
-    """
-    if offset < 0:
-        raise HTTPException(status_code=400, detail="Offset must be 0 or greater")
-    return offset
 
 # ====================
 # Existing Endpoints
@@ -123,8 +116,8 @@ async def get_team_names(conn: Connection = Depends(get_db_connection)):
 async def get_all_teams(
     group_key: Optional[int] = Query(None, description="Filter by group key"),
     search: Optional[str] = Query(None, description="Search team names"),
-    limit: int = Query(100, description="Maximum number of teams to return (default: 100, max: 1000)"),
-    offset: int = Query(0, description="Number of teams to skip (default: 0)"),
+    ai_insight: Optional[bool] = Query(None, description="Filter by AI insight flag (true/false)"),
+    limit: int = Query(200, description="Maximum number of teams to return (default: 200, max: 1000)"),
     conn: Connection = Depends(get_db_connection)
 ):
     """
@@ -133,21 +126,19 @@ async def get_all_teams(
     Args:
         group_key: Optional filter by group
         search: Optional search term for team names
-        limit: Maximum number of results (default: 100, max: 1000)
-        offset: Pagination offset (default: 0)
+        ai_insight: Optional filter by AI insight flag (true/false)
+        limit: Maximum number of results (default: 200, max: 1000)
     
     Returns:
         JSON response with list of teams
     """
     try:
         validated_limit = validate_limit(limit)
-        validated_offset = validate_offset(offset)
         
         # Build WHERE clause
         where_conditions = []
         params = {
-            "limit": validated_limit,
-            "offset": validated_offset
+            "limit": validated_limit
         }
         
         if group_key is not None:
@@ -159,6 +150,10 @@ async def get_all_teams(
             where_conditions.append("t.team_name ILIKE :search")
             params["search"] = f"%{search}%"
         
+        if ai_insight is not None:
+            where_conditions.append("t.ai_insight = :ai_insight")
+            params["ai_insight"] = ai_insight
+        
         where_clause = " AND ".join(where_conditions) if where_conditions else "1=1"
         
         query = text(f"""
@@ -167,15 +162,16 @@ async def get_all_teams(
                 t.team_name,
                 t.number_of_team_members,
                 t.group_key,
-                g.group_name
+                g.group_name,
+                t.ai_insight
             FROM public.teams t
             LEFT JOIN public.team_groups g ON t.group_key = g.group_key
             WHERE {where_clause}
             ORDER BY t.team_name
-            LIMIT :limit OFFSET :offset
+            LIMIT :limit
         """)
         
-        logger.info(f"Executing query to get teams: group_key={group_key}, search={search}, limit={validated_limit}, offset={validated_offset}")
+        logger.info(f"Executing query to get teams: group_key={group_key}, search={search}, ai_insight={ai_insight}, limit={validated_limit}")
         
         result = conn.execute(query, params)
         rows = result.fetchall()
@@ -188,7 +184,8 @@ async def get_all_teams(
                 "team_name": row[1],
                 "number_of_team_members": row[2],
                 "group_key": row[3],
-                "group_name": row[4]
+                "group_name": row[4],
+                "ai_insight": row[5]
             })
         
         return {

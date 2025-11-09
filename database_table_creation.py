@@ -176,6 +176,7 @@ def create_users_table_if_not_exists(engine=None) -> bool:
                     last_login TIMESTAMP WITH TIME ZONE,
                     active BOOLEAN DEFAULT TRUE,
                     ai_model_preference VARCHAR(100) DEFAULT 'gemini-2.5-flash',
+                    ai_insight BOOLEAN DEFAULT FALSE,
                     created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
                     updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
                 );
@@ -961,7 +962,10 @@ def create_teams_and_team_groups_tables_if_not_exists(engine=None) -> bool:
                     number_of_team_members INT NOT NULL DEFAULT 0,
                     
                     -- Foreign Key linking the team to exactly one group
-                    group_key INT REFERENCES public.team_groups(group_key)
+                    group_key INT REFERENCES public.team_groups(group_key),
+                    
+                    -- AI Insight flag
+                    ai_insight BOOLEAN DEFAULT FALSE
                 );
 
                 -- Index for fast lookup/joining on the foreign key
