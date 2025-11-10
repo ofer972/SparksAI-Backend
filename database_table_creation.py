@@ -20,12 +20,22 @@ _tables_initialized = False
 # Note: insight_categories is now a list (array) that will be stored as JSONB
 DEFAULT_INSIGHT_TYPES = [
     {
+        "insight_type": "PI Sync",
+        "insight_description": "Insights from the PI Sync (data + transcipts)",
+        "insight_categories": ["PI Sync"],
+        "active": True,
+        "requires_pi": True,
+        "requires_team": False,
+        "cron_config": {"day_of_week": "sun, tue, thu", "hour": 6, "minute": 0}
+    },
+    {
         "insight_type": "Daily Progress",
         "insight_description": "Analysis of team progress in the sprint",
         "insight_categories": ["Daily"],
         "active": True,
         "requires_pi": False,
-        "requires_team": True
+        "requires_team": True,
+        "cron_config": {"hour": 5, "minute": 30}
     },
     {
         "insight_type": "Sprint Goal",
@@ -33,79 +43,8 @@ DEFAULT_INSIGHT_TYPES = [
         "insight_categories": ["Daily", "Planning", "Retrospective", "Sprint Review", "Backlog Refinement", "PI Sync"],
         "active": True,
         "requires_pi": False,
-        "requires_team": True
-    },
-    {
-        "insight_type": "Team PI Insight",
-        "insight_description": "Evaluates progress toward sprint goals",
-        "insight_categories": ["Daily", "Planning", "Retrospective", "Sprint Review", "Backlog Refinement", "PI Sync"],
-        "active": True,
-        "requires_pi": True,
-        "requires_team": True
-    },
-    {
-        "insight_type": "Conversation Analysis",
-        "insight_description": "Analyzes team discussions for themes",
-        "insight_categories": ["Daily", "Retrospective"],
-        "active": False,
-        "requires_pi": False,
-        "requires_team": True
-    },
-    {
-        "insight_type": "Team Blockers' Last Days",
-        "insight_description": "Lists recent blockers",
-        "insight_categories": ["Daily"],
-        "active": False,
-        "requires_pi": False,
-        "requires_team": True
-    },
-    {
-        "insight_type": "WIP Level",
-        "insight_description": "Monitors active work items",
-        "insight_categories": ["Daily"],
-        "active": True,
-        "requires_pi": False,
-        "requires_team": True
-    },
-    {
-        "insight_type": "Stories Aging (In Progress)",
-        "insight_description": "Tracks story age in progress",
-        "insight_categories": ["Daily"],
-        "active": False,
-        "requires_pi": False,
-        "requires_team": True
-    },
-    {
-        "insight_type": "Defects Trend",
-        "insight_description": "Shows trend of bugs and quality issues",
-        "insight_categories": ["Retrospective", "Sprint Review"],
-        "active": False,
-        "requires_pi": False,
-        "requires_team": True
-    },
-    {
-        "insight_type": "Team Metrics Insight",
-        "insight_description": "Summarizes key velocity and flow metrics",
-        "insight_categories": ["Retrospective"],
-        "active": False,
-        "requires_pi": False,
-        "requires_team": True
-    },
-    {
-        "insight_type": "DORA Lite",
-        "insight_description": "Displays core DORA metrics for the sprint",
-        "insight_categories": ["Retrospective"],
-        "active": False,
-        "requires_pi": False,
-        "requires_team": True
-    },
-    {
-        "insight_type": "Sprint Summary",
-        "insight_description": "Provides overall sprint summary and outcomes",
-        "insight_categories": ["Retrospective", "Sprint Review", "Planning", "PI Sync"],
-        "active": False,
-        "requires_pi": False,
-        "requires_team": True
+        "requires_team": True,
+        "cron_config": {"hour": 5, "minute": 30}
     },
     {
         "insight_type": "Team Retro Topics",
@@ -113,7 +52,89 @@ DEFAULT_INSIGHT_TYPES = [
         "insight_categories": ["Retrospective"],
         "active": True,
         "requires_pi": False,
-        "requires_team": True
+        "requires_team": True,
+        "cron_config": {"hour": 5, "minute": 30}
+    },
+    {
+        "insight_type": "Team PI Insight",
+        "insight_description": "Evaluates progress toward sprint goals",
+        "insight_categories": ["Daily", "Planning", "Retrospective", "Sprint Review", "Backlog Refinement", "PI Sync"],
+        "active": True,
+        "requires_pi": True,
+        "requires_team": True,
+        "cron_config": {"hour": 5, "minute": 30}
+    },
+    {
+        "insight_type": "Conversation Analysis",
+        "insight_description": "Analyzes team discussions for themes",
+        "insight_categories": ["Daily", "Retrospective"],
+        "active": False,
+        "requires_pi": False,
+        "requires_team": True,
+        "cron_config": {"hour": 5, "minute": 30}
+    },
+    {
+        "insight_type": "Team Blockers' Last Days",
+        "insight_description": "Lists recent blockers",
+        "insight_categories": ["Daily"],
+        "active": False,
+        "requires_pi": False,
+        "requires_team": True,
+        "cron_config": {"hour": 5, "minute": 30}
+    },
+    {
+        "insight_type": "WIP Level",
+        "insight_description": "Monitors active work items",
+        "insight_categories": ["Daily"],
+        "active": False,
+        "requires_pi": False,
+        "requires_team": True,
+        "cron_config": {"hour": 5, "minute": 30}
+    },
+    {
+        "insight_type": "Stories Aging (In Progress)",
+        "insight_description": "Tracks story age in progress",
+        "insight_categories": ["Daily"],
+        "active": False,
+        "requires_pi": False,
+        "requires_team": True,
+        "cron_config": {"hour": 5, "minute": 30}
+    },
+    {
+        "insight_type": "Defects Trend",
+        "insight_description": "Shows trend of bugs and quality issues",
+        "insight_categories": ["Retrospective", "Sprint Review"],
+        "active": False,
+        "requires_pi": False,
+        "requires_team": True,
+        "cron_config": {"hour": 5, "minute": 30}
+    },
+    {
+        "insight_type": "Team Metrics Insight",
+        "insight_description": "Summarizes key velocity and flow metrics",
+        "insight_categories": ["Retrospective"],
+        "active": False,
+        "requires_pi": False,
+        "requires_team": True,
+        "cron_config": {"hour": 5, "minute": 30}
+    },
+    {
+        "insight_type": "DORA Lite",
+        "insight_description": "Displays core DORA metrics for the sprint",
+        "insight_categories": ["Retrospective"],
+        "active": False,
+        "requires_pi": False,
+        "requires_team": True,
+        "cron_config": {"hour": 5, "minute": 30}
+    },
+    {
+        "insight_type": "Sprint Summary",
+        "insight_description": "Provides overall sprint summary and outcomes",
+        "insight_categories": ["Retrospective", "Sprint Review", "Planning", "PI Sync"],
+        "active": False,
+        "requires_pi": False,
+        "requires_team": True,
+        "cron_config": {"hour": 5, "minute": 30}
     },
     {
         "insight_type": "Stories Readiness Gaps",
@@ -121,7 +142,8 @@ DEFAULT_INSIGHT_TYPES = [
         "insight_categories": ["Planning", "Backlog Refinement"],
         "active": False,
         "requires_pi": False,
-        "requires_team": True
+        "requires_team": True,
+        "cron_config": {"hour": 5, "minute": 30}
     },
     {
         "insight_type": "Forecast (Velocity-Based)",
@@ -129,7 +151,8 @@ DEFAULT_INSIGHT_TYPES = [
         "insight_categories": ["Planning", "Backlog Refinement", "PI Sync"],
         "active": False,
         "requires_pi": False,
-        "requires_team": True
+        "requires_team": True,
+        "cron_config": {"hour": 5, "minute": 30}
     },
     {
         "insight_type": "Epic Risk Scanner",
@@ -137,7 +160,8 @@ DEFAULT_INSIGHT_TYPES = [
         "insight_categories": ["Planning", "Backlog Refinement", "Sprint Review", "PI Sync"],
         "active": False,
         "requires_pi": False,
-        "requires_team": True
+        "requires_team": True,
+        "cron_config": {"hour": 5, "minute": 30}
     },
     {
         "insight_type": "Sprint planning Suggestions Coaching",
@@ -145,7 +169,8 @@ DEFAULT_INSIGHT_TYPES = [
         "insight_categories": ["Planning"],
         "active": False,
         "requires_pi": False,
-        "requires_team": True
+        "requires_team": True,
+        "cron_config": {"hour": 5, "minute": 30}
     },
     {
         "insight_type": "Sprint Goal Suggestions",
@@ -153,7 +178,8 @@ DEFAULT_INSIGHT_TYPES = [
         "insight_categories": ["Planning", "Backlog Refinement"],
         "active": False,
         "requires_pi": False,
-        "requires_team": True
+        "requires_team": True,
+        "cron_config": {"hour": 5, "minute": 30}
     },
     {
         "insight_type": "Demo Suggestions",
@@ -161,7 +187,8 @@ DEFAULT_INSIGHT_TYPES = [
         "insight_categories": ["Sprint Review"],
         "active": False,
         "requires_pi": False,
-        "requires_team": True
+        "requires_team": True,
+        "cron_config": {"day_of_week": "mon", "hour": 6, "minute": 0}
     },
     {
         "insight_type": "Dependency Radar",
@@ -169,8 +196,11 @@ DEFAULT_INSIGHT_TYPES = [
         "insight_categories": ["Planning", "Retrospective", "Sprint Review", "Backlog Refinement", "PI Sync"],
         "active": False,
         "requires_pi": False,
-        "requires_team": True
+        "requires_team": True,
+        "cron_config": {"day_of_week": "sun, tue, thu", "hour": 6, "minute": 0}
     }
+
+
 ]
 
 
@@ -1064,6 +1094,7 @@ def create_insight_types_table_if_not_exists(engine=None) -> bool:
                     active BOOLEAN DEFAULT TRUE NOT NULL,
                     requires_pi BOOLEAN DEFAULT FALSE NOT NULL,
                     requires_team BOOLEAN DEFAULT TRUE NOT NULL,
+                    cron_config JSONB DEFAULT NULL,
                     created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP NOT NULL,
                     updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP NOT NULL
                 );
@@ -1210,6 +1241,7 @@ def insert_default_insight_types(engine=None):
                     active = insight_type_data.get("active", True)
                     requires_pi = insight_type_data.get("requires_pi", False)
                     requires_team = insight_type_data.get("requires_team", True)
+                    cron_config = insight_type_data.get("cron_config")
                     
                     # Validate categories is a list
                     if not isinstance(insight_categories, list):
@@ -1231,8 +1263,8 @@ def insert_default_insight_types(engine=None):
                         # Convert list to JSON string for JSONB column
                         insert_sql = """
                         INSERT INTO public.insight_types 
-                        (insight_type, insight_description, insight_categories, active, requires_pi, requires_team) 
-                        VALUES (:insight_type, :insight_description, CAST(:insight_categories AS jsonb), :active, :requires_pi, :requires_team)
+                        (insight_type, insight_description, insight_categories, active, requires_pi, requires_team, cron_config) 
+                        VALUES (:insight_type, :insight_description, CAST(:insight_categories AS jsonb), :active, :requires_pi, :requires_team, CAST(:cron_config AS jsonb))
                         """
                         conn.execute(text(insert_sql), {
                             "insight_type": insight_type,
@@ -1240,7 +1272,8 @@ def insert_default_insight_types(engine=None):
                             "insight_categories": json.dumps(insight_categories),
                             "active": active,
                             "requires_pi": requires_pi,
-                            "requires_team": requires_team
+                            "requires_team": requires_team,
+                            "cron_config": json.dumps(cron_config) if cron_config else None
                         })
                         inserted_count += 1
                 except Exception as e:

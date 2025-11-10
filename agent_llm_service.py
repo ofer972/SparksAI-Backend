@@ -20,7 +20,7 @@ agent_llm_router = APIRouter()
 # Job type enum for validation
 class JobType(str, Enum):
     """Enumeration of job type options"""
-    DAILY_AGENT = "Daily Agent"
+    DAILY_AGENT = "Daily Progress"
     SPRINT_GOAL = "Sprint Goal"
     PI_SYNC = "PI Sync"
     TEAM_PI_INSIGHT = "Team PI Insight"
@@ -30,7 +30,7 @@ class JobType(str, Enum):
 class AgentLLMProcessRequest(BaseModel):
     """Request model for agent LLM process endpoint"""
     prompt: str = Field(..., description="Complete formatted prompt prepared by agent")
-    job_type: JobType = Field(..., description="Type of job: Daily Agent, Sprint Goal, PI Sync, Team PI Insight, or Team Retro Topics")
+    job_type: JobType = Field(..., description="Type of job: Daily Progress, Sprint Goal, PI Sync, Team PI Insight, or Team Retro Topics")
     system_prompt: Optional[str] = Field(None, description="System prompt for AI behavior/context")
     job_id: Optional[int] = Field(None, description="Job ID for logging/tracking")
     metadata: Optional[Dict[str, Any]] = Field(None, description="Additional context for logging")
