@@ -331,8 +331,13 @@ async def create_team_job(
         JSON response with created job information
     """
     try:
+        # Normalize job_type: convert "Daily Agent" to "Daily Progress"
+        job_type = request.job_type
+        if job_type == "Daily Agent":
+            job_type = "Daily Progress"
+        
         # Validate request
-        validate_team_job_request(request.job_type, request.team_name, conn)
+        validate_team_job_request(job_type, request.team_name, conn)
         
         # Create the job
         insert_query = text(f"""
@@ -342,10 +347,10 @@ async def create_team_job(
             RETURNING job_id, job_type, team_name, pi, status, created_at
         """)
         
-        logger.info(f"Creating team job: {request.job_type} for team: {request.team_name}")
+        logger.info(f"Creating team job: {job_type} for team: {request.team_name}")
         
         result = conn.execute(insert_query, {
-            "job_type": request.job_type,
+            "job_type": job_type,
             "team_name": request.team_name
         })
         
@@ -390,8 +395,13 @@ async def create_pi_job(
         JSON response with created job information
     """
     try:
+        # Normalize job_type: convert "Daily Agent" to "Daily Progress"
+        job_type = request.job_type
+        if job_type == "Daily Agent":
+            job_type = "Daily Progress"
+        
         # Validate request
-        validate_pi_job_request(request.job_type, request.pi, conn)
+        validate_pi_job_request(job_type, request.pi, conn)
         
         # Create the job
         insert_query = text(f"""
@@ -401,10 +411,10 @@ async def create_pi_job(
             RETURNING job_id, job_type, team_name, pi, status, created_at
         """)
         
-        logger.info(f"Creating PI job: {request.job_type} for PI: {request.pi}")
+        logger.info(f"Creating PI job: {job_type} for PI: {request.pi}")
         
         result = conn.execute(insert_query, {
-            "job_type": request.job_type,
+            "job_type": job_type,
             "pi": request.pi
         })
         
@@ -449,8 +459,13 @@ async def create_pi_job_for_team(
         JSON response with created job information
     """
     try:
+        # Normalize job_type: convert "Daily Agent" to "Daily Progress"
+        job_type = request.job_type
+        if job_type == "Daily Agent":
+            job_type = "Daily Progress"
+        
         # Validate request
-        validate_pi_job_for_team_request(request.job_type, request.pi, request.team_name, conn)
+        validate_pi_job_for_team_request(job_type, request.pi, request.team_name, conn)
         
         # Create the job
         insert_query = text(f"""
@@ -460,10 +475,10 @@ async def create_pi_job_for_team(
             RETURNING job_id, job_type, team_name, pi, status, created_at
         """)
         
-        logger.info(f"Creating PI job: {request.job_type} for PI: {request.pi} and team: {request.team_name}")
+        logger.info(f"Creating PI job: {job_type} for PI: {request.pi} and team: {request.team_name}")
         
         result = conn.execute(insert_query, {
-            "job_type": request.job_type,
+            "job_type": job_type,
             "team_name": request.team_name,
             "pi": request.pi
         })
