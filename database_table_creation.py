@@ -26,7 +26,7 @@ DEFAULT_INSIGHT_TYPES = [
         "active": True,
         "requires_pi": True,
         "requires_team": False,
-        "cron_config": {"day_of_week": ["sun", "tue", "thu"], "hour": 6, "minute": 0}
+        "cron_config": {"day_of_week": "sun,tue,thu", "hour": 6, "minute": 0}
     },
     {
         "insight_type": "Daily Progress",
@@ -188,7 +188,7 @@ DEFAULT_INSIGHT_TYPES = [
         "active": False,
         "requires_pi": False,
         "requires_team": True,
-        "cron_config": {"day_of_week": ["mon"], "hour": 6, "minute": 0}
+        "cron_config": {"day_of_week": "mon", "hour": 6, "minute": 0}
     },
     {
         "insight_type": "Dependency Radar",
@@ -197,7 +197,7 @@ DEFAULT_INSIGHT_TYPES = [
         "active": False,
         "requires_pi": False,
         "requires_team": True,
-        "cron_config": {"day_of_week": ["sun", "tue", "thu"], "hour": 6, "minute": 0}
+        "cron_config": {"day_of_week": "sun,tue,thu", "hour": 6, "minute": 0}
     }
 
 
