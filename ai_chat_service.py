@@ -730,11 +730,41 @@ def format_team_dashboard_data(
     if bugs_trend:
         formatted_parts.append("=== BUGS CREATED AND RESOLVED OVER TIME (Last 6 months) ===")
         for month_data in bugs_trend:
-            # Extract month and other fields from the dictionary
-            report_month = month_data.get('report_month', 'Unknown')
-            created = month_data.get('created', 0)
-            resolved = month_data.get('resolved', 0)
-            open_count = month_data.get('open', 0) or month_data.get('cumulative_open', 0)
+            # Extract month and other fields from the dictionary - try multiple possible column names
+            report_month = (
+                month_data.get('report_month') or 
+                month_data.get('Report_Month') or 
+                month_data.get('month') or 
+                'Unknown'
+            )
+            
+            # Try multiple possible column names for created count
+            created = (
+                month_data.get('created') or 
+                month_data.get('Created') or 
+                month_data.get('issues_created') or 
+                month_data.get('bugs_created') or 
+                0
+            )
+            
+            # Try multiple possible column names for resolved count
+            resolved = (
+                month_data.get('resolved') or 
+                month_data.get('Resolved') or 
+                month_data.get('issues_resolved') or 
+                month_data.get('bugs_resolved') or 
+                0
+            )
+            
+            # Try multiple possible column names for open count
+            open_count = (
+                month_data.get('open') or 
+                month_data.get('Open') or 
+                month_data.get('cumulative_open') or 
+                month_data.get('Cumulative_Open') or 
+                month_data.get('open_count') or 
+                0
+            )
             
             trend_line = (
                 f"Month: {report_month} | "
