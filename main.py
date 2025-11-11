@@ -20,6 +20,7 @@ from security_logs_service import security_logs_router
 from pi_ai_cards_service import pi_ai_cards_router
 from transcripts_service import transcripts_router
 from prompts_service import prompts_router
+from reports_service import reports_router
 from ai_chat_service import ai_chat_router
 from agent_llm_service import agent_llm_router
 from users_service import users_router
@@ -202,6 +203,7 @@ app.include_router(users_router, prefix="/api/v1", tags=["users"])
 app.include_router(issues_router, prefix="/api/v1", tags=["issues"])
 app.include_router(sprints_router, prefix="/api/v1", tags=["sprints"])
 app.include_router(insight_types_router, prefix="/api/v1", tags=["insight-types"])
+app.include_router(reports_router, prefix="/api/v1", tags=["reports"])
 
 @app.get("/")
 async def root():
