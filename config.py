@@ -28,6 +28,7 @@ AI_SUMMARY_TABLE = "ai_summary"  # AI summary table
 PROMPTS_TABLE = "prompts"  # Prompts table
 CHAT_HISTORY_TABLE = "chat_history"  # Chat history table
 INSIGHT_TYPES_TABLE = "insight_types"  # Insight types table
+REPORT_DEFINITIONS_TABLE = "report_definitions"  # Report definitions metadata table
 
 # --- Service Configuration ---
 # Teams Service

@@ -135,6 +135,303 @@ DEFAULT_INSIGHT_TYPES = [
     }
 ]
 
+DEFAULT_REPORT_DEFINITIONS = [
+    {
+        "report_id": "team-sprint-burndown",
+        "report_name": "Sprint Burndown",
+        "chart_type": "burn_down",
+        "data_source": "team_sprint_burndown",
+        "description": "Tracks remaining work across a sprint for a given team.",
+        "default_filters": {
+            "team_name": None,
+            "issue_type": "all",
+            "sprint_name": None
+        },
+        "meta_schema": {
+            "required_filters": ["team_name"],
+            "optional_filters": ["issue_type", "sprint_name"],
+            "parameters": {
+                "team_name": {"type": "string", "description": "Team identifier"},
+                "issue_type": {"type": "string", "description": "Issue type filter such as 'all', 'Bug', 'Story'"},
+                "sprint_name": {"type": "string", "description": "Explicit sprint name override"}
+            },
+            "allowed_views": ["team-dashboard"]
+        }
+    },
+    {
+        "report_id": "team-current-sprint-progress",
+        "report_name": "Current Sprint Progress",
+        "chart_type": "summary",
+        "data_source": "team_current_sprint_progress",
+        "description": "Displays the progress of the current sprint for a given team.",
+        "default_filters": {
+            "team_name": None
+        },
+        "meta_schema": {
+            "required_filters": ["team_name"],
+            "optional_filters": [],
+            "parameters": {
+                "team_name": {"type": "string", "description": "Team identifier"}
+            },
+            "allowed_views": ["team-dashboard"]
+        }
+    },
+    {
+        "report_id": "pi-burndown",
+        "report_name": "PI Burndown",
+        "chart_type": "burn_down",
+        "data_source": "pi_burndown",
+        "description": "Displays program increment burndown for epics and features.",
+        "default_filters": {
+            "pi": None,
+            "issue_type": "Epic",
+            "project": None,
+            "team": None
+        },
+        "meta_schema": {
+            "required_filters": ["pi"],
+            "optional_filters": ["issue_type", "project", "team"],
+            "parameters": {
+                "pi": {"type": "string", "description": "Program increment name"},
+                "issue_type": {"type": "string", "description": "Issue type filter (default 'Epic')"},
+                "project": {"type": "string", "description": "Project key filter"},
+                "team": {"type": "string", "description": "Team filter"}
+            },
+            "allowed_views": ["pi-dashboard", "team-dashboard"]
+        }
+    },
+    {
+        "report_id": "team-closed-sprints",
+        "report_name": "Closed Sprints",
+        "chart_type": "table",
+        "data_source": "team_closed_sprints",
+        "description": "Displays completed sprint metrics for a given team across recent months.",
+        "default_filters": {
+            "team_name": None,
+            "months": 3
+        },
+        "meta_schema": {
+            "required_filters": ["team_name"],
+            "optional_filters": ["months"],
+            "parameters": {
+                "team_name": {"type": "string", "description": "Team identifier"},
+                "months": {"type": "integer", "description": "Number of months to look back (1, 2, 3, 4, 6, 9)"}
+            },
+            "allowed_views": ["team-dashboard"]
+        }
+    },
+    {
+        "report_id": "team-issues-trend",
+        "report_name": "Bugs Created and Resolved Over Time",
+        "chart_type": "trend",
+        "data_source": "team_issues_trend",
+        "description": "Shows monthly counts of issues created, resolved, and remaining open.",
+        "default_filters": {
+            "team_name": None,
+            "issue_type": "Bug",
+            "months": 6
+        },
+        "meta_schema": {
+            "required_filters": ["team_name"],
+            "optional_filters": ["issue_type", "months"],
+            "parameters": {
+                "team_name": {"type": "string", "description": "Team identifier"},
+                "issue_type": {"type": "string", "description": "Issue type filter (e.g., 'Bug', 'Story', 'all')"},
+                "months": {"type": "integer", "description": "Number of months to look back (1-12)"}
+            },
+            "allowed_views": ["team-dashboard"]
+        }
+    },
+    {
+        "report_id": "pi-predictability",
+        "report_name": "PI Predictability",
+        "chart_type": "table",
+        "data_source": "pi_predictability",
+        "description": "Summarizes predictability metrics for program increments.",
+        "default_filters": {
+            "pi_names": [],
+            "team_name": None
+        },
+        "meta_schema": {
+            "required_filters": ["pi_names"],
+            "optional_filters": ["team_name"],
+            "parameters": {
+                "pi_names": {"type": "array", "description": "List of PI names to include"},
+                "team_name": {"type": "string", "description": "Optional team filter"}
+            },
+            "allowed_views": ["pi-dashboard", "team-dashboard"]
+        }
+    },
+    {
+        "report_id": "epic-scope-changes",
+        "report_name": "Epic Scope Changes",
+        "chart_type": "stacked_bar",
+        "data_source": "epic_scope_changes",
+        "description": "Compares epic scope adjustments across selected PI quarters.",
+        "default_filters": {
+            "quarters": []
+        },
+        "meta_schema": {
+            "required_filters": ["quarters"],
+            "optional_filters": [],
+            "parameters": {
+                "quarters": {"type": "array", "description": "List of PI or quarter names (e.g., '2025-Q1')"}
+            },
+            "allowed_views": ["every-dashboard"]
+        }
+    },
+    {
+        "report_id": "issues-bugs-by-priority",
+        "report_name": "Bugs by Priority",
+        "chart_type": "composite",
+        "data_source": "issues_bugs_by_priority",
+        "description": "Visualizes open issues by priority and by team to highlight where attention is needed.",
+        "default_filters": {
+            "issue_type": "Bug",
+            "team_name": None,
+            "status_category": None,
+            "include_done": False
+        },
+        "meta_schema": {
+            "required_filters": [],
+            "optional_filters": ["issue_type", "team_name", "status_category", "include_done"],
+            "parameters": {
+                "issue_type": {"type": "string", "description": "Issue type filter (default 'Bug')"},
+                "team_name": {"type": "string", "description": "Optional team name filter"},
+                "status_category": {"type": "string", "description": "Optional status category filter"},
+                "include_done": {"type": "boolean", "description": "Include completed issues (defaults to false)"}
+            },
+            "allowed_views": ["team-dashboard"]
+        }
+    },
+    {
+        "report_id": "issues-flow-status-duration",
+        "report_name": "Flow Status Duration",
+        "chart_type": "bar",
+        "data_source": "issues_flow_status_duration",
+        "description": "Shows average time spent in each workflow status, with optional monthly breakdowns and drill-down.",
+        "default_filters": {
+            "issue_type": None,
+            "team_name": None,
+            "months": 3,
+            "view_mode": "total"
+        },
+        "meta_schema": {
+            "required_filters": [],
+            "optional_filters": ["issue_type", "team_name", "months", "view_mode"],
+            "parameters": {
+                "issue_type": {"type": "string", "description": "Issue type filter"},
+                "team_name": {"type": "string", "description": "Team name filter"},
+                "months": {"type": "integer", "description": "Number of months to evaluate (1, 2, 3, 4, 6, 9)"},
+                "view_mode": {"type": "string", "description": "Chart view mode ('total' or 'monthly')"}
+            },
+            "allowed_views": ["team-dashboard"]
+        }
+    },
+    {
+        "report_id": "issues-epics-hierarchy",
+        "report_name": "Epics Hierarchy",
+        "chart_type": "table",
+        "data_source": "issues_epics_hierarchy",
+        "description": "Displays the hierarchy of epics with status and dependency information.",
+        "default_filters": {
+            "pi": None,
+            "team_name": None,
+            "limit": 500
+        },
+        "meta_schema": {
+            "required_filters": [],
+            "optional_filters": ["pi", "team_name", "limit"],
+            "parameters": {
+                "pi": {"type": "string", "description": "PI name filter"},
+                "team_name": {"type": "string", "description": "Team name filter"},
+                "limit": {"type": "integer", "description": "Maximum number of records to return (up to 1000)"}
+            },
+            "allowed_views": ["pi-dashboard", "team-dashboard"]
+        }
+    },
+    {
+        "report_id": "issues-epic-dependencies",
+        "report_name": "Epic Dependencies",
+        "chart_type": "table",
+        "data_source": "issues_epic_dependencies",
+        "description": "Summarizes inbound and outbound epic dependencies for a PI.",
+        "default_filters": {
+            "pi": None
+        },
+        "meta_schema": {
+            "required_filters": [],
+            "optional_filters": ["pi"],
+            "parameters": {
+                "pi": {"type": "string", "description": "PI name filter"}
+            },
+            "allowed_views": ["pi-dashboard"]
+        }
+    },
+    {
+        "report_id": "issues-release-predictability",
+        "report_name": "Release Predictability",
+        "chart_type": "table",
+        "data_source": "issues_release_predictability",
+        "description": "Highlights release progress across epics and other issues over recent months.",
+        "default_filters": {
+            "months": 3
+        },
+        "meta_schema": {
+            "required_filters": [],
+            "optional_filters": ["months"],
+            "parameters": {
+                "months": {"type": "integer", "description": "Number of months to look back"}
+            },
+            "allowed_views": ["every-dashboard"]
+        }
+    },
+    {
+        "report_id": "sprint-predictability",
+        "report_name": "Sprint Predictability",
+        "chart_type": "table",
+        "data_source": "sprint_predictability",
+        "description": "Provides sprint predictability metrics, cycle time, and completion breakdown.",
+        "default_filters": {
+            "months": 3
+        },
+        "meta_schema": {
+            "required_filters": [],
+            "optional_filters": ["months"],
+            "parameters": {
+                "months": {"type": "integer", "description": "Number of months to look back"}
+            },
+            "allowed_views": ["team-dashboard", "pi-dashboard"]
+        }
+    },
+    {
+        "report_id": "pi-metrics-summary",
+        "report_name": "PI Metrics Summary",
+        "chart_type": "summary",
+        "data_source": "pi_metrics_summary",
+        "description": "Aggregates PI closure progress and WIP metrics for leadership review.",
+        "default_filters": {
+            "pi": None,
+            "project": None,
+            "issue_type": "Epic",
+            "team_name": None,
+            "plan_grace_period": 5
+        },
+        "meta_schema": {
+            "required_filters": [],
+            "optional_filters": ["pi", "project", "issue_type", "team_name", "plan_grace_period"],
+            "parameters": {
+                "pi": {"type": "string", "description": "PI name filter"},
+                "project": {"type": "string", "description": "Project key filter"},
+                "issue_type": {"type": "string", "description": "Issue type filter (default 'Epic')"},
+                "team_name": {"type": "string", "description": "Team name filter"},
+                "plan_grace_period": {"type": "integer", "description": "Grace period in days (default 5)"}
+            },
+            "allowed_views": ["pi-dashboard"]
+        }
+    }
+]
+
 
 
 def create_users_table_if_not_exists(engine=None) -> bool:
@@ -1044,6 +1341,65 @@ def create_insight_types_table_if_not_exists(engine=None) -> bool:
         return False
 
 
+def create_report_definitions_table_if_not_exists(engine=None) -> bool:
+    """Create report_definitions table if it doesn't exist."""
+    global _tables_initialized
+    if _tables_initialized:
+        return True
+
+    import database_connection
+
+    if engine is None:
+        engine = database_connection.get_db_engine()
+    if engine is None:
+        print("Warning: Database engine not available, cannot create report_definitions table")
+        return False
+
+    try:
+        with engine.connect() as conn:
+            check_table_sql = """
+            SELECT EXISTS (
+                SELECT FROM information_schema.tables
+                WHERE table_schema = 'public'
+                AND table_name = 'report_definitions'
+            );
+            """
+            result = conn.execute(text(check_table_sql))
+            table_exists = result.scalar()
+
+            if not table_exists:
+                print("Creating report_definitions table...")
+                create_table_sql = """
+                CREATE TABLE public.report_definitions (
+                    report_id VARCHAR(100) PRIMARY KEY,
+                    report_name VARCHAR(255) NOT NULL,
+                    chart_type VARCHAR(100) NOT NULL,
+                    data_source VARCHAR(100) NOT NULL,
+                    description TEXT,
+                    default_filters JSONB NOT NULL DEFAULT '{}'::jsonb,
+                    meta_schema JSONB NOT NULL DEFAULT '{}'::jsonb,
+                    created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+                    updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+                );
+
+                CREATE INDEX idx_report_definitions_data_source ON public.report_definitions(data_source);
+                """
+                conn.execute(text(create_table_sql))
+                conn.commit()
+                print("report_definitions table created successfully")
+            else:
+                print("report_definitions table already exists")
+
+            insert_default_report_definitions(engine)
+
+            return True
+
+    except Exception as e:
+        print(f"Error creating report_definitions table: {e}")
+        traceback.print_exc()
+        return False
+
+
 def insert_test_data_for_users():
     """Insert test data for users table"""
     import database_connection
@@ -1209,6 +1565,81 @@ def insert_default_insight_types(engine=None):
         traceback.print_exc()
 
 
+def insert_default_report_definitions(engine=None):
+    """Insert default report definitions."""
+    import database_connection
+    import json
+
+    if engine is None:
+        engine = database_connection.get_db_engine()
+    if engine is None:
+        print("Warning: Database engine not available, cannot insert default report definitions")
+        return
+
+    if not DEFAULT_REPORT_DEFINITIONS:
+        print("No default report definitions to insert")
+        return
+
+    try:
+        with engine.connect() as conn:
+            inserted_count = 0
+            for definition in DEFAULT_REPORT_DEFINITIONS:
+                report_id = definition.get("report_id")
+                if not report_id:
+                    print("Skipping report definition with missing report_id")
+                    continue
+
+                upsert_sql = """
+                INSERT INTO public.report_definitions (
+                    report_id,
+                    report_name,
+                    chart_type,
+                    data_source,
+                    description,
+                    default_filters,
+                    meta_schema,
+                    updated_at
+                ) VALUES (
+                    :report_id,
+                    :report_name,
+                    :chart_type,
+                    :data_source,
+                    :description,
+                    CAST(:default_filters AS jsonb),
+                    CAST(:meta_schema AS jsonb),
+                    CURRENT_TIMESTAMP
+                )
+                ON CONFLICT (report_id) DO UPDATE SET
+                    report_name = EXCLUDED.report_name,
+                    chart_type = EXCLUDED.chart_type,
+                    data_source = EXCLUDED.data_source,
+                    description = EXCLUDED.description,
+                    default_filters = EXCLUDED.default_filters,
+                    meta_schema = EXCLUDED.meta_schema,
+                    updated_at = CURRENT_TIMESTAMP
+                """
+
+                conn.execute(
+                    text(upsert_sql),
+                    {
+                        "report_id": report_id,
+                        "report_name": definition.get("report_name"),
+                        "chart_type": definition.get("chart_type"),
+                        "data_source": definition.get("data_source"),
+                        "description": definition.get("description"),
+                        "default_filters": json.dumps(definition.get("default_filters", {})),
+                        "meta_schema": json.dumps(definition.get("meta_schema", {})),
+                    },
+                )
+                inserted_count += 1
+
+            conn.commit()
+            print(f"Upserted {inserted_count} report definitions")
+    except Exception as e:
+        print(f"Error inserting default report definitions: {e}")
+        traceback.print_exc()
+
+
 def initialize_database_tables_with_engine(engine) -> None:
     """Initialize all database tables using provided engine - should be called only once on startup"""
     global _tables_initialized
@@ -1230,6 +1661,7 @@ def initialize_database_tables_with_engine(engine) -> None:
     create_recommendations_table_if_not_exists(engine)
     create_chat_history_table_if_not_exists(engine)
     create_insight_types_table_if_not_exists(engine)
+    create_report_definitions_table_if_not_exists(engine)
     _tables_initialized = True
     print("=== DATABASE TABLES INITIALIZATION COMPLETE ===")
 
@@ -1255,5 +1687,6 @@ def initialize_database_tables() -> None:
     create_recommendations_table_if_not_exists()
     create_chat_history_table_if_not_exists()
     create_insight_types_table_if_not_exists()
+    create_report_definitions_table_if_not_exists()
     _tables_initialized = True
     print("=== DATABASE TABLES INITIALIZATION COMPLETE ===")
