@@ -73,45 +73,6 @@ def get_top_ai_recommendations(team_name: str, limit: int = 4, source_ai_summary
         raise e
 
 
-def get_insight_types_by_category(category: str, conn: Connection = None) -> List[str]:
-    """
-    Get all insight type names that have the specified category in their insight_categories.
-    
-    Args:
-        category (str): Category name (e.g., "Daily", "Planning")
-        conn (Connection): Database connection from FastAPI dependency
-    
-    Returns:
-        list: List of insight_type strings that match the category
-    """
-    try:
-        import json
-        # SECURE: Parameterized query prevents SQL injection
-        # Use CAST function instead of ::jsonb syntax in parameterized queries
-        query = text("""
-            SELECT insight_type
-            FROM public.insight_types
-            WHERE active = TRUE
-              AND insight_categories @> CAST(:category AS jsonb)
-        """)
-        
-        logger.info(f"Executing query to get insight types for category: {category}")
-        
-        result = conn.execute(query, {"category": json.dumps([category])})
-        rows = result.fetchall()
-        
-        # Extract insight_type values
-        insight_types = [row[0] for row in rows]
-        
-        logger.info(f"Found {len(insight_types)} insight types for category '{category}': {insight_types}")
-        
-        return insight_types
-            
-    except Exception as e:
-        logger.error(f"Error fetching insight types for category {category}: {e}")
-        raise e
-
-
 def get_insight_types_by_categories(categories: List[str], conn: Connection = None) -> List[str]:
     """
     Get all insight type names that match ANY of the specified categories.
