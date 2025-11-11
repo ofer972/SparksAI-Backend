@@ -112,7 +112,60 @@ def get_insight_types_by_category(category: str, conn: Connection = None) -> Lis
         raise e
 
 
-def get_top_ai_cards_filtered(filter_column: str, filter_value: str, limit: int = 4, category: Optional[str] = None, conn: Connection = None) -> List[Dict[str, Any]]:
+def get_insight_types_by_categories(categories: List[str], conn: Connection = None) -> List[str]:
+    """
+    Get all insight type names that match ANY of the specified categories.
+    Returns a deduplicated, sorted list of insight types.
+    
+    Uses a single SQL query with jsonb_array_elements_text to expand categories
+    and check if insight_categories contains any of them using @> operator.
+    
+    Args:
+        categories (List[str]): List of category names (e.g., ["Daily", "Planning"])
+        conn (Connection): Database connection from FastAPI dependency
+    
+    Returns:
+        list: Deduplicated, sorted list of insight_type strings that match any of the categories
+    """
+    if not categories:
+        return []
+    
+    try:
+        import json
+        # SECURE: Parameterized query prevents SQL injection
+        # Use jsonb_array_elements_text to expand categories array and check
+        # if insight_categories contains any of the provided categories using @> operator
+        query = text("""
+            SELECT DISTINCT insight_type
+            FROM public.insight_types
+            WHERE active = TRUE
+              AND EXISTS (
+                SELECT 1
+                FROM jsonb_array_elements_text(CAST(:categories AS jsonb)) AS cat
+                WHERE insight_categories @> jsonb_build_array(cat)
+              )
+        """)
+        
+        logger.info(f"Executing query to get insight types for categories: {categories}")
+        
+        result = conn.execute(query, {"categories": json.dumps(categories)})
+        rows = result.fetchall()
+        
+        # Extract insight_type values
+        insight_types = [row[0] for row in rows]
+        
+        # Sort for consistency (DISTINCT already handles deduplication)
+        result = sorted(insight_types)
+        
+        logger.info(f"Found {len(result)} unique insight types for categories {categories}: {result}")
+        return result
+            
+    except Exception as e:
+        logger.error(f"Error fetching insight types for categories {categories}: {e}")
+        raise e
+
+
+def get_top_ai_cards_filtered(filter_column: str, filter_value: str, limit: int = 4, categories: Optional[List[str]] = None, conn: Connection = None) -> List[Dict[str, Any]]:
     """
     Get top AI cards filtered by a specific column (e.g., team_name or pi).
     
@@ -125,7 +178,7 @@ def get_top_ai_cards_filtered(filter_column: str, filter_value: str, limit: int 
         filter_column (str): Column to filter by (must be 'team_name' or 'pi' for security)
         filter_value (str): Value to filter by
         limit (int): Number of AI cards to return (default: 4)
-        category (Optional[str]): Optional category filter - only return cards with card_type matching insight types for this category
+        categories (Optional[List[str]]): Optional category filter - only return cards with card_type matching insight types for any of these categories
         conn (Connection): Database connection from FastAPI dependency
     
     Returns:
@@ -139,17 +192,17 @@ def get_top_ai_cards_filtered(filter_column: str, filter_value: str, limit: int 
     try:
         import json
         
-        # If category provided, get insight types for that category
+        # If categories provided, get insight types for those categories
         insight_types_list = []
-        if category:
-            insight_types_list = get_insight_types_by_category(category, conn)
+        if categories:
+            insight_types_list = get_insight_types_by_categories(categories, conn)
             if not insight_types_list:
-                # No insight types found for category, return empty result
-                logger.info(f"No insight types found for category '{category}', returning empty result")
+                # No insight types found for categories, return empty result
+                logger.info(f"No insight types found for categories {categories}, returning empty result")
                 return []
         
         # Build SQL query with optional category filter
-        if category and insight_types_list:
+        if categories and insight_types_list:
             # Build IN clause for card_type filtering
             # Use parameterized query with array
             sql_query = f"""
@@ -227,8 +280,8 @@ def get_top_ai_cards_filtered(filter_column: str, filter_value: str, limit: int 
                 'limit': limit
             }
         
-        logger.info(f"Executing query to get top AI cards filtered by {filter_column}: {filter_value}, category: {category}")
-        logger.info(f"Parameters: filter_column={filter_column}, filter_value={filter_value}, limit={limit}, category={category}")
+        logger.info(f"Executing query to get top AI cards filtered by {filter_column}: {filter_value}, categories: {categories}")
+        logger.info(f"Parameters: filter_column={filter_column}, filter_value={filter_value}, limit={limit}, categories={categories}")
         
         result = conn.execute(text(sql_query), params)
         
@@ -329,7 +382,7 @@ def get_top_ai_cards_with_recommendations_filtered(
     filter_value: str,
     limit: int = 4,
     recommendations_limit: int = 4,
-    category: Optional[str] = None,
+    categories: Optional[List[str]] = None,
     conn: Connection = None
 ) -> List[Dict[str, Any]]:
     """
@@ -343,7 +396,7 @@ def get_top_ai_cards_with_recommendations_filtered(
         filter_value (str): Value to filter by
         limit (int): Number of AI cards to return (default: 4)
         recommendations_limit (int): Maximum recommendations per card (default: 4)
-        category (Optional[str]): Optional category filter - only return cards with card_type matching insight types for this category
+        categories (Optional[List[str]]): Optional category filter - only return cards with card_type matching insight types for any of these categories
         conn (Connection): Database connection from FastAPI dependency
     
     Returns:
@@ -351,7 +404,7 @@ def get_top_ai_cards_with_recommendations_filtered(
     """
     try:
         # Get top AI cards using existing function
-        ai_cards = get_top_ai_cards_filtered(filter_column, filter_value, limit, category=category, conn=conn)
+        ai_cards = get_top_ai_cards_filtered(filter_column, filter_value, limit, categories=categories, conn=conn)
         
         # For each card, fetch and attach recommendations
         for card in ai_cards:
