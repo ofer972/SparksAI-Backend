@@ -1060,6 +1060,10 @@ def _fetch_pi_metrics_summary(filters: Dict[str, Any], conn: Connection) -> Repo
     team = (filters.get("team_name") or filters.get("team") or "").strip() or None
     plan_grace_period = _parse_int(filters.get("plan_grace_period"), default=5)
 
+    # TODO: Remove this once we have a way to filter by team
+    if team:
+        team = None
+
     summary_data = fetch_pi_summary_data(
         target_pi_name=pi_name,
         target_project_keys=project,
