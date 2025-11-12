@@ -86,7 +86,7 @@ async def get_pi_ai_cards(
         validated_limit = validate_limit(limit)
         
         # Get PI AI cards using shared generic function
-        ai_cards = get_top_ai_cards_filtered('pi', validated_pi_name, validated_limit, category=None, conn=conn)
+        ai_cards = get_top_ai_cards_filtered('pi', validated_pi_name, validated_limit, categories=None, conn=conn)
         
         return {
             "success": True,
