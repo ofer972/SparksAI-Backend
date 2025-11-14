@@ -351,9 +351,9 @@ DEFAULT_REPORT_DEFINITIONS = [
     {
         "report_id": "issues-bugs-by-priority",
         "report_name": "Bugs by Priority",
-        "chart_type": "composite",
+        "chart_type": "pie",
         "data_source": "issues_bugs_by_priority",
-        "description": "Visualizes open issues by priority and by team to highlight where attention is needed.",
+        "description": "Visualizes open bugs by priority level (for all teams or a specific team).",
         "default_filters": {
             "issue_type": "Bug",
             "team_name": None,
@@ -366,6 +366,28 @@ DEFAULT_REPORT_DEFINITIONS = [
             "parameters": {
                 "issue_type": {"type": "string", "description": "Issue type filter (default 'Bug')"},
                 "team_name": {"type": "string", "description": "Optional team name filter"},
+                "status_category": {"type": "string", "description": "Optional status category filter"},
+                "include_done": {"type": "boolean", "description": "Include completed issues (defaults to false)"}
+            },
+            "allowed_views": ["team-dashboard"]
+        }
+    },
+    {
+        "report_id": "issues-bugs-by-team",
+        "report_name": "Bugs by Team",
+        "chart_type": "stacked_bar",
+        "data_source": "issues_bugs_by_team",
+        "description": "Visualizes open bugs grouped by team with priority breakdown.",
+        "default_filters": {
+            "issue_type": "Bug",
+            "status_category": None,
+            "include_done": False
+        },
+        "meta_schema": {
+            "required_filters": [],
+            "optional_filters": ["issue_type", "status_category", "include_done"],
+            "parameters": {
+                "issue_type": {"type": "string", "description": "Issue type filter (default 'Bug')"},
                 "status_category": {"type": "string", "description": "Optional status category filter"},
                 "include_done": {"type": "boolean", "description": "Include completed issues (defaults to false)"}
             },

@@ -541,6 +541,19 @@ def _fetch_issues_bugs_by_priority(filters: Dict[str, Any], conn: Connection) ->
         for team, data in teams_dict.items()
     ]
 
+    # Fetch all available team names (without filters) for the dropdown
+    available_teams_query = text(
+        f"""
+        SELECT DISTINCT team_name
+        FROM {config.WORK_ITEMS_TABLE}
+        WHERE issue_type = :issue_type
+        AND team_name IS NOT NULL
+        ORDER BY team_name
+        """
+    )
+    available_teams_rows = conn.execute(available_teams_query, {"issue_type": issue_type}).fetchall()
+    available_teams = [row[0] for row in available_teams_rows if row[0]]
+
     return {
         "data": {
             "priority_summary": priority_summary,
@@ -552,6 +565,66 @@ def _fetch_issues_bugs_by_priority(filters: Dict[str, Any], conn: Connection) ->
             "status_category": status_category,
             "include_done": include_done,
             "priority_count": len(priority_summary),
+            "team_count": len(team_breakdown),
+            "available_teams": available_teams,
+        },
+    }
+
+
+def _fetch_issues_bugs_by_team(filters: Dict[str, Any], conn: Connection) -> ReportDataResult:
+    """
+    Fetch bugs grouped by team with priority breakdown
+    """
+    issue_type = (filters.get("issue_type") or "Bug").strip() or "Bug"
+    status_category = (filters.get("status_category") or "").strip() or None
+    include_done = bool(filters.get("include_done"))
+
+    # Don't filter by team for this report - we want all teams
+    where_clause, params = _build_issue_where_clause(issue_type, None, status_category, include_done)
+
+    team_query = text(
+        f"""
+        SELECT
+            team_name,
+            priority,
+            COUNT(*) AS issue_count
+        FROM {config.WORK_ITEMS_TABLE}
+        WHERE {where_clause}
+        GROUP BY team_name, priority
+        ORDER BY team_name, priority
+        """
+    )
+
+    team_rows = conn.execute(team_query, params).fetchall()
+    teams_dict: Dict[str, Dict[str, Any]] = {}
+    for row in team_rows:
+        team = row[0] if row[0] is not None else "Unspecified"
+        priority_value = row[1] if row[1] is not None else "Unspecified"
+        count = int(row[2]) if row[2] is not None else 0
+
+        if team not in teams_dict:
+            teams_dict[team] = {"priorities": [], "total_issues": 0}
+
+        teams_dict[team]["priorities"].append({"priority": priority_value, "issue_count": count})
+        teams_dict[team]["total_issues"] += count
+
+    team_breakdown = [
+        {
+            "team_name": team,
+            "priorities": data["priorities"],
+            "total_issues": data["total_issues"],
+        }
+        for team, data in sorted(teams_dict.items())
+    ]
+
+    return {
+        "data": {
+            "team_breakdown": team_breakdown,
+        },
+        "meta": {
+            "issue_type": issue_type,
+            "status_category": status_category,
+            "include_done": include_done,
             "team_count": len(team_breakdown),
         },
     }
@@ -1150,6 +1223,7 @@ _REPORT_DATA_FETCHERS: Dict[str, ReportDataFetcher] = {
     "pi_predictability": _fetch_pi_predictability,
     "epic_scope_changes": _fetch_epic_scope_changes,
     "issues_bugs_by_priority": _fetch_issues_bugs_by_priority,
+    "issues_bugs_by_team": _fetch_issues_bugs_by_team,
     "issues_flow_status_duration": _fetch_issues_flow_status_duration,
     "issues_epics_hierarchy": _fetch_epics_hierarchy,
     "issues_epic_dependencies": _fetch_epic_dependencies,
