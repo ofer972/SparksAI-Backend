@@ -164,12 +164,41 @@ def _require_filter(filters: Dict[str, Any], key: str) -> Any:
 
 
 def _fetch_team_sprint_burndown(filters: Dict[str, Any], conn: Connection) -> ReportDataResult:
-    team_name = _require_filter(filters, "team_name")
+    team_name = filters.get("team_name")
     issue_type = (filters.get("issue_type") or "all").strip() or "all"
     sprint_name = filters.get("sprint_name")
 
+    # Fetch available teams (always)
+    teams_query = text(
+        f"""
+        SELECT DISTINCT team_name
+        FROM {config.WORK_ITEMS_TABLE}
+        WHERE team_name IS NOT NULL
+        ORDER BY team_name
+        """
+    )
+    teams_rows = conn.execute(teams_query).fetchall()
+    available_teams = [row[0] for row in teams_rows if row[0]]
+
     selected_sprint_id: Optional[int] = None
     auto_selected = False
+
+    # Only fetch sprint data if team is selected
+    if not team_name:
+        return {
+            "data": [],
+            "meta": {
+                "team_name": None,
+                "issue_type": issue_type,
+                "sprint_name": None,
+                "sprint_id": None,
+                "auto_selected": False,
+                "total_issues_in_sprint": 0,
+                "start_date": None,
+                "end_date": None,
+                "available_teams": available_teams,
+            },
+        }
 
     if not sprint_name:
         sprints = get_sprints_with_total_issues_db(team_name, "active", conn)
@@ -191,6 +220,7 @@ def _fetch_team_sprint_burndown(filters: Dict[str, Any], conn: Connection) -> Re
                 "total_issues_in_sprint": 0,
                 "start_date": None,
                 "end_date": None,
+                "available_teams": available_teams,
             },
         }
 
@@ -217,6 +247,7 @@ def _fetch_team_sprint_burndown(filters: Dict[str, Any], conn: Connection) -> Re
             "total_issues_in_sprint": total_issues,
             "start_date": start_date,
             "end_date": end_date,
+            "available_teams": available_teams,
         },
     }
 
@@ -325,18 +356,33 @@ def _fetch_team_current_sprint_progress(filters: Dict[str, Any], conn: Connectio
 
 
 def _fetch_pi_burndown(filters: Dict[str, Any], conn: Connection) -> ReportDataResult:
-    pi_name = _require_filter(filters, "pi")
+    pi_name = (filters.get("pi") or "").strip() or None
     issue_type = (filters.get("issue_type") or "Epic").strip() or "Epic"
     project = filters.get("project")
     team = filters.get("team")
 
-    burndown_data = fetch_pi_burndown_data(
-        pi_name=pi_name,
-        project_keys=project,
-        issue_type=issue_type,
-        team_names=team,
-        conn=conn,
+    # Fetch available PIs (always)
+    pis_query = text(
+        f"""
+        SELECT DISTINCT pi_name
+        FROM {config.PIS_TABLE}
+        WHERE pi_name IS NOT NULL
+        ORDER BY pi_name DESC
+        """
     )
+    pis_rows = conn.execute(pis_query).fetchall()
+    available_pis = [row[0] for row in pis_rows if row[0]]
+
+    # Only fetch burndown data if a PI is selected
+    burndown_data = []
+    if pi_name:
+        burndown_data = fetch_pi_burndown_data(
+            pi_name=pi_name,
+            project_keys=project,
+            issue_type=issue_type,
+            team_names=team,
+            conn=conn,
+        )
 
     return {
         "data": burndown_data,
@@ -345,6 +391,7 @@ def _fetch_pi_burndown(filters: Dict[str, Any], conn: Connection) -> ReportDataR
             "issue_type": issue_type,
             "project": project,
             "team": team,
+            "available_pis": available_pis,
         },
     }
 
@@ -370,13 +417,29 @@ def _parse_list(value: Any) -> List[str]:
 
 
 def _fetch_team_closed_sprints(filters: Dict[str, Any], conn: Connection) -> ReportDataResult:
-    team_name = _require_filter(filters, "team_name")
+    team_name = filters.get("team_name")
     months_value = filters.get("months")
     months = _parse_int(months_value, default=3)
     if months <= 0:
         months = 3
 
-    closed_sprints = get_closed_sprints_data_db(team_name, months, conn)
+    # Fetch available teams (always)
+    teams_query = text(
+        f"""
+        SELECT DISTINCT team_name
+        FROM {config.WORK_ITEMS_TABLE}
+        WHERE team_name IS NOT NULL
+        ORDER BY team_name
+        """
+    )
+    teams_rows = conn.execute(teams_query).fetchall()
+    available_teams = [row[0] for row in teams_rows if row[0]]
+
+    # Only fetch sprint data if team is selected
+    if team_name:
+        closed_sprints = get_closed_sprints_data_db(team_name, months, conn)
+    else:
+        closed_sprints = []
 
     return {
         "data": closed_sprints,
@@ -384,6 +447,7 @@ def _fetch_team_closed_sprints(filters: Dict[str, Any], conn: Connection) -> Rep
             "team_name": team_name,
             "months": months,
             "count": len(closed_sprints),
+            "available_teams": available_teams,
         },
     }
 
@@ -933,6 +997,30 @@ def _fetch_issues_flow_status_duration(filters: Dict[str, Any], conn: Connection
     team_name = (filters.get("team_name") or "").strip() or None
     view_mode = (filters.get("view_mode") or "total").strip() or "total"
 
+    # Fetch available teams (always)
+    teams_query = text(
+        f"""
+        SELECT DISTINCT team_name
+        FROM {config.WORK_ITEMS_TABLE}
+        WHERE team_name IS NOT NULL
+        ORDER BY team_name
+        """
+    )
+    teams_rows = conn.execute(teams_query).fetchall()
+    available_teams = [row[0] for row in teams_rows if row[0]]
+
+    # Fetch available issue types (always)
+    issue_types_query = text(
+        f"""
+        SELECT DISTINCT issue_type
+        FROM {config.WORK_ITEMS_TABLE}
+        WHERE issue_type IS NOT NULL
+        ORDER BY issue_type
+        """
+    )
+    issue_types_rows = conn.execute(issue_types_query).fetchall()
+    available_issue_types = [row[0] for row in issue_types_rows if row[0]]
+
     summary_data = _fetch_issue_status_duration_summary(months, issue_type, team_name, conn)
     monthly_data = _fetch_issue_status_duration_monthly(months, team_name, conn)
 
@@ -961,24 +1049,52 @@ def _fetch_issues_flow_status_duration(filters: Dict[str, Any], conn: Connection
             "issue_type": issue_type,
             "team_name": team_name,
             "months": months,
+            "available_teams": available_teams,
+            "available_issue_types": available_issue_types,
         },
     }
 
 
 def _fetch_epics_hierarchy(filters: Dict[str, Any], conn: Connection) -> ReportDataResult:
-    pi_name = (filters.get("pi") or filters.get("pi_name") or "").strip() or None
+    pi_names = _parse_list(filters.get("pi") or filters.get("pi_names") or filters.get("pi_name"))
     team_name = (filters.get("team_name") or "").strip() or None
     limit_value = filters.get("limit")
     limit_int = _parse_int(limit_value, default=DEFAULT_HIERARCHY_LIMIT)
     if limit_int <= 0 or limit_int > 1000:
         limit_int = DEFAULT_HIERARCHY_LIMIT
 
+    # Fetch available teams (always)
+    teams_query = text(
+        f"""
+        SELECT DISTINCT "Team Name of Epic"
+        FROM epic_hierarchy_with_progress
+        WHERE "Team Name of Epic" IS NOT NULL
+        ORDER BY "Team Name of Epic"
+        """
+    )
+    teams_rows = conn.execute(teams_query).fetchall()
+    available_teams = [row[0] for row in teams_rows if row[0]]
+
+    # Fetch available PIs (always)
+    pis_query = text(
+        f"""
+        SELECT DISTINCT "Quarter PI of Epic"
+        FROM epic_hierarchy_with_progress
+        WHERE "Quarter PI of Epic" IS NOT NULL
+        ORDER BY "Quarter PI of Epic" DESC
+        """
+    )
+    pis_rows = conn.execute(pis_query).fetchall()
+    available_pis = [row[0] for row in pis_rows if row[0]]
+
     where_conditions = []
     params: Dict[str, Any] = {"limit": limit_int}
 
-    if pi_name:
-        where_conditions.append('"Quarter PI of Epic" = :pi')
-        params["pi"] = pi_name
+    if pi_names:
+        placeholders = ", ".join([f":pi_{i}" for i in range(len(pi_names))])
+        where_conditions.append(f'"Quarter PI of Epic" IN ({placeholders})')
+        for i, pi in enumerate(pi_names):
+            params[f"pi_{i}"] = pi
 
     if team_name:
         where_conditions.append('"Team Name of Epic" = :team_name')
@@ -1005,25 +1121,46 @@ def _fetch_epics_hierarchy(filters: Dict[str, Any], conn: Connection) -> ReportD
             "limit": limit_int,
         },
         "meta": {
-            "pi": pi_name,
+            "pi_names": pi_names,
             "team_name": team_name,
+            "available_teams": available_teams,
+            "available_pis": available_pis,
         },
     }
 
 
 def _fetch_epic_dependencies(filters: Dict[str, Any], conn: Connection) -> ReportDataResult:
-    pi_name = (filters.get("pi") or filters.get("pi_name") or "").strip() or None
+    pi_names = _parse_list(filters.get("pi") or filters.get("pi_names") or filters.get("pi_name"))
     inbound_params: Dict[str, Any] = {}
     outbound_params: Dict[str, Any] = {}
+
+    # Fetch available PIs from both dependency tables (always)
+    pis_query = text(
+        f"""
+        SELECT DISTINCT quarter_pi_of_epic
+        FROM (
+            SELECT quarter_pi_of_epic FROM public.epic_inbound_dependency_load_by_quarter
+            UNION
+            SELECT quarter_pi_of_epic FROM public.epic_outbound_dependency_metrics_by_quarter
+        ) AS all_pis
+        WHERE quarter_pi_of_epic IS NOT NULL
+        ORDER BY quarter_pi_of_epic DESC
+        """
+    )
+    pis_rows = conn.execute(pis_query).fetchall()
+    available_pis = [row[0] for row in pis_rows if row[0]]
 
     inbound_where = "1=1"
     outbound_where = "1=1"
 
-    if pi_name:
-        inbound_where = "quarter_pi_of_epic = :pi"
-        outbound_where = "quarter_pi_of_epic = :pi"
-        inbound_params["pi"] = pi_name
-        outbound_params["pi"] = pi_name
+    if pi_names:
+        inbound_placeholders = ", ".join([f":inbound_pi_{i}" for i in range(len(pi_names))])
+        outbound_placeholders = ", ".join([f":outbound_pi_{i}" for i in range(len(pi_names))])
+        inbound_where = f"quarter_pi_of_epic IN ({inbound_placeholders})"
+        outbound_where = f"quarter_pi_of_epic IN ({outbound_placeholders})"
+        for i, pi in enumerate(pi_names):
+            inbound_params[f"inbound_pi_{i}"] = pi
+            outbound_params[f"outbound_pi_{i}"] = pi
 
     inbound_query = text(
         f"""
@@ -1062,9 +1199,10 @@ def _fetch_epic_dependencies(filters: Dict[str, Any], conn: Connection) -> Repor
             "outbound": outbound_data,
         },
         "meta": {
-            "pi": pi_name,
+            "pi_names": pi_names,
             "inbound_count": len(inbound_data),
             "outbound_count": len(outbound_data),
+            "available_pis": available_pis,
         },
     }
 
@@ -1175,6 +1313,42 @@ def _fetch_pi_metrics_summary(filters: Dict[str, Any], conn: Connection) -> Repo
     team = (filters.get("team_name") or filters.get("team") or "").strip() or None
     plan_grace_period = _parse_int(filters.get("plan_grace_period"), default=5)
 
+    # Fetch available teams (always)
+    teams_query = text(
+        f"""
+        SELECT DISTINCT team_name
+        FROM {config.WORK_ITEMS_TABLE}
+        WHERE team_name IS NOT NULL
+        ORDER BY team_name
+        """
+    )
+    teams_rows = conn.execute(teams_query).fetchall()
+    available_teams = [row[0] for row in teams_rows if row[0]]
+
+    # Fetch available issue types (always)
+    issue_types_query = text(
+        f"""
+        SELECT DISTINCT issue_type
+        FROM {config.WORK_ITEMS_TABLE}
+        WHERE issue_type IS NOT NULL
+        ORDER BY issue_type
+        """
+    )
+    issue_types_rows = conn.execute(issue_types_query).fetchall()
+    available_issue_types = [row[0] for row in issue_types_rows if row[0]]
+
+    # Fetch available PIs (always)
+    pis_query = text(
+        f"""
+        SELECT DISTINCT pi_name
+        FROM {config.PIS_TABLE}
+        WHERE pi_name IS NOT NULL
+        ORDER BY pi_name DESC
+        """
+    )
+    pis_rows = conn.execute(pis_query).fetchall()
+    available_pis = [row[0] for row in pis_rows if row[0]]
+
     # TODO: Remove this once we have a way to filter by team
     if team:
         team = None
@@ -1252,6 +1426,9 @@ def _fetch_pi_metrics_summary(filters: Dict[str, Any], conn: Connection) -> Repo
             "team_name": team,
             "project": project,
             "issue_type": issue_type,
+            "available_teams": available_teams,
+            "available_issue_types": available_issue_types,
+            "available_pis": available_pis,
         },
     }
 

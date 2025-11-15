@@ -216,8 +216,8 @@ DEFAULT_REPORT_DEFINITIONS = [
             "sprint_name": None
         },
         "meta_schema": {
-            "required_filters": ["team_name"],
-            "optional_filters": ["issue_type", "sprint_name"],
+            "required_filters": [],
+            "optional_filters": ["team_name", "issue_type", "sprint_name"],
             "parameters": {
                 "team_name": {"type": "string", "description": "Team identifier"},
                 "issue_type": {"type": "string", "description": "Issue type filter such as 'all', 'Bug', 'Story'"},
@@ -257,8 +257,8 @@ DEFAULT_REPORT_DEFINITIONS = [
             "team": None
         },
         "meta_schema": {
-            "required_filters": ["pi"],
-            "optional_filters": ["issue_type", "project", "team"],
+            "required_filters": [],
+            "optional_filters": ["pi", "issue_type", "project", "team"],
             "parameters": {
                 "pi": {"type": "string", "description": "Program increment name"},
                 "issue_type": {"type": "string", "description": "Issue type filter (default 'Epic')"},
@@ -279,8 +279,8 @@ DEFAULT_REPORT_DEFINITIONS = [
             "months": 3
         },
         "meta_schema": {
-            "required_filters": ["team_name"],
-            "optional_filters": ["months"],
+            "required_filters": [],
+            "optional_filters": ["team_name", "months"],
             "parameters": {
                 "team_name": {"type": "string", "description": "Team identifier"},
                 "months": {"type": "integer", "description": "Number of months to look back (1, 2, 3, 4, 6, 9)"}
