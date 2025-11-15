@@ -413,11 +413,37 @@ def _fetch_pi_predictability(filters: Dict[str, Any], conn: Connection) -> Repor
     pi_values = filters.get("pi_names") or filters.get("pi")
     pi_list = _parse_list(pi_values)
 
-    if not pi_list:
-        raise ValueError("Missing required filter 'pi_names'")
-
     team_name = filters.get("team_name")
-    predictability_data = fetch_pi_predictability_data(pi_list, team_name=team_name, conn=conn)
+    
+    # Fetch available teams (always)
+    teams_query = text(
+        f"""
+        SELECT DISTINCT team_name
+        FROM {config.WORK_ITEMS_TABLE}
+        WHERE team_name IS NOT NULL
+        ORDER BY team_name
+        """
+    )
+    teams_rows = conn.execute(teams_query).fetchall()
+    available_teams = [row[0] for row in teams_rows if row[0]]
+
+    # Fetch available PIs (always)
+    pis_query = text(
+        f"""
+        SELECT DISTINCT pi_name
+        FROM {config.PIS_TABLE}
+        WHERE pi_name IS NOT NULL
+        ORDER BY pi_name DESC
+        """
+    )
+    pis_rows = conn.execute(pis_query).fetchall()
+    available_pis = [row[0] for row in pis_rows if row[0]]
+
+    # Only fetch predictability data if PIs are selected
+    if pi_list:
+        predictability_data = fetch_pi_predictability_data(pi_list, team_name=team_name, conn=conn)
+    else:
+        predictability_data = []
 
     return {
         "data": predictability_data,
@@ -425,6 +451,8 @@ def _fetch_pi_predictability(filters: Dict[str, Any], conn: Connection) -> Repor
             "pi_names": pi_list,
             "team_name": team_name,
             "count": len(predictability_data),
+            "available_teams": available_teams,
+            "available_pis": available_pis,
         },
     }
 
@@ -433,16 +461,30 @@ def _fetch_epic_scope_changes(filters: Dict[str, Any], conn: Connection) -> Repo
     quarters_value = filters.get("quarters") or filters.get("quarter")
     quarters = _parse_list(quarters_value)
 
-    if not quarters:
-        raise ValueError("Missing required filter 'quarters'")
+    # Fetch available PIs (always)
+    pis_query = text(
+        f"""
+        SELECT DISTINCT pi_name
+        FROM {config.PIS_TABLE}
+        WHERE pi_name IS NOT NULL
+        ORDER BY pi_name DESC
+        """
+    )
+    pis_rows = conn.execute(pis_query).fetchall()
+    available_pis = [row[0] for row in pis_rows if row[0]]
 
-    scope_data = fetch_scope_changes_data(quarters, conn=conn)
+    # Only fetch scope data if quarters are selected
+    if quarters:
+        scope_data = fetch_scope_changes_data(quarters, conn=conn)
+    else:
+        scope_data = []
 
     return {
         "data": scope_data,
         "meta": {
             "quarters": quarters,
             "count": len(scope_data),
+            "available_pis": available_pis,
         },
     }
 

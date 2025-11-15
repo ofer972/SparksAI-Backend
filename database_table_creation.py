@@ -321,8 +321,8 @@ DEFAULT_REPORT_DEFINITIONS = [
             "team_name": None
         },
         "meta_schema": {
-            "required_filters": ["pi_names"],
-            "optional_filters": ["team_name"],
+            "required_filters": [],
+            "optional_filters": ["pi_names", "team_name"],
             "parameters": {
                 "pi_names": {"type": "array", "description": "List of PI names to include"},
                 "team_name": {"type": "string", "description": "Optional team filter"}
@@ -340,8 +340,8 @@ DEFAULT_REPORT_DEFINITIONS = [
             "quarters": []
         },
         "meta_schema": {
-            "required_filters": ["quarters"],
-            "optional_filters": [],
+            "required_filters": [],
+            "optional_filters": ["quarters"],
             "parameters": {
                 "quarters": {"type": "array", "description": "List of PI or quarter names (e.g., '2025-Q1')"}
             },
