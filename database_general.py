@@ -1218,7 +1218,7 @@ def create_insight_type(data: Dict[str, Any], conn: Connection = None) -> Dict[s
     try:
         import json
         allowed_columns = {
-            "insight_type", "insight_description", "insight_categories", "active"
+            "insight_type", "insight_description", "insight_categories", "active", "cron_config"
         }
         
         filtered = {k: v for k, v in data.items() if k in allowed_columns}
@@ -1229,12 +1229,21 @@ def create_insight_type(data: Dict[str, Any], conn: Connection = None) -> Dict[s
         if "insight_categories" in filtered and isinstance(filtered["insight_categories"], list):
             filtered["insight_categories"] = json.dumps(filtered["insight_categories"])
         
+        # Convert cron_config dict to JSON string for JSONB (or None)
+        if "cron_config" in filtered:
+            if filtered["cron_config"] is None:
+                filtered["cron_config"] = None
+            elif isinstance(filtered["cron_config"], dict):
+                filtered["cron_config"] = json.dumps(filtered["cron_config"])
+        
         columns_sql = ", ".join(filtered.keys())
         # Use CAST for JSONB column
         values_sql_parts = []
         for k in filtered.keys():
             if k == "insight_categories":
                 values_sql_parts.append("CAST(:insight_categories AS jsonb)")
+            elif k == "cron_config":
+                values_sql_parts.append("CAST(:cron_config AS jsonb)")
             else:
                 values_sql_parts.append(f":{k}")
         values_sql = ", ".join(values_sql_parts)
@@ -1259,6 +1268,14 @@ def create_insight_type(data: Dict[str, Any], conn: Connection = None) -> Dict[s
                     row_dict['insight_categories'] = []
             elif hasattr(row_dict['insight_categories'], '__iter__') and not isinstance(row_dict['insight_categories'], str):
                 row_dict['insight_categories'] = list(row_dict['insight_categories'])
+        
+        if 'cron_config' in row_dict and row_dict['cron_config'] is not None:
+            if isinstance(row_dict['cron_config'], str):
+                try:
+                    row_dict['cron_config'] = json.loads(row_dict['cron_config'])
+                except:
+                    row_dict['cron_config'] = None
+        
         return row_dict
     except Exception as e:
         logger.error(f"Error creating insight type: {e}")
@@ -1281,7 +1298,7 @@ def update_insight_type_by_id(insight_type_id: int, updates: Dict[str, Any], con
     try:
         import json
         allowed_columns = {
-            "insight_type", "insight_description", "insight_categories", "active"
+            "insight_type", "insight_description", "insight_categories", "active", "cron_config"
         }
         filtered = {k: v for k, v in updates.items() if k in allowed_columns}
         if not filtered:
@@ -1291,11 +1308,20 @@ def update_insight_type_by_id(insight_type_id: int, updates: Dict[str, Any], con
         if "insight_categories" in filtered and isinstance(filtered["insight_categories"], list):
             filtered["insight_categories"] = json.dumps(filtered["insight_categories"])
         
+        # Convert cron_config dict to JSON string for JSONB (or None)
+        if "cron_config" in filtered:
+            if filtered["cron_config"] is None:
+                filtered["cron_config"] = None
+            elif isinstance(filtered["cron_config"], dict):
+                filtered["cron_config"] = json.dumps(filtered["cron_config"])
+        
         # Build SET clause with CAST for JSONB
         set_clauses_parts = []
         for k in filtered.keys():
             if k == "insight_categories":
                 set_clauses_parts.append("insight_categories = CAST(:insight_categories AS jsonb)")
+            elif k == "cron_config":
+                set_clauses_parts.append("cron_config = CAST(:cron_config AS jsonb)")
             else:
                 set_clauses_parts.append(f"{k} = :{k}")
         set_clauses = ", ".join(set_clauses_parts)
@@ -1326,6 +1352,14 @@ def update_insight_type_by_id(insight_type_id: int, updates: Dict[str, Any], con
                     row_dict['insight_categories'] = []
             elif hasattr(row_dict['insight_categories'], '__iter__') and not isinstance(row_dict['insight_categories'], str):
                 row_dict['insight_categories'] = list(row_dict['insight_categories'])
+        
+        if 'cron_config' in row_dict and row_dict['cron_config'] is not None:
+            if isinstance(row_dict['cron_config'], str):
+                try:
+                    row_dict['cron_config'] = json.loads(row_dict['cron_config'])
+                except:
+                    row_dict['cron_config'] = None
+        
         return row_dict
     except Exception as e:
         logger.error(f"Error updating insight type {insight_type_id}: {e}")
