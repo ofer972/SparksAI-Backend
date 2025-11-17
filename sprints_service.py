@@ -37,6 +37,25 @@ def validate_team_name(team_name: str) -> str:
     
     return sanitized
 
+def validate_group_name(group_name: str) -> str:
+    """
+    Validate and sanitize group name to prevent SQL injection.
+    Only allows alphanumeric characters, spaces, hyphens, and underscores.
+    """
+    if not group_name or not isinstance(group_name, str):
+        raise HTTPException(status_code=400, detail="Group name is required and must be a string")
+    
+    # Remove any potentially dangerous characters
+    sanitized = re.sub(r'[^a-zA-Z0-9\s\-_]', '', group_name.strip())
+    
+    if not sanitized:
+        raise HTTPException(status_code=400, detail="Group name contains invalid characters")
+    
+    if len(sanitized) > 100:  # Reasonable length limit
+        raise HTTPException(status_code=400, detail="Group name is too long (max 100 characters)")
+    
+    return sanitized
+
 @sprints_router.get("/sprints")
 async def get_sprints(conn: Connection = Depends(get_db_connection)):
     """
@@ -97,34 +116,89 @@ async def get_sprints(conn: Connection = Depends(get_db_connection)):
 
 @sprints_router.get("/sprints/active-sprint-summary-by-team")
 async def get_active_sprint_summary_by_team(
-    team_name: str = Query(..., description="Team name to get active sprint summary for"),
+    team_name: Optional[str] = Query(None, description="Team name or group name (if isGroup=true). If not provided, returns all summaries."),
+    isGroup: bool = Query(False, description="If true, team_name is treated as a group name"),
     conn: Connection = Depends(get_db_connection)
 ):
     """
     Get active sprint summary by team from the active_sprint_summary_by_team view.
     
-    Returns all columns from the view for the specified team.
+    Returns all columns from the view for the specified team(s) or group.
+    If team_name is not provided, returns summaries for all teams.
     
     Args:
-        team_name: The name of the team to get active sprint summary for
+        team_name: Optional team name or group name (if isGroup=true). If not provided, returns all summaries.
+        isGroup: If true, team_name is treated as a group name and returns summaries for all teams in that group
     
     Returns:
         JSON response with active sprint summary (all columns from view)
     """
     try:
-        # Validate team name
-        validated_team_name = validate_team_name(team_name)
+        team_names_list = []
+        filter_description = None
+        validated_name = None
         
-        # SECURE: Parameterized query prevents SQL injection
-        query = text("""
-            SELECT *
-            FROM public.active_sprint_summary_by_team
-            WHERE team_name = :team_name
-        """)
+        # Build team list based on parameters
+        if team_name is not None:
+            if isGroup:
+                # Validate as group name
+                validated_group_name = validate_group_name(team_name)
+                validated_name = validated_group_name
+                
+                # Get all teams under this group
+                get_teams_query = text("""
+                    SELECT t.team_name
+                    FROM public.teams t
+                    JOIN public.team_groups g ON t.group_key = g.group_key
+                    WHERE g.group_name = :group_name
+                    ORDER BY t.team_name
+                """)
+                
+                logger.info(f"Fetching teams for group: {validated_group_name}")
+                teams_result = conn.execute(get_teams_query, {"group_name": validated_group_name})
+                team_rows = teams_result.fetchall()
+                
+                if not team_rows:
+                    # Group doesn't exist or has no teams
+                    raise HTTPException(
+                        status_code=404,
+                        detail=f"Group '{validated_group_name}' not found or has no teams"
+                    )
+                
+                team_names_list = [row[0] for row in team_rows]
+                filter_description = f"group '{validated_group_name}' ({len(team_names_list)} teams)"
+                logger.info(f"Found {len(team_names_list)} teams in group '{validated_group_name}': {team_names_list}")
+            else:
+                # Validate as team name
+                validated_team_name = validate_team_name(team_name)
+                validated_name = validated_team_name
+                team_names_list = [validated_team_name]
+                filter_description = f"team '{validated_team_name}'"
         
-        logger.info(f"Executing query to get active sprint summary for team: {validated_team_name}")
+        # Build query with IN clause or no filter
+        if team_names_list:
+            # Build parameterized IN clause
+            placeholders = ", ".join([f":team_name_{i}" for i in range(len(team_names_list))])
+            params = {f"team_name_{i}": name for i, name in enumerate(team_names_list)}
+            
+            query = text(f"""
+                SELECT *
+                FROM public.active_sprint_summary_by_team
+                WHERE team_name IN ({placeholders})
+            """)
+            
+            logger.info(f"Executing query to get active sprint summary for {filter_description}")
+            result = conn.execute(query, params)
+        else:
+            # No filter - return all summaries
+            query = text("""
+                SELECT *
+                FROM public.active_sprint_summary_by_team
+            """)
+            
+            logger.info("Executing query to get active sprint summary for all teams")
+            result = conn.execute(query)
         
-        result = conn.execute(query, {"team_name": validated_team_name})
         rows = result.fetchall()
         
         # Convert rows to list of dictionaries - return all columns from view
@@ -144,21 +218,36 @@ async def get_active_sprint_summary_by_team(
             
             summaries.append(summary_dict)
         
+        # Build response message
+        if filter_description:
+            message = f"Retrieved active sprint summary for {filter_description}"
+        else:
+            message = f"Retrieved active sprint summary for all teams"
+        
+        response_data = {
+            "summaries": summaries,
+            "count": len(summaries)
+        }
+        
+        # Add metadata based on what was filtered
+        if validated_name:
+            if isGroup:
+                response_data["group_name"] = validated_name
+                response_data["teams_in_group"] = team_names_list
+            else:
+                response_data["team_name"] = validated_name
+        
         return {
             "success": True,
-            "data": {
-                "summaries": summaries,
-                "count": len(summaries),
-                "team_name": validated_team_name
-            },
-            "message": f"Retrieved active sprint summary for team '{validated_team_name}'"
+            "data": response_data,
+            "message": message
         }
     
     except HTTPException:
         # Re-raise HTTP exceptions (validation errors)
         raise
     except Exception as e:
-        logger.error(f"Error fetching active sprint summary for team {team_name}: {e}")
+        logger.error(f"Error fetching active sprint summary (team_name={team_name}, isGroup={isGroup}): {e}")
         raise HTTPException(
             status_code=500,
             detail=f"Failed to fetch active sprint summary: {str(e)}"
