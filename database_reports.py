@@ -437,7 +437,7 @@ def _fetch_team_closed_sprints(filters: Dict[str, Any], conn: Connection) -> Rep
 
     # Only fetch sprint data if team is selected
     if team_name:
-        closed_sprints = get_closed_sprints_data_db(team_name, months, conn)
+        closed_sprints = get_closed_sprints_data_db([team_name], months, conn)
     else:
         closed_sprints = []
 
