@@ -144,6 +144,7 @@ async def get_report_instance(
     detail_year_month: Optional[str] = Query(None), # New filter
     detail_months: Optional[int] = Query(None), # New filter
     plan_grace_period: Optional[int] = Query(None), # New filter
+    isGroup: Optional[bool] = Query(None), # New filter for group support
 ):
     """
     Resolve a specific report by ID, merging defaults with provided filters.
@@ -155,9 +156,16 @@ async def get_report_instance(
     default_filters = definition.get("default_filters") or {}
     override_filters: Dict[str, Any] = {}
 
+    # Handle boolean parameter directly (FastAPI converts it)
+    if isGroup is not None:
+        override_filters["isGroup"] = isGroup
+
     # Gather all values for each query parameter
     raw_params: Dict[str, List[str]] = {}
     for key, value in request.query_params.multi_items():
+        # Skip isGroup as it's already handled above
+        if key.lower() == "isgroup":
+            continue
         raw_params.setdefault(key, []).append(value)
 
     # Normalize multi-value parameters and aliases

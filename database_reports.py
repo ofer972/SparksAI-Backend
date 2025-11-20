@@ -12,6 +12,7 @@ from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from sqlalchemy import text
 from sqlalchemy.engine import Connection
+from fastapi import HTTPException
 
 import config
 from database_pi import (
@@ -417,10 +418,17 @@ def _parse_list(value: Any) -> List[str]:
 
 
 def _fetch_team_closed_sprints(filters: Dict[str, Any], conn: Connection) -> ReportDataResult:
+    from database_team_metrics import resolve_team_names_from_filter
+    
     team_name = filters.get("team_name")
+    is_group = filters.get("isGroup", False)
     months_value = filters.get("months")
     months = _parse_int(months_value, default=3)
     if months <= 0:
+        months = 3
+
+    # Validate months parameter
+    if months not in [1, 2, 3, 4, 6, 9]:
         months = 3
 
     # Fetch available teams (always)
@@ -435,16 +443,17 @@ def _fetch_team_closed_sprints(filters: Dict[str, Any], conn: Connection) -> Rep
     teams_rows = conn.execute(teams_query).fetchall()
     available_teams = [row[0] for row in teams_rows if row[0]]
 
-    # Only fetch sprint data if team is selected
-    if team_name:
-        closed_sprints = get_closed_sprints_data_db([team_name], months, conn)
-    else:
-        closed_sprints = []
+    # Resolve team names using shared helper function
+    team_names_list = resolve_team_names_from_filter(team_name, is_group, conn)
+
+    # Fetch closed sprints (supports None for all teams, or list of team names)
+    closed_sprints = get_closed_sprints_data_db(team_names_list, months, conn)
 
     return {
         "data": closed_sprints,
         "meta": {
             "team_name": team_name,
+            "isGroup": is_group,
             "months": months,
             "count": len(closed_sprints),
             "available_teams": available_teams,
@@ -1252,28 +1261,37 @@ def _fetch_release_predictability(filters: Dict[str, Any], conn: Connection) -> 
 
 
 def _fetch_sprint_predictability(filters: Dict[str, Any], conn: Connection) -> ReportDataResult:
+    from database_team_metrics import resolve_team_names_from_filter
+    
     months = _parse_int(filters.get("months"), default=3)
     if months not in (1, 2, 3, 4, 6, 9):
         months = 3
 
-    team_name = (filters.get("team_name") or filters.get("team") or "").strip() or None
+    team_name = filters.get("team_name") or filters.get("team")
+    is_group = filters.get("isGroup", False)
 
-    if team_name:
+    # Resolve team names using shared helper function
+    team_names_list = resolve_team_names_from_filter(team_name, is_group, conn)
+
+    # Build query and parameters
+    if team_names_list:
+        # Pass array of team names to function
+        params = {"months": months, "team_names": team_names_list}
         query = text(
             """
             SELECT *
-            FROM public.get_sprint_predictability_metrics_with_issues(:months, :team_name)
+            FROM public.get_sprint_predictability_metrics_with_issues(:months, :team_names::text[])
             """
         )
-        params = {"months": months, "team_name": team_name}
     else:
+        # Pass NULL for all teams
+        params = {"months": months}
         query = text(
             """
             SELECT *
             FROM public.get_sprint_predictability_metrics_with_issues(:months, NULL)
             """
         )
-        params = {"months": months}
 
     rows = conn.execute(query, params).fetchall()
     data: List[Dict[str, Any]] = []
@@ -1296,9 +1314,14 @@ def _fetch_sprint_predictability(filters: Dict[str, Any], conn: Connection) -> R
     meta: Dict[str, Any] = {
         "months": months,
         "count": len(data),
+        "isGroup": is_group,
     }
     if team_name:
-        meta["team_name"] = team_name
+        if is_group:
+            meta["group_name"] = team_name
+            meta["teams_in_group"] = team_names_list
+        else:
+            meta["team_name"] = team_name
 
     return {
         "data": data,

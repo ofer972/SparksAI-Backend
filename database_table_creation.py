@@ -483,13 +483,16 @@ DEFAULT_REPORT_DEFINITIONS = [
         "data_source": "sprint_predictability",
         "description": "Provides sprint predictability metrics, cycle time, and completion breakdown.",
         "default_filters": {
-            "months": 3
+            "months": 3,
+            "team_name": None
         },
         "meta_schema": {
             "required_filters": [],
-            "optional_filters": ["months"],
+            "optional_filters": ["months", "team_name", "isGroup"],
             "parameters": {
-                "months": {"type": "integer", "description": "Number of months to look back"}
+                "months": {"type": "integer", "description": "Number of months to look back"},
+                "team_name": {"type": "string", "description": "Team identifier or group name (if isGroup=true)"},
+                "isGroup": {"type": "boolean", "description": "If true, team_name is treated as a group name"}
             },
             "allowed_views": ["team-dashboard", "pi-dashboard"]
         }

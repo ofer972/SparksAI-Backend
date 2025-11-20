@@ -321,6 +321,75 @@ def get_sprints_with_total_issues_db(team_name: str, sprint_status: str = None, 
         raise e
 
 
+def resolve_team_names_from_filter(
+    team_name: Optional[str], 
+    is_group: bool, 
+    conn: Connection
+) -> Optional[List[str]]:
+    """
+    Resolve team names from a filter (single team, group, or None for all teams).
+    
+    Args:
+        team_name: Optional team name or group name (if is_group=True)
+        is_group: If true, team_name is treated as a group name
+        conn: Database connection
+    
+    Returns:
+        List of team names, or None if no filter (meaning all teams)
+    
+    Raises:
+        HTTPException: If validation fails or group not found
+    """
+    from fastapi import HTTPException
+    from sqlalchemy import text
+    import re
+    
+    if not team_name:
+        return None  # None means all teams
+    
+    if is_group:
+        # Validate group name
+        if not isinstance(team_name, str):
+            raise HTTPException(status_code=400, detail="Group name is required and must be a string")
+        
+        sanitized_group_name = re.sub(r'[^a-zA-Z0-9\s\-_]', '', team_name.strip())
+        
+        if not sanitized_group_name:
+            raise HTTPException(status_code=400, detail="Group name contains invalid characters")
+        
+        # Get all teams under this group
+        get_teams_query = text("""
+            SELECT t.team_name
+            FROM public.teams t
+            JOIN public.team_groups g ON t.group_key = g.group_key
+            WHERE g.group_name = :group_name
+            ORDER BY t.team_name
+        """)
+        
+        teams_result = conn.execute(get_teams_query, {"group_name": sanitized_group_name})
+        team_rows = teams_result.fetchall()
+        
+        if not team_rows:
+            raise HTTPException(
+                status_code=404,
+                detail=f"Group '{sanitized_group_name}' not found or has no teams"
+            )
+        
+        team_names_list = [row[0] for row in team_rows]
+        return team_names_list
+    else:
+        # Single team - validate it
+        if not isinstance(team_name, str):
+            raise HTTPException(status_code=400, detail="Team name is required and must be a string")
+        
+        sanitized = re.sub(r'[^a-zA-Z0-9\s\-_]', '', team_name.strip())
+        
+        if not sanitized:
+            raise HTTPException(status_code=400, detail="Team name contains invalid characters")
+        
+        return [sanitized]
+
+
 def get_closed_sprints_data_db(team_names: Optional[List[str]], months: int = 3, conn: Connection = None) -> List[Dict[str, Any]]:
     """
     Get closed sprints data for specific team(s) or all teams with detailed metrics.
