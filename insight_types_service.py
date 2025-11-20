@@ -236,11 +236,18 @@ async def get_insight_type(
 
 
 # Pydantic models for request body
+class CronConfig(BaseModel):
+    day_of_week: Optional[str] = None
+    hour: Optional[int] = None
+    minute: Optional[int] = None
+
+
 class InsightTypeCreateRequest(BaseModel):
     insight_type: str
     insight_description: Optional[str] = None
     insight_categories: List[str]  # Now a list instead of single string
     active: bool = True
+    cron_config: Optional[CronConfig] = None
 
 
 class InsightTypeUpdateRequest(BaseModel):
@@ -248,6 +255,7 @@ class InsightTypeUpdateRequest(BaseModel):
     insight_description: Optional[str] = None
     insight_categories: Optional[List[str]] = None  # Now a list instead of single string
     active: Optional[bool] = None
+    cron_config: Optional[CronConfig] = None
 
 
 @insight_types_router.post("/insight-types")
@@ -281,6 +289,9 @@ async def create_insight_type_endpoint(
         
         if request.insight_description is not None:
             data["insight_description"] = request.insight_description
+        
+        if request.cron_config is not None:
+            data["cron_config"] = request.cron_config.model_dump(exclude_unset=True)
         
         # Create insight type using database function
         # JSONB is already parsed by create_insight_type function
@@ -337,6 +348,9 @@ async def update_insight_type_full(
         
         if request.insight_description is not None:
             updates["insight_description"] = request.insight_description
+        
+        if request.cron_config is not None:
+            updates["cron_config"] = request.cron_config.model_dump(exclude_unset=True)
         
         # Update insight type using database function
         # JSONB is already parsed by update_insight_type_by_id function
@@ -402,6 +416,11 @@ async def update_insight_type_partial(
         if "insight_description" in updates and updates["insight_description"] is not None:
             if not isinstance(updates["insight_description"], str):
                 raise HTTPException(status_code=400, detail="Insight description must be a string")
+        
+        if "cron_config" in updates and updates["cron_config"] is not None:
+            # Convert Pydantic model to dict if it's a CronConfig instance
+            if isinstance(updates["cron_config"], CronConfig):
+                updates["cron_config"] = updates["cron_config"].model_dump(exclude_unset=True)
         
         # Update insight type using database function
         # JSONB is already parsed by update_insight_type_by_id function
