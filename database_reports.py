@@ -377,13 +377,13 @@ def _fetch_pi_burndown(filters: Dict[str, Any], conn: Connection) -> ReportDataR
     # Only fetch burndown data if a PI is selected
     burndown_data = []
     if pi_name:
-    burndown_data = fetch_pi_burndown_data(
-        pi_name=pi_name,
-        project_keys=project,
-        issue_type=issue_type,
-        team_names=team,
-        conn=conn,
-    )
+        burndown_data = fetch_pi_burndown_data(
+            pi_name=pi_name,
+            project_keys=project,
+            issue_type=issue_type,
+            team_names=team,
+            conn=conn,
+        )
 
     return {
         "data": burndown_data,
@@ -514,7 +514,7 @@ def _fetch_pi_predictability(filters: Dict[str, Any], conn: Connection) -> Repor
 
     # Only fetch predictability data if PIs are selected
     if pi_list:
-    predictability_data = fetch_pi_predictability_data(pi_list, team_name=team_name, conn=conn)
+        predictability_data = fetch_pi_predictability_data(pi_list, team_name=team_name, conn=conn)
     else:
         predictability_data = []
 
@@ -548,7 +548,7 @@ def _fetch_epic_scope_changes(filters: Dict[str, Any], conn: Connection) -> Repo
 
     # Only fetch scope data if quarters are selected
     if quarters:
-    scope_data = fetch_scope_changes_data(quarters, conn=conn)
+        scope_data = fetch_scope_changes_data(quarters, conn=conn)
     else:
         scope_data = []
 
@@ -1473,5 +1473,4 @@ _REPORT_DATA_FETCHERS: Dict[str, ReportDataFetcher] = {
     "sprint_predictability": _fetch_sprint_predictability,
     "pi_metrics_summary": _fetch_pi_metrics_summary,
 }
-
 
