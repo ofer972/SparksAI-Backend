@@ -433,7 +433,7 @@ async def get_sprint_predictability(
             # Pass array of team names to function
             params = {"months": months, "team_names": team_names_list}
             query = text("""
-                SELECT * FROM public.get_sprint_predictability_metrics_with_issues(:months, :team_names::text[])
+                SELECT * FROM public.get_sprint_predictability_metrics_with_issues(:months, CAST(:team_names AS text[]))
             """)
             if isGroup:
                 logger.info(f"Executing query to get sprint predictability metrics: months={months}, group='{team_name}' ({len(team_names_list)} teams)")

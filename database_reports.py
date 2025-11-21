@@ -1280,7 +1280,7 @@ def _fetch_sprint_predictability(filters: Dict[str, Any], conn: Connection) -> R
         query = text(
             """
             SELECT *
-            FROM public.get_sprint_predictability_metrics_with_issues(:months, :team_names::text[])
+            FROM public.get_sprint_predictability_metrics_with_issues(:months, CAST(:team_names AS text[]))
             """
         )
     else:
