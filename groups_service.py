@@ -41,7 +41,7 @@ async def get_all_groups(conn: Connection = Depends(get_db_connection)):
                 group_key AS id,
                 group_name AS name,
                 parent_group_key AS parent_id
-            FROM public.team_groups
+            FROM public.groups
             ORDER BY group_name
         """)
         
@@ -95,13 +95,14 @@ async def get_teams_in_group(
         
         query = text("""
             SELECT 
-                team_key,
-                team_name,
-                number_of_team_members,
-                group_key
-            FROM public.teams
-            WHERE group_key = :group_key
-            ORDER BY team_name
+                t.team_key,
+                t.team_name,
+                t.number_of_team_members,
+                tg.group_id AS group_key
+            FROM public.teams t
+            INNER JOIN public.team_groups tg ON t.team_key = tg.team_id
+            WHERE tg.group_id = :group_key
+            ORDER BY t.team_name
         """)
         
         logger.info(f"Executing query to get teams for group {validated_group_id}")
@@ -171,7 +172,7 @@ async def create_group(
             parent_key = validate_id(request.parent_group_key, "Parent group key")
             # Verify parent group exists
             check_query = text("""
-                SELECT group_key FROM public.team_groups WHERE group_key = :parent_key
+                SELECT group_key FROM public.groups WHERE group_key = :parent_key
             """)
             check_result = conn.execute(check_query, {"parent_key": parent_key})
             if not check_result.fetchone():
@@ -181,7 +182,7 @@ async def create_group(
                 )
         
         query = text("""
-            INSERT INTO public.team_groups (group_name, parent_group_key)
+            INSERT INTO public.groups (group_name, parent_group_key)
             VALUES (:group_name, :parent_group_key)
             RETURNING group_key, group_name, parent_group_key
         """)
@@ -241,7 +242,7 @@ async def update_group(
         
         # Check if group exists
         check_query = text("""
-            SELECT group_key FROM public.team_groups WHERE group_key = :group_key
+            SELECT group_key FROM public.groups WHERE group_key = :group_key
         """)
         check_result = conn.execute(check_query, {"group_key": validated_group_id})
         if not check_result.fetchone():
@@ -262,7 +263,7 @@ async def update_group(
                 )
             # Verify parent group exists
             check_query = text("""
-                SELECT group_key FROM public.team_groups WHERE group_key = :parent_key
+                SELECT group_key FROM public.groups WHERE group_key = :parent_key
             """)
             check_result = conn.execute(check_query, {"parent_key": parent_key})
             if not check_result.fetchone():
@@ -291,7 +292,7 @@ async def update_group(
         
         set_clause = ", ".join(updates)
         query = text(f"""
-            UPDATE public.team_groups
+            UPDATE public.groups
             SET {set_clause}
             WHERE group_key = :group_key
             RETURNING group_key, group_name, parent_group_key
@@ -353,7 +354,7 @@ async def delete_group(
         
         # Check if group exists
         check_query = text("""
-            SELECT group_key FROM public.team_groups WHERE group_key = :group_key
+            SELECT group_key FROM public.groups WHERE group_key = :group_key
         """)
         check_result = conn.execute(check_query, {"group_key": validated_group_id})
         if not check_result.fetchone():
@@ -362,17 +363,17 @@ async def delete_group(
                 detail=f"Group with ID {validated_group_id} not found"
             )
         
-        # First, move all teams in this group to parent=null
-        update_teams_query = text("""
-            UPDATE public.teams
-            SET group_key = NULL
-            WHERE group_key = :group_key
+        # First, remove all team-group associations for this group
+        # (CASCADE will handle this, but we do it explicitly for clarity)
+        delete_associations_query = text("""
+            DELETE FROM public.team_groups
+            WHERE group_id = :group_key
         """)
-        conn.execute(update_teams_query, {"group_key": validated_group_id})
+        conn.execute(delete_associations_query, {"group_key": validated_group_id})
         
         # Then delete the group
         delete_query = text("""
-            DELETE FROM public.team_groups
+            DELETE FROM public.groups
             WHERE group_key = :group_key
         """)
         result = conn.execute(delete_query, {"group_key": validated_group_id})

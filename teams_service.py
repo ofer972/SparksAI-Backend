@@ -143,7 +143,7 @@ async def get_all_teams(
         
         if group_key is not None:
             validated_group_key = validate_id(group_key, "Group key")
-            where_conditions.append("t.group_key = :group_key")
+            where_conditions.append("tg.group_id = :group_key")
             params["group_key"] = validated_group_key
         
         if search:
@@ -156,17 +156,21 @@ async def get_all_teams(
         
         where_clause = " AND ".join(where_conditions) if where_conditions else "1=1"
         
+        # Modified query to support many-to-many relationships
+        # Note: A team can belong to multiple groups, so we aggregate group info
         query = text(f"""
             SELECT 
                 t.team_key,
                 t.team_name,
                 t.number_of_team_members,
-                t.group_key,
-                g.group_name,
+                COALESCE(array_agg(DISTINCT tg.group_id) FILTER (WHERE tg.group_id IS NOT NULL), ARRAY[]::INT[]) AS group_keys,
+                COALESCE(array_agg(DISTINCT g.group_name) FILTER (WHERE g.group_name IS NOT NULL), ARRAY[]::TEXT[]) AS group_names,
                 t.ai_insight
             FROM public.teams t
-            LEFT JOIN public.team_groups g ON t.group_key = g.group_key
+            LEFT JOIN public.team_groups tg ON t.team_key = tg.team_id
+            LEFT JOIN public.groups g ON tg.group_id = g.group_key
             WHERE {where_clause}
+            GROUP BY t.team_key, t.team_name, t.number_of_team_members, t.ai_insight
             ORDER BY t.team_name
             LIMIT :limit
         """)
@@ -183,8 +187,8 @@ async def get_all_teams(
                 "team_key": row[0],
                 "team_name": row[1],
                 "number_of_team_members": row[2],
-                "group_key": row[3],
-                "group_name": row[4],
+                "group_keys": row[3] if row[3] else [],  # Array of group IDs
+                "group_names": row[4] if row[4] else [],  # Array of group names
                 "ai_insight": row[5]
             })
         
@@ -210,13 +214,13 @@ async def get_all_teams(
 class TeamCreateRequest(BaseModel):
     team_name: str
     number_of_team_members: int = 0
-    group_key: Optional[int] = None
+    group_keys: Optional[list[int]] = None  # Changed from group_key to group_keys (list)
 
 
 class TeamUpdateRequest(BaseModel):
     team_name: Optional[str] = None
     number_of_team_members: Optional[int] = None
-    group_key: Optional[int] = None
+    group_keys: Optional[list[int]] = None  # Changed from group_key to group_keys (list)
 
 
 @teams_router.post("/teams")
@@ -234,20 +238,22 @@ async def create_team(
         JSON response with created team
     """
     try:
-        # Validate group_key if provided
-        group_key = None
-        if request.group_key is not None:
-            group_key = validate_id(request.group_key, "Group key")
-            # Verify group exists
-            check_query = text("""
-                SELECT group_key FROM public.team_groups WHERE group_key = :group_key
-            """)
-            check_result = conn.execute(check_query, {"group_key": group_key})
-            if not check_result.fetchone():
-                raise HTTPException(
-                    status_code=404,
-                    detail=f"Group with ID {group_key} not found"
-                )
+        # Validate group_keys if provided
+        group_keys = []
+        if request.group_keys:
+            for gk in request.group_keys:
+                validated_gk = validate_id(gk, "Group key")
+                # Verify group exists
+                check_query = text("""
+                    SELECT group_key FROM public.groups WHERE group_key = :group_key
+                """)
+                check_result = conn.execute(check_query, {"group_key": validated_gk})
+                if not check_result.fetchone():
+                    raise HTTPException(
+                        status_code=404,
+                        detail=f"Group with ID {validated_gk} not found"
+                    )
+                group_keys.append(validated_gk)
         
         # Validate number_of_team_members
         if request.number_of_team_members < 0:
@@ -256,27 +262,39 @@ async def create_team(
                 detail="number_of_team_members must be 0 or greater"
             )
         
+        # Create team without group_key column
         query = text("""
-            INSERT INTO public.teams (team_name, number_of_team_members, group_key)
-            VALUES (:team_name, :number_of_team_members, :group_key)
-            RETURNING team_key, team_name, number_of_team_members, group_key
+            INSERT INTO public.teams (team_name, number_of_team_members)
+            VALUES (:team_name, :number_of_team_members)
+            RETURNING team_key, team_name, number_of_team_members
         """)
         
-        logger.info(f"Creating team: {request.team_name}, members: {request.number_of_team_members}, group: {group_key}")
+        logger.info(f"Creating team: {request.team_name}, members: {request.number_of_team_members}, groups: {group_keys}")
         
         result = conn.execute(query, {
             "team_name": request.team_name,
-            "number_of_team_members": request.number_of_team_members,
-            "group_key": group_key
+            "number_of_team_members": request.number_of_team_members
         })
         row = result.fetchone()
+        team_key = row[0]
+        
+        # Insert team-group associations
+        if group_keys:
+            for group_id in group_keys:
+                insert_assoc_query = text("""
+                    INSERT INTO public.team_groups (team_id, group_id)
+                    VALUES (:team_id, :group_id)
+                    ON CONFLICT DO NOTHING
+                """)
+                conn.execute(insert_assoc_query, {"team_id": team_key, "group_id": group_id})
+        
         conn.commit()
         
         team = {
             "team_key": row[0],
             "team_name": row[1],
             "number_of_team_members": row[2],
-            "group_key": row[3]
+            "group_keys": group_keys
         }
         
         return {
@@ -327,20 +345,23 @@ async def update_team(
                 detail=f"Team with ID {validated_team_id} not found"
             )
         
-        # Validate group_key if provided
-        group_key = request.group_key
-        if group_key is not None:
-            group_key = validate_id(group_key, "Group key")
-            # Verify group exists
-            check_query = text("""
-                SELECT group_key FROM public.team_groups WHERE group_key = :group_key
-            """)
-            check_result = conn.execute(check_query, {"group_key": group_key})
-            if not check_result.fetchone():
-                raise HTTPException(
-                    status_code=404,
-                    detail=f"Group with ID {group_key} not found"
-                )
+        # Validate group_keys if provided
+        group_keys = None
+        if request.group_keys is not None:
+            group_keys = []
+            for gk in request.group_keys:
+                validated_gk = validate_id(gk, "Group key")
+                # Verify group exists
+                check_query = text("""
+                    SELECT group_key FROM public.groups WHERE group_key = :group_key
+                """)
+                check_result = conn.execute(check_query, {"group_key": validated_gk})
+                if not check_result.fetchone():
+                    raise HTTPException(
+                        status_code=404,
+                        detail=f"Group with ID {validated_gk} not found"
+                    )
+                group_keys.append(validated_gk)
         
         # Validate number_of_team_members if provided
         if request.number_of_team_members is not None and request.number_of_team_members < 0:
@@ -349,7 +370,7 @@ async def update_team(
                 detail="number_of_team_members must be 0 or greater"
             )
         
-        # Build dynamic UPDATE query
+        # Build dynamic UPDATE query (no group_key column anymore)
         updates = []
         params = {"team_key": validated_team_id}
         
@@ -361,41 +382,76 @@ async def update_team(
             updates.append("number_of_team_members = :number_of_team_members")
             params["number_of_team_members"] = request.number_of_team_members
         
-        if request.group_key is not None:
-            updates.append("group_key = :group_key")
-            params["group_key"] = group_key
-        
-        if not updates:
+        if not updates and group_keys is None:
             raise HTTPException(
                 status_code=400,
                 detail="At least one field must be provided for update"
             )
         
-        set_clause = ", ".join(updates)
-        query = text(f"""
-            UPDATE public.teams
-            SET {set_clause}
-            WHERE team_key = :team_key
-            RETURNING team_key, team_name, number_of_team_members, group_key
-        """)
+        # Update team basic info if there are updates
+        if updates:
+            set_clause = ", ".join(updates)
+            query = text(f"""
+                UPDATE public.teams
+                SET {set_clause}
+                WHERE team_key = :team_key
+                RETURNING team_key, team_name, number_of_team_members
+            """)
+            
+            logger.info(f"Updating team {validated_team_id}")
+            
+            result = conn.execute(query, params)
+            row = result.fetchone()
+            
+            if not row:
+                raise HTTPException(
+                    status_code=404,
+                    detail=f"Team with ID {validated_team_id} not found"
+                )
+        else:
+            # Just fetch current team data
+            query = text("""
+                SELECT team_key, team_name, number_of_team_members
+                FROM public.teams
+                WHERE team_key = :team_key
+            """)
+            result = conn.execute(query, {"team_key": validated_team_id})
+            row = result.fetchone()
         
-        logger.info(f"Updating team {validated_team_id}")
+        # Update group associations if provided
+        if group_keys is not None:
+            # Delete all existing associations
+            delete_assoc_query = text("""
+                DELETE FROM public.team_groups WHERE team_id = :team_id
+            """)
+            conn.execute(delete_assoc_query, {"team_id": validated_team_id})
+            
+            # Insert new associations
+            for group_id in group_keys:
+                insert_assoc_query = text("""
+                    INSERT INTO public.team_groups (team_id, group_id)
+                    VALUES (:team_id, :group_id)
+                    ON CONFLICT DO NOTHING
+                """)
+                conn.execute(insert_assoc_query, {"team_id": validated_team_id, "group_id": group_id})
         
-        result = conn.execute(query, params)
-        row = result.fetchone()
         conn.commit()
         
-        if not row:
-            raise HTTPException(
-                status_code=404,
-                detail=f"Team with ID {validated_team_id} not found"
-            )
+        # Fetch current group associations
+        fetch_groups_query = text("""
+            SELECT array_agg(group_id) as group_keys
+            FROM public.team_groups
+            WHERE team_id = :team_id
+        """)
+        groups_result = conn.execute(fetch_groups_query, {"team_id": validated_team_id})
+        groups_row = groups_result.fetchone()
+        current_group_keys = groups_row[0] if groups_row and groups_row[0] else []
         
         team = {
             "team_key": row[0],
             "team_name": row[1],
             "number_of_team_members": row[2],
-            "group_key": row[3]
+            "group_keys": current_group_keys
         }
         
         return {
@@ -500,7 +556,7 @@ async def batch_assign_teams_to_group(
         
         # Verify group exists
         check_group_query = text("""
-            SELECT group_key FROM public.team_groups WHERE group_key = :group_key
+            SELECT group_key FROM public.groups WHERE group_key = :group_key
         """)
         check_result = conn.execute(check_group_query, {"group_key": validated_group_id})
         if not check_result.fetchone():
@@ -509,25 +565,30 @@ async def batch_assign_teams_to_group(
                 detail=f"Group with ID {validated_group_id} not found"
             )
         
-        # Update all teams - use IN clause with tuple
-        # Build placeholders for IN clause
-        placeholders = ", ".join([f":team_key_{i}" for i in range(len(validated_team_ids))])
-        params = {"group_key": validated_group_id}
-        for i, team_id in enumerate(validated_team_ids):
-            params[f"team_key_{i}"] = team_id
-        
-        query = text(f"""
-            UPDATE public.teams
-            SET group_key = :group_key
-            WHERE team_key IN ({placeholders})
-        """)
-        
+        # Insert team-group associations (many-to-many)
         logger.info(f"Batch assigning {len(validated_team_ids)} teams to group {validated_group_id}")
         
-        result = conn.execute(query, params)
-        conn.commit()
+        updated_count = 0
+        for team_id in validated_team_ids:
+            # Verify team exists
+            check_team_query = text("""
+                SELECT team_key FROM public.teams WHERE team_key = :team_key
+            """)
+            team_result = conn.execute(check_team_query, {"team_key": team_id})
+            if not team_result.fetchone():
+                logger.warning(f"Team {team_id} not found, skipping")
+                continue
+            
+            # Insert association
+            insert_query = text("""
+                INSERT INTO public.team_groups (team_id, group_id)
+                VALUES (:team_id, :group_id)
+                ON CONFLICT DO NOTHING
+            """)
+            conn.execute(insert_query, {"team_id": team_id, "group_id": validated_group_id})
+            updated_count += 1
         
-        updated_count = result.rowcount
+        conn.commit()
         
         return {
             "success": True,
@@ -555,29 +616,25 @@ async def remove_team_from_group(
     conn: Connection = Depends(get_db_connection)
 ):
     """
-    Remove team from group (set group_key to NULL).
+    Remove team from all groups.
     
     Args:
-        teamId: The ID of the team to remove from group
+        teamId: The ID of the team to remove from all groups
     
     Returns:
-        JSON response with updated team
+        JSON response with confirmation
     """
     try:
         validated_team_id = validate_id(teamId, "Team ID")
         
-        query = text("""
-            UPDATE public.teams
-            SET group_key = NULL
+        # Verify team exists
+        check_query = text("""
+            SELECT team_key, team_name, number_of_team_members
+            FROM public.teams
             WHERE team_key = :team_key
-            RETURNING team_key, team_name, number_of_team_members, group_key
         """)
-        
-        logger.info(f"Removing team {validated_team_id} from group")
-        
-        result = conn.execute(query, {"team_key": validated_team_id})
+        result = conn.execute(check_query, {"team_key": validated_team_id})
         row = result.fetchone()
-        conn.commit()
         
         if not row:
             raise HTTPException(
@@ -585,19 +642,33 @@ async def remove_team_from_group(
                 detail=f"Team with ID {validated_team_id} not found"
             )
         
+        # Delete all team-group associations
+        delete_query = text("""
+            DELETE FROM public.team_groups
+            WHERE team_id = :team_id
+        """)
+        
+        logger.info(f"Removing team {validated_team_id} from all groups")
+        
+        delete_result = conn.execute(delete_query, {"team_id": validated_team_id})
+        conn.commit()
+        
+        removed_count = delete_result.rowcount
+        
         team = {
             "team_key": row[0],
             "team_name": row[1],
             "number_of_team_members": row[2],
-            "group_key": row[3]
+            "group_keys": []
         }
         
         return {
             "success": True,
             "data": {
-                "team": team
+                "team": team,
+                "removed_associations": removed_count
             },
-            "message": f"Team {validated_team_id} removed from group"
+            "message": f"Team {validated_team_id} removed from {removed_count} group(s)"
         }
     
     except HTTPException:

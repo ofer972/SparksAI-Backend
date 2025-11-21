@@ -361,7 +361,8 @@ def resolve_team_names_from_filter(
         get_teams_query = text("""
             SELECT t.team_name
             FROM public.teams t
-            JOIN public.team_groups g ON t.group_key = g.group_key
+            JOIN public.team_groups tg ON t.team_key = tg.team_id
+            JOIN public.groups g ON tg.group_id = g.group_key
             WHERE g.group_name = :group_name
             ORDER BY t.team_name
         """)

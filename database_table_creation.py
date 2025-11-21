@@ -1291,7 +1291,13 @@ def add_input_sent_column_to_agent_jobs(engine=None) -> bool:
 
 
 def create_teams_and_team_groups_tables_if_not_exists(engine=None) -> bool:
-    """Create team_groups and teams tables if they don't exist"""
+    """
+    Create teams, groups, and team_groups tables if they don't exist.
+    This handles migration from old schema (team_groups as groups table) to new schema:
+    - groups: holds group hierarchy (renamed from team_groups)
+    - teams: holds team data (group_key FK removed)
+    - team_groups: many-to-many junction table between teams and groups
+    """
     # Skip if tables are already initialized (no need to check again)
     global _tables_initialized
     if _tables_initialized:
@@ -1302,21 +1308,32 @@ def create_teams_and_team_groups_tables_if_not_exists(engine=None) -> bool:
     if engine is None:
         engine = database_connection.get_db_engine()
     if engine is None:
-        print("Warning: Database engine not available, cannot create teams and team_groups tables")
+        print("Warning: Database engine not available, cannot create teams and groups tables")
         return False
     
     try:
         with engine.connect() as conn:
-            # Check if team_groups table exists
-            check_team_groups_sql = """
+            # Check if old team_groups table exists (needs migration)
+            check_old_team_groups_sql = """
             SELECT EXISTS (
                 SELECT FROM information_schema.tables 
                 WHERE table_schema = 'public' 
                 AND table_name = 'team_groups'
             );
             """
-            result = conn.execute(text(check_team_groups_sql))
-            team_groups_exists = result.scalar()
+            result = conn.execute(text(check_old_team_groups_sql))
+            old_team_groups_exists = result.scalar()
+            
+            # Check if new groups table exists
+            check_groups_sql = """
+            SELECT EXISTS (
+                SELECT FROM information_schema.tables 
+                WHERE table_schema = 'public' 
+                AND table_name = 'groups'
+            );
+            """
+            result = conn.execute(text(check_groups_sql))
+            groups_exists = result.scalar()
             
             # Check if teams table exists
             check_teams_sql = """
@@ -1329,49 +1346,136 @@ def create_teams_and_team_groups_tables_if_not_exists(engine=None) -> bool:
             result = conn.execute(text(check_teams_sql))
             teams_exists = result.scalar()
             
-            if not team_groups_exists or not teams_exists:
-                print("Creating team_groups and teams tables...")
-                create_tables_sql = """
+            # Migration path: if old team_groups exists but new groups doesn't, rename and migrate
+            if old_team_groups_exists and not groups_exists:
+                print("Migrating from old schema to new schema...")
+                migration_sql = """
+                -- Step 1: Rename team_groups to groups
+                ALTER TABLE IF EXISTS public.team_groups RENAME TO groups;
+                
+                -- Step 2: Update self-referencing FK constraint name
+                ALTER TABLE IF EXISTS public.groups 
+                DROP CONSTRAINT IF EXISTS team_groups_parent_group_key_fkey;
+                
+                ALTER TABLE IF EXISTS public.groups 
+                ADD CONSTRAINT groups_parent_group_key_fkey 
+                FOREIGN KEY (parent_group_key) REFERENCES public.groups(group_key);
+                
+                -- Step 3: Check if teams.group_key column exists and has data
+                DO $$
+                DECLARE
+                    has_group_key BOOLEAN;
+                BEGIN
+                    SELECT EXISTS (
+                        SELECT FROM information_schema.columns 
+                        WHERE table_schema = 'public' 
+                        AND table_name = 'teams' 
+                        AND column_name = 'group_key'
+                    ) INTO has_group_key;
+                    
+                    IF has_group_key THEN
+                        -- Create team_groups junction table
+                        CREATE TABLE IF NOT EXISTS public.team_groups (
+                            team_id INT NOT NULL,
+                            group_id INT NOT NULL,
+                            PRIMARY KEY (team_id, group_id),
+                            FOREIGN KEY (team_id) REFERENCES public.teams(team_key) ON DELETE CASCADE,
+                            FOREIGN KEY (group_id) REFERENCES public.groups(group_key) ON DELETE CASCADE
+                        );
+                        
+                        -- Migrate existing team-group relationships to junction table
+                        INSERT INTO public.team_groups (team_id, group_id)
+                        SELECT team_key, group_key
+                        FROM public.teams
+                        WHERE group_key IS NOT NULL
+                        ON CONFLICT DO NOTHING;
+                        
+                        -- Drop the old FK constraint and column
+                        ALTER TABLE public.teams DROP CONSTRAINT IF EXISTS teams_group_key_fkey;
+                        DROP INDEX IF EXISTS idx_teams_group_key;
+                        ALTER TABLE public.teams DROP COLUMN IF EXISTS group_key;
+                    END IF;
+                END $$;
+                """
+                conn.execute(text(migration_sql))
+                conn.commit()
+                print("Schema migration completed successfully")
+            
+            # Create tables if they don't exist (for new installations)
+            if not groups_exists:
+                print("Creating groups table...")
+                create_groups_sql = """
                 -- 1. Table for Group Hierarchy
-                CREATE TABLE IF NOT EXISTS public.team_groups (
+                CREATE TABLE IF NOT EXISTS public.groups (
                     -- Primary Key
                     group_key INT GENERATED BY DEFAULT AS IDENTITY PRIMARY KEY,
                     group_name TEXT NOT NULL UNIQUE,
                     
                     -- Self-referencing FK for hierarchy (NULL means it's a root group)
-                    parent_group_key INT REFERENCES public.team_groups(group_key)
+                    parent_group_key INT REFERENCES public.groups(group_key)
                 );
-
-                -- 2. Table for Teams (with one-to-many relationship)
+                """
+                conn.execute(text(create_groups_sql))
+                conn.commit()
+                print("groups table created successfully")
+            
+            if not teams_exists:
+                print("Creating teams table...")
+                create_teams_sql = """
+                -- 2. Table for Teams (without group FK - using many-to-many instead)
                 CREATE TABLE IF NOT EXISTS public.teams (
                     -- Primary Key
                     team_key INT GENERATED BY DEFAULT AS IDENTITY PRIMARY KEY,
                     team_name TEXT NOT NULL UNIQUE,
                     
-                    -- New field for team size
+                    -- Field for team size
                     number_of_team_members INT NOT NULL DEFAULT 0,
-                    
-                    -- Foreign Key linking the team to exactly one group
-                    group_key INT REFERENCES public.team_groups(group_key),
                     
                     -- AI Insight flag
                     ai_insight BOOLEAN DEFAULT FALSE
                 );
-
-                -- Index for fast lookup/joining on the foreign key
-                CREATE INDEX IF NOT EXISTS idx_teams_group_key
-                ON public.teams (group_key);
                 """
-                conn.execute(text(create_tables_sql))
+                conn.execute(text(create_teams_sql))
                 conn.commit()
-                print("team_groups and teams tables created successfully")
+                print("teams table created successfully")
+            
+            # Check if team_groups junction table exists
+            check_junction_sql = """
+            SELECT EXISTS (
+                SELECT FROM information_schema.tables 
+                WHERE table_schema = 'public' 
+                AND table_name = 'team_groups'
+            );
+            """
+            result = conn.execute(text(check_junction_sql))
+            junction_exists = result.scalar()
+            
+            if not junction_exists:
+                print("Creating team_groups junction table...")
+                create_junction_sql = """
+                -- 3. Many-to-Many Junction Table
+                CREATE TABLE IF NOT EXISTS public.team_groups (
+                    team_id INT NOT NULL,
+                    group_id INT NOT NULL,
+                    PRIMARY KEY (team_id, group_id),
+                    FOREIGN KEY (team_id) REFERENCES public.teams(team_key) ON DELETE CASCADE,
+                    FOREIGN KEY (group_id) REFERENCES public.groups(group_key) ON DELETE CASCADE
+                );
+                
+                -- Indexes for fast lookup
+                CREATE INDEX IF NOT EXISTS idx_team_groups_team_id ON public.team_groups(team_id);
+                CREATE INDEX IF NOT EXISTS idx_team_groups_group_id ON public.team_groups(group_id);
+                """
+                conn.execute(text(create_junction_sql))
+                conn.commit()
+                print("team_groups junction table created successfully")
             else:
-                print("team_groups and teams tables already exist")
+                print("team_groups junction table already exists")
             
             return True
             
     except Exception as e:
-        print(f"Error creating teams and team_groups tables: {e}")
+        print(f"Error creating/migrating teams and groups tables: {e}")
         traceback.print_exc()
         return False
 
