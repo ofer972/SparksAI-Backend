@@ -148,6 +148,23 @@ async def get_report_instance(
 ):
     """
     Resolve a specific report by ID, merging defaults with provided filters.
+    
+    Available report IDs (copy/paste for testing):
+    - team-sprint-burndown
+    - team-current-sprint-progress
+    - pi-burndown
+    - team-closed-sprints
+    - team-issues-trend
+    - pi-predictability
+    - epic-scope-changes
+    - issues-bugs-by-priority
+    - issues-bugs-by-team
+    - issues-flow-status-duration
+    - issues-epics-hierarchy
+    - issues-epic-dependencies
+    - issues-release-predictability
+    - sprint-predictability
+    - pi-metrics-summary
     """
     definition = get_report_definition_by_id(report_id, conn)
     if not definition:
