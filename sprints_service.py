@@ -397,23 +397,27 @@ async def get_sprint_issues_with_epic_for_llm(
 @sprints_router.get("/sprints/sprint-predictability")
 async def get_sprint_predictability(
     months: int = Query(3, description="Number of months to look back (1, 2, 3, 4, 6, 9)", ge=1, le=12),
-    team_name: Optional[str] = Query(None, description="Optional filter by team name"),
+    team_name: Optional[str] = Query(None, description="Optional team name or group name (if isGroup=true)"),
+    isGroup: bool = Query(False, description="If true, team_name is treated as a group name"),
     conn: Connection = Depends(get_db_connection)
 ):
     """
     Get sprint predictability metrics from the get_sprint_predictability_metrics_with_issues database function.
     
     Returns all columns from the function for sprints within the specified time period.
-    Optionally filters by team name if provided.
+    Optionally filters by team name(s) if provided. Supports filtering by single team or all teams in a group.
     
     Args:
         months: Number of months to look back (default: 3, valid: 1, 2, 3, 4, 6, 9)
-        team_name: Optional team name to filter by
+        team_name: Optional team name or group name (if isGroup=true). If not provided, returns all teams.
+        isGroup: If true, team_name is treated as a group name and returns metrics for all teams in that group
     
     Returns:
         JSON response with sprint predictability metrics (all columns)
     """
     try:
+        from database_team_metrics import resolve_team_names_from_filter
+        
         # Validate months parameter
         if months not in [1, 2, 3, 4, 6, 9]:
             raise HTTPException(
@@ -421,24 +425,27 @@ async def get_sprint_predictability(
                 detail="Months parameter must be one of: 1, 2, 3, 4, 6, 9"
             )
         
-        # Build parameters dict
-        params = {"months": months}
-        validated_team_name = None
+        # Resolve team names using shared helper function
+        team_names_list = resolve_team_names_from_filter(team_name, isGroup, conn)
         
-        # Validate and add team_name if provided
-        if team_name:
-            validated_team_name = validate_team_name(team_name)
-            params["team_name"] = validated_team_name
+        # Build query and parameters
+        if team_names_list:
+            # Pass array of team names to function
+            params = {"months": months, "team_names": team_names_list}
             query = text("""
-                SELECT * FROM public.get_sprint_predictability_metrics_with_issues(:months, :team_name)
+                SELECT * FROM public.get_sprint_predictability_metrics_with_issues(:months, CAST(:team_names AS text[]))
             """)
-            logger.info(f"Executing query to get sprint predictability metrics: months={months}, team_name={validated_team_name}")
+            if isGroup:
+                logger.info(f"Executing query to get sprint predictability metrics: months={months}, group='{team_name}' ({len(team_names_list)} teams)")
+            else:
+                logger.info(f"Executing query to get sprint predictability metrics: months={months}, team_name={team_names_list[0]}")
         else:
-            # Pass NULL for team_name when not provided
+            # Pass NULL for all teams
+            params = {"months": months}
             query = text("""
                 SELECT * FROM public.get_sprint_predictability_metrics_with_issues(:months, NULL)
             """)
-            logger.info(f"Executing query to get sprint predictability metrics: months={months}, team_name=NULL")
+            logger.info(f"Executing query to get sprint predictability metrics: months={months}, team_name=NULL (all teams)")
         
         result = conn.execute(query, params)
         rows = result.fetchall()
@@ -457,8 +464,11 @@ async def get_sprint_predictability(
         
         # Build response message
         message = f"Retrieved {len(predictability_data)} sprint predictability records (last {months} months)"
-        if validated_team_name:
-            message += f" for team '{validated_team_name}'"
+        if team_name:
+            if isGroup:
+                message += f" for all teams in group '{team_name}' ({len(team_names_list)} teams)"
+            else:
+                message += f" for team '{team_name}'"
         
         response_data = {
             "sprint_predictability": predictability_data,
@@ -466,9 +476,13 @@ async def get_sprint_predictability(
             "months": months
         }
         
-        # Add team_name to response if provided
-        if validated_team_name:
-            response_data["team_name"] = validated_team_name
+        # Add metadata based on what was filtered
+        if team_name:
+            if isGroup:
+                response_data["group_name"] = team_name
+                response_data["teams_in_group"] = team_names_list
+            else:
+                response_data["team_name"] = team_name
         
         return {
             "success": True,

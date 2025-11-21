@@ -144,9 +144,27 @@ async def get_report_instance(
     detail_year_month: Optional[str] = Query(None), # New filter
     detail_months: Optional[int] = Query(None), # New filter
     plan_grace_period: Optional[int] = Query(None), # New filter
+    isGroup: Optional[bool] = Query(None), # New filter for group support
 ):
     """
     Resolve a specific report by ID, merging defaults with provided filters.
+    
+    Available report IDs (copy/paste for testing):
+    - team-sprint-burndown
+    - team-current-sprint-progress
+    - pi-burndown
+    - team-closed-sprints
+    - team-issues-trend
+    - pi-predictability
+    - epic-scope-changes
+    - issues-bugs-by-priority
+    - issues-bugs-by-team
+    - issues-flow-status-duration
+    - issues-epics-hierarchy
+    - issues-epic-dependencies
+    - issues-release-predictability
+    - sprint-predictability
+    - pi-metrics-summary
     """
     definition = get_report_definition_by_id(report_id, conn)
     if not definition:
@@ -155,9 +173,16 @@ async def get_report_instance(
     default_filters = definition.get("default_filters") or {}
     override_filters: Dict[str, Any] = {}
 
+    # Handle boolean parameter directly (FastAPI converts it)
+    if isGroup is not None:
+        override_filters["isGroup"] = isGroup
+
     # Gather all values for each query parameter
     raw_params: Dict[str, List[str]] = {}
     for key, value in request.query_params.multi_items():
+        # Skip isGroup as it's already handled above
+        if key.lower() == "isgroup":
+            continue
         raw_params.setdefault(key, []).append(value)
 
     # Normalize multi-value parameters and aliases

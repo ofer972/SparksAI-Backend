@@ -6,6 +6,7 @@ Uses FastAPI dependencies for clean connection management and SQL injection prot
 """
 
 from fastapi import APIRouter, HTTPException, Depends, Query
+from sqlalchemy import text
 from sqlalchemy.engine import Connection
 from typing import Dict, Any, Optional
 from datetime import date, datetime
@@ -44,6 +45,25 @@ def validate_team_name(team_name: str) -> str:
     
     if len(sanitized) > 100:  # Reasonable length limit
         raise HTTPException(status_code=400, detail="Team name is too long (max 100 characters)")
+    
+    return sanitized
+
+def validate_group_name(group_name: str) -> str:
+    """
+    Validate and sanitize group name to prevent SQL injection.
+    Only allows alphanumeric characters, spaces, hyphens, and underscores.
+    """
+    if not group_name or not isinstance(group_name, str):
+        raise HTTPException(status_code=400, detail="Group name is required and must be a string")
+    
+    # Remove any potentially dangerous characters
+    sanitized = re.sub(r'[^a-zA-Z0-9\s\-_]', '', group_name.strip())
+    
+    if not sanitized:
+        raise HTTPException(status_code=400, detail="Group name contains invalid characters")
+    
+    if len(sanitized) > 100:  # Reasonable length limit
+        raise HTTPException(status_code=400, detail="Group name is too long (max 100 characters)")
     
     return sanitized
 
@@ -599,20 +619,23 @@ async def get_sprints(
 
 @team_metrics_router.get("/team-metrics/closed-sprints")
 async def get_closed_sprints(
-    team_name: str = Query(..., description="Team name to get closed sprints for"),
+    team_name: Optional[str] = Query(None, description="Team name or group name (if isGroup=true). If not provided, returns all closed sprints."),
     months: int = Query(3, description="Number of months to look back (1, 2, 3, 4, 6, 9)", ge=1, le=12),
+    isGroup: bool = Query(False, description="If true, team_name is treated as a group name"),
     conn: Connection = Depends(get_db_connection)
 ):
     """
-    Get closed sprints data for a specific team with detailed completion metrics.
+    Get closed sprints data for a specific team(s) or group with detailed completion metrics.
     
     This endpoint retrieves comprehensive sprint completion data including:
     - Sprint name, start/end dates, and sprint goals
     - Completion percentages and issue counts
     - Issues planned, added, done, and remaining
     
+    Results are grouped by team name.
+    
     Parameters:
-    - team_name: Name of the team (required)
+    - team_name: Optional team name or group name (if isGroup=true). If not provided, returns all closed sprints.
     - months: Number of months to look back (optional, default: 3)
       Valid values: 1, 2, 3, 4, 6, 9
       Examples:
@@ -620,13 +643,52 @@ async def get_closed_sprints(
         - months=3: Last 3 months (default)
         - months=6: Last 6 months
         - months=9: Last 9 months
+    - isGroup: If true, team_name is treated as a group name and returns closed sprints for all teams in that group
     
     Returns:
-        JSON response with closed sprints list and metadata
+        JSON response with closed sprints grouped by team and metadata
     """
     try:
-        # Validate inputs
-        validated_team_name = validate_team_name(team_name)
+        team_names_list = []
+        filter_description = None
+        validated_name = None
+        
+        # Build team list based on parameters
+        if team_name is not None:
+            if isGroup:
+                # Validate as group name
+                validated_group_name = validate_group_name(team_name)
+                validated_name = validated_group_name
+                
+                # Get all teams under this group
+                get_teams_query = text("""
+                    SELECT t.team_name
+                    FROM public.teams t
+                    JOIN public.team_groups g ON t.group_key = g.group_key
+                    WHERE g.group_name = :group_name
+                    ORDER BY t.team_name
+                """)
+                
+                logger.info(f"Fetching teams for group: {validated_group_name}")
+                teams_result = conn.execute(get_teams_query, {"group_name": validated_group_name})
+                team_rows = teams_result.fetchall()
+                
+                if not team_rows:
+                    # Group doesn't exist or has no teams
+                    raise HTTPException(
+                        status_code=404,
+                        detail=f"Group '{validated_group_name}' not found or has no teams"
+                    )
+                
+                team_names_list = [row[0] for row in team_rows]
+                filter_description = f"group '{validated_group_name}' ({len(team_names_list)} teams)"
+                logger.info(f"Found {len(team_names_list)} teams in group '{validated_group_name}': {team_names_list}")
+            else:
+                # Validate as team name
+                validated_team_name = validate_team_name(team_name)
+                validated_name = validated_team_name
+                team_names_list = [validated_team_name]
+                filter_description = f"team '{validated_team_name}'"
         
         # Validate months parameter
         if months not in [1, 2, 3, 4, 6, 9]:
@@ -635,24 +697,51 @@ async def get_closed_sprints(
                 detail="Months parameter must be one of: 1, 2, 3, 4, 6, 9"
             )
         
-        # Get closed sprints from database function
-        closed_sprints = get_closed_sprints_data_db(validated_team_name, months, conn)
+        # Get closed sprints from database function (supports multiple teams)
+        closed_sprints_all = get_closed_sprints_data_db(team_names_list if team_names_list else None, months, conn)
+        
+        # Group closed sprints by team_name
+        sprints_by_team = {}
+        for sprint in closed_sprints_all:
+            sprint_team = sprint.get('team_name')
+            if sprint_team:
+                if sprint_team not in sprints_by_team:
+                    sprints_by_team[sprint_team] = []
+                sprints_by_team[sprint_team].append(sprint)
+        
+        # Build response message
+        if filter_description:
+            message = f"Retrieved closed sprints for {filter_description} (last {months} months)"
+        else:
+            message = f"Retrieved closed sprints for all teams (last {months} months)"
+        
+        total_sprints = len(closed_sprints_all)
+        
+        response_data = {
+            "months": months,
+            "closed_sprints_by_team": sprints_by_team,
+            "total_sprints": total_sprints,
+            "teams_count": len(sprints_by_team)
+        }
+        
+        # Add metadata based on what was filtered
+        if validated_name:
+            if isGroup:
+                response_data["group_name"] = validated_name
+                response_data["teams_in_group"] = team_names_list
+            else:
+                response_data["team_name"] = validated_name
         
         return {
             "success": True,
-            "data": {
-                "team_name": validated_team_name,
-                "months": months,
-                "closed_sprints": closed_sprints,
-                "count": len(closed_sprints)
-            },
-            "message": f"Retrieved {len(closed_sprints)} closed sprints for team '{validated_team_name}' (last {months} months)"
+            "data": response_data,
+            "message": message
         }
     
     except HTTPException:
         raise # Re-raise FastAPI HTTPExceptions
     except Exception as e:
-        logger.error(f"Error fetching closed sprints for team {validated_team_name}: {e}")
+        logger.error(f"Error fetching closed sprints (team_name={team_name}, isGroup={isGroup}): {e}")
         raise HTTPException(
             status_code=500,
             detail=f"Failed to fetch closed sprints: {str(e)}"

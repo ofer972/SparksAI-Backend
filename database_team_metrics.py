@@ -8,7 +8,7 @@ Copied exact logic, SQL statements, and functions from JiraDashboard-NEWUI proje
 
 from sqlalchemy import text
 from sqlalchemy.engine import Connection
-from typing import Dict, Any, List
+from typing import Dict, Any, List, Optional
 from datetime import datetime, date, timedelta
 import logging
 import config
@@ -321,67 +321,166 @@ def get_sprints_with_total_issues_db(team_name: str, sprint_status: str = None, 
         raise e
 
 
-def get_closed_sprints_data_db(team_name: str, months: int = 3, conn: Connection = None) -> List[Dict[str, Any]]:
+def resolve_team_names_from_filter(
+    team_name: Optional[str], 
+    is_group: bool, 
+    conn: Connection
+) -> Optional[List[str]]:
     """
-    Get closed sprints data for a specific team with detailed metrics.
+    Resolve team names from a filter (single team, group, or None for all teams).
+    
+    Args:
+        team_name: Optional team name or group name (if is_group=True)
+        is_group: If true, team_name is treated as a group name
+        conn: Database connection
+    
+    Returns:
+        List of team names, or None if no filter (meaning all teams)
+    
+    Raises:
+        HTTPException: If validation fails or group not found
+    """
+    from fastapi import HTTPException
+    from sqlalchemy import text
+    import re
+    
+    if not team_name:
+        return None  # None means all teams
+    
+    if is_group:
+        # Validate group name
+        if not isinstance(team_name, str):
+            raise HTTPException(status_code=400, detail="Group name is required and must be a string")
+        
+        sanitized_group_name = re.sub(r'[^a-zA-Z0-9\s\-_]', '', team_name.strip())
+        
+        if not sanitized_group_name:
+            raise HTTPException(status_code=400, detail="Group name contains invalid characters")
+        
+        # Get all teams under this group
+        get_teams_query = text("""
+            SELECT t.team_name
+            FROM public.teams t
+            JOIN public.team_groups g ON t.group_key = g.group_key
+            WHERE g.group_name = :group_name
+            ORDER BY t.team_name
+        """)
+        
+        teams_result = conn.execute(get_teams_query, {"group_name": sanitized_group_name})
+        team_rows = teams_result.fetchall()
+        
+        if not team_rows:
+            raise HTTPException(
+                status_code=404,
+                detail=f"Group '{sanitized_group_name}' not found or has no teams"
+            )
+        
+        team_names_list = [row[0] for row in team_rows]
+        return team_names_list
+    else:
+        # Single team - validate it
+        if not isinstance(team_name, str):
+            raise HTTPException(status_code=400, detail="Team name is required and must be a string")
+        
+        sanitized = re.sub(r'[^a-zA-Z0-9\s\-_]', '', team_name.strip())
+        
+        if not sanitized:
+            raise HTTPException(status_code=400, detail="Team name contains invalid characters")
+        
+        return [sanitized]
+
+
+def get_closed_sprints_data_db(team_names: Optional[List[str]], months: int = 3, conn: Connection = None) -> List[Dict[str, Any]]:
+    """
+    Get closed sprints data for specific team(s) or all teams with detailed metrics.
     Uses the closed_sprint_summary view to get comprehensive sprint completion data.
     
     Args:
-        team_name (str): Team name to filter by
+        team_names (Optional[List[str]]): List of team names to filter by, or None for all teams
         months (int): Number of months to look back (1, 2, 3, 4, 6, 9)
         conn (Connection): Database connection from FastAPI dependency
     
     Returns:
-        list: List of closed sprint dictionaries with detailed metrics
+        list: List of closed sprint dictionaries with detailed metrics (includes team_name)
     """
     try:
         # Calculate start date based on months parameter
         start_date = datetime.now().date() - timedelta(days=months * 30)
         
-        # SECURE: Parameterized query prevents SQL injection
-        sql_query = """
-            SELECT 
-                sprint_name,
-                start_date,
-                end_date,
-                completed_percentage,
-                issues_at_start,
-                issues_added,
-                issues_done,
-                issues_remaining,
-                sprint_goal
-            FROM closed_sprint_summary
-            WHERE team_name = :team_name 
-            AND end_date >= :start_date
-            ORDER BY end_date DESC
-        """
-        
-        logger.info(f"Executing query to get closed sprints data for team: {team_name}")
-        logger.info(f"Parameters: team_name={team_name}, months={months}, start_date={start_date}")
-        
-        result = conn.execute(text(sql_query), {
-            "team_name": team_name,
-            "start_date": start_date.strftime("%Y-%m-%d")
-        })
+        # Build query with IN clause or no filter
+        if team_names:
+            # Build parameterized IN clause
+            placeholders = ", ".join([f":team_name_{i}" for i in range(len(team_names))])
+            params = {f"team_name_{i}": name for i, name in enumerate(team_names)}
+            params["start_date"] = start_date.strftime("%Y-%m-%d")
+            
+            sql_query = f"""
+                SELECT 
+                    team_name,
+                    sprint_name,
+                    start_date,
+                    end_date,
+                    completed_percentage,
+                    issues_at_start,
+                    issues_added,
+                    issues_done,
+                    issues_remaining,
+                    sprint_goal
+                FROM closed_sprint_summary
+                WHERE team_name IN ({placeholders})
+                AND end_date >= :start_date
+                ORDER BY team_name, end_date DESC
+            """
+            
+            logger.info(f"Executing query to get closed sprints data for teams: {team_names}")
+            logger.info(f"Parameters: team_names={team_names}, months={months}, start_date={start_date}")
+            
+            result = conn.execute(text(sql_query), params)
+        else:
+            # No team filter - return all teams
+            sql_query = """
+                SELECT 
+                    team_name,
+                    sprint_name,
+                    start_date,
+                    end_date,
+                    completed_percentage,
+                    issues_at_start,
+                    issues_added,
+                    issues_done,
+                    issues_remaining,
+                    sprint_goal
+                FROM closed_sprint_summary
+                WHERE end_date >= :start_date
+                ORDER BY team_name, end_date DESC
+            """
+            
+            logger.info(f"Executing query to get closed sprints data for all teams")
+            logger.info(f"Parameters: months={months}, start_date={start_date}")
+            
+            result = conn.execute(text(sql_query), {
+                "start_date": start_date.strftime("%Y-%m-%d")
+            })
         
         closed_sprints = []
         for row in result:
             closed_sprints.append({
-                'sprint_name': row[0],
-                'start_date': row[1],
-                'end_date': row[2],
-                'completed_percentage': float(row[3]) if row[3] else 0.0,
-                'issues_at_start': int(row[4]) if row[4] else 0,
-                'issues_added': int(row[5]) if row[5] else 0,
-                'issues_done': int(row[6]) if row[6] else 0,
-                'issues_remaining': int(row[7]) if row[7] else 0,
-                'sprint_goal': row[8] if row[8] else ""
+                'team_name': row[0],
+                'sprint_name': row[1],
+                'start_date': row[2],
+                'end_date': row[3],
+                'completed_percentage': float(row[4]) if row[4] else 0.0,
+                'issues_at_start': int(row[5]) if row[5] else 0,
+                'issues_added': int(row[6]) if row[6] else 0,
+                'issues_done': int(row[7]) if row[7] else 0,
+                'issues_remaining': int(row[8]) if row[8] else 0,
+                'sprint_goal': row[9] if row[9] else ""
             })
         
         return closed_sprints
             
     except Exception as e:
-        logger.error(f"Error fetching closed sprints data for team {team_name}: {e}")
+        logger.error(f"Error fetching closed sprints data (team_names={team_names}): {e}")
         raise e
 
 
