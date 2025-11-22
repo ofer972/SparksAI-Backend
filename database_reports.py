@@ -594,10 +594,38 @@ def _build_issue_where_clause(
 def _fetch_issues_bugs_by_priority(filters: Dict[str, Any], conn: Connection) -> ReportDataResult:
     issue_type = (filters.get("issue_type") or "Bug").strip() or "Bug"
     team_name = (filters.get("team_name") or "").strip() or None
+    is_group = filters.get("isGroup", False)
     status_category = (filters.get("status_category") or "").strip() or None
     include_done = bool(filters.get("include_done"))
 
-    where_clause, params = _build_issue_where_clause(issue_type, team_name, status_category, include_done)
+    # Resolve team names using shared helper function (same pattern as other endpoints)
+    from database_team_metrics import resolve_team_names_from_filter
+    team_names_list = None
+    if team_name:
+        team_names_list = resolve_team_names_from_filter(team_name, is_group, conn)
+    
+    # Build WHERE clause with support for multiple teams
+    conditions: List[str] = []
+    params: Dict[str, Any] = {}
+
+    if issue_type:
+        conditions.append("issue_type = :issue_type")
+        params["issue_type"] = issue_type
+
+    if team_names_list:
+        # Build parameterized IN clause (same pattern as closed sprints)
+        placeholders = ", ".join([f":team_name_{i}" for i in range(len(team_names_list))])
+        conditions.append(f"team_name IN ({placeholders})")
+        for i, name in enumerate(team_names_list):
+            params[f"team_name_{i}"] = name
+
+    if status_category:
+        conditions.append("status_category = :status_category")
+        params["status_category"] = status_category
+    elif not include_done:
+        conditions.append("status_category != 'Done'")
+
+    where_clause = " AND ".join(conditions) if conditions else "1=1"
 
     priority_query = text(
         f"""
@@ -666,20 +694,30 @@ def _fetch_issues_bugs_by_priority(filters: Dict[str, Any], conn: Connection) ->
         logger.error(f"Cache not loaded: {e}")
         available_teams = []
 
+    # Build meta with appropriate fields
+    meta = {
+        "issue_type": issue_type,
+        "status_category": status_category,
+        "include_done": include_done,
+        "priority_count": len(priority_summary),
+        "team_count": len(team_breakdown),
+        "available_teams": available_teams,
+        "isGroup": is_group,
+    }
+    
+    if team_name:
+        if is_group:
+            meta["group_name"] = team_name
+            meta["teams_in_group"] = team_names_list
+        else:
+            meta["team_name"] = team_name
+
     return {
         "data": {
             "priority_summary": priority_summary,
             "team_breakdown": team_breakdown,
         },
-        "meta": {
-            "issue_type": issue_type,
-            "team_name": team_name,
-            "status_category": status_category,
-            "include_done": include_done,
-            "priority_count": len(priority_summary),
-            "team_count": len(team_breakdown),
-            "available_teams": available_teams,
-        },
+        "meta": meta,
     }
 
 

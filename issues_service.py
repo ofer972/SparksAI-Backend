@@ -802,24 +802,29 @@ async def get_release_predictability(
 @issues_router.get("/issues/issues-grouped-by-priority")
 async def get_issues_grouped_by_priority(
     issue_type: Optional[str] = Query(None, description="Filter by issue type"),
-    team_name: Optional[str] = Query(None, description="Filter by team name"),
+    team_name: Optional[str] = Query(None, description="Filter by team name or group name (if isGroup=true)"),
     status_category: Optional[str] = Query(None, description="Filter by status category"),
+    isGroup: bool = Query(False, description="If true, team_name is treated as a group name"),
     conn: Connection = Depends(get_db_connection)
 ):
     """
     Get issues grouped by priority from the jira_issues table.
     
     Returns the count of issues per priority level, with optional filtering by issue_type, team_name, and/or status_category.
+    When isGroup=true, aggregates data across all teams in the group.
     
     Args:
         issue_type: Optional filter by issue type
-        team_name: Optional filter by team name
+        team_name: Optional filter by team name or group name (if isGroup=true)
         status_category: Optional filter by status category
+        isGroup: If true, team_name is treated as a group name
     
     Returns:
         JSON response with issues grouped by priority (priority, status_category, and issue_count)
     """
     try:
+        from database_team_metrics import resolve_team_names_from_filter
+        
         # Build WHERE clause conditions based on provided filters
         where_conditions = []
         params = {}
@@ -828,9 +833,16 @@ async def get_issues_grouped_by_priority(
             where_conditions.append("issue_type = :issue_type")
             params["issue_type"] = issue_type
         
+        # Resolve team names using shared helper function (same pattern as other endpoints)
+        team_names_list = None
         if team_name:
-            where_conditions.append("team_name = :team_name")
-            params["team_name"] = team_name
+            team_names_list = resolve_team_names_from_filter(team_name, isGroup, conn)
+            if team_names_list:
+                # Build parameterized IN clause (same pattern as closed sprints)
+                placeholders = ", ".join([f":team_name_{i}" for i in range(len(team_names_list))])
+                where_conditions.append(f"team_name IN ({placeholders})")
+                for i, name in enumerate(team_names_list):
+                    params[f"team_name_{i}"] = name
         
         if status_category:
             where_conditions.append("status_category = :status_category")
@@ -854,7 +866,7 @@ async def get_issues_grouped_by_priority(
             ORDER BY priority, status_category
         """)
         
-        logger.info(f"Executing query to get issues grouped by priority: issue_type={issue_type}, team_name={team_name}, status_category={status_category}")
+        logger.info(f"Executing query to get issues grouped by priority: issue_type={issue_type}, team_name={team_name}, isGroup={isGroup}, status_category={status_category}")
         
         result = conn.execute(query, params)
         rows = result.fetchall()
@@ -868,13 +880,28 @@ async def get_issues_grouped_by_priority(
                 "issue_count": int(row[2])
             })
         
+        # Build response data
+        response_data = {
+            "issues_by_priority": issues_by_priority,
+            "count": len(issues_by_priority)
+        }
+        
+        # Add metadata based on what was filtered
+        if team_name:
+            if isGroup:
+                response_data["group_name"] = team_name
+                response_data["teams_in_group"] = team_names_list
+                message = f"Retrieved {len(issues_by_priority)} priority groups for group '{team_name}' ({len(team_names_list)} teams)"
+            else:
+                response_data["team_name"] = team_name
+                message = f"Retrieved {len(issues_by_priority)} priority groups for team '{team_name}'"
+        else:
+            message = f"Retrieved {len(issues_by_priority)} priority groups"
+        
         return {
             "success": True,
-            "data": {
-                "issues_by_priority": issues_by_priority,
-                "count": len(issues_by_priority)
-            },
-            "message": f"Retrieved {len(issues_by_priority)} priority groups"
+            "data": response_data,
+            "message": message
         }
     
     except HTTPException:
