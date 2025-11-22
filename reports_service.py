@@ -15,6 +15,15 @@ from database_reports import (
     get_report_definition_by_id,
     resolve_report_data,
 )
+from cache_utils import (
+    generate_cache_key,
+    get_cached_report,
+    set_cached_report,
+    get_report_cache_ttl,
+    invalidate_report_cache,
+    get_redis_client,
+)
+import config
 
 reports_router = APIRouter()
 
@@ -95,10 +104,27 @@ def _normalize_multi_value(values: Optional[List[str] | str]) -> Optional[List[s
 
 
 @reports_router.get("/reports")
-async def list_reports(conn: Connection = Depends(get_db_connection)):
+async def list_reports(
+    conn: Connection = Depends(get_db_connection),
+    bypass_cache: Optional[bool] = Query(False, description="Skip cache lookup"),
+):
     """
     Return all available report definitions.
     """
+    # Try cache first (definitions change rarely, so use a long TTL)
+    cache_key = "report:definitions:all"
+    
+    if not bypass_cache:
+        cached_data = get_cached_report(cache_key)
+        if cached_data:
+            return {
+                "success": True,
+                "data": cached_data.get("data", []),
+                "count": cached_data.get("count", 0),
+                "message": cached_data.get("message", "Retrieved report definitions (cached)"),
+                "cached": True,
+            }
+    
     definitions = get_all_report_definitions(conn)
     summaries = [
         {
@@ -113,11 +139,21 @@ async def list_reports(conn: Connection = Depends(get_db_connection)):
         for definition in definitions
     ]
 
+    response_data = {
+        "data": summaries,
+        "count": len(summaries),
+        "message": f"Retrieved {len(summaries)} report definitions",
+    }
+    
+    # Cache the result with definitions TTL
+    set_cached_report(cache_key, response_data, ttl=config.CACHE_TTL_DEFINITIONS)
+
     return {
         "success": True,
         "data": summaries,
         "count": len(summaries),
         "message": f"Retrieved {len(summaries)} report definitions",
+        "cached": False,
     }
 
 
@@ -126,6 +162,9 @@ async def get_report_instance(
     report_id: str,
     request: Request,
     conn: Connection = Depends(get_db_connection),
+    # Cache control parameters
+    cache_ttl: Optional[int] = Query(None, description="Cache TTL in seconds (overrides default)"),
+    bypass_cache: Optional[bool] = Query(False, description="Skip cache lookup"),
     # Dynamically accept all possible filters
     team_name: Optional[str] = Query(None),
     issue_type: Optional[str] = Query(None),
@@ -212,6 +251,20 @@ async def get_report_instance(
     # Ensure required filters present
     _validate_required_filters(definition, merged_filters)
 
+    # Generate cache key from report_id and merged filters
+    cache_key = generate_cache_key(report_id, merged_filters)
+    
+    # Try cache first (unless bypassed)
+    if not bypass_cache:
+        cached_data = get_cached_report(cache_key)
+        if cached_data:
+            return {
+                "success": True,
+                "data": cached_data,
+                "message": f"Retrieved report '{report_id}' (cached)",
+                "cached": True,
+            }
+
     try:
         resolved_payload = resolve_report_data(definition["data_source"], merged_filters, conn)
     except KeyError as err:
@@ -242,10 +295,110 @@ async def get_report_instance(
         "meta": resolved_payload.get("meta", {}),
     }
 
+    # Determine TTL: use custom if provided, otherwise use smart default
+    ttl = cache_ttl if cache_ttl is not None else get_report_cache_ttl(report_id)
+    
+    # Cache the result before returning
+    set_cached_report(cache_key, response_payload, ttl=ttl)
+
     return {
         "success": True,
         "data": response_payload,
         "message": f"Retrieved report '{report_id}'",
+        "cached": False,
     }
+
+
+@reports_router.post("/reports/cache/invalidate")
+async def invalidate_cache(report_id: Optional[str] = Query(None)):
+    """
+    Invalidate cached reports.
+    
+    Args:
+        report_id: If provided, clears only that report's caches.
+                   If None, clears all report caches.
+    
+    Returns:
+        Success status and count of invalidated entries.
+    
+    Examples:
+        - POST /reports/cache/invalidate?report_id=team-sprint-burndown
+        - POST /reports/cache/invalidate (clears all)
+    """
+    count = invalidate_report_cache(report_id)
+    
+    if report_id:
+        message = f"Invalidated {count} cache entries for report '{report_id}'"
+    else:
+        message = f"Invalidated {count} cache entries for all reports"
+    
+    return {
+        "success": True,
+        "message": message,
+        "count": count,
+        "report_id": report_id,
+    }
+
+
+@reports_router.get("/reports/cache/stats")
+async def get_cache_stats():
+    """
+    Get Redis cache statistics and health information.
+    
+    Returns:
+        Cache statistics including:
+        - Whether Redis is enabled
+        - Number of cached report keys
+        - Total commands processed
+        - Keyspace hits/misses (for hit rate calculation)
+    """
+    try:
+        client = get_redis_client()
+        if not client:
+            return {
+                "success": False,
+                "message": "Redis is not enabled or not available",
+                "data": {
+                    "enabled": config.REDIS_ENABLED,
+                    "available": False,
+                }
+            }
+        
+        # Get Redis stats
+        info = client.info("stats")
+        
+        # Count report cache keys (use scan_iter for efficiency)
+        keys_count = len(list(client.scan_iter(match="report:*", count=1000)))
+        
+        # Calculate hit rate
+        hits = info.get("keyspace_hits", 0)
+        misses = info.get("keyspace_misses", 0)
+        total_requests = hits + misses
+        hit_rate = (hits / total_requests * 100) if total_requests > 0 else 0
+        
+        return {
+            "success": True,
+            "data": {
+                "enabled": config.REDIS_ENABLED,
+                "available": True,
+                "report_cache_keys": keys_count,
+                "total_commands": info.get("total_commands_processed", 0),
+                "keyspace_hits": hits,
+                "keyspace_misses": misses,
+                "hit_rate_percentage": round(hit_rate, 2),
+                "redis_version": client.info("server").get("redis_version", "unknown"),
+            },
+            "message": "Cache statistics retrieved successfully"
+        }
+    except Exception as e:
+        return {
+            "success": False,
+            "message": f"Failed to retrieve cache stats: {str(e)}",
+            "data": {
+                "enabled": config.REDIS_ENABLED,
+                "available": False,
+                "error": str(e),
+            }
+        }
 
 
