@@ -173,18 +173,9 @@ def _fetch_team_sprint_burndown(filters: Dict[str, Any], conn: Connection) -> Re
     from groups_teams_cache import get_team_names_from_cache
     try:
         available_teams = get_team_names_from_cache()
-    except RuntimeError:
-        # Fallback to database if cache not loaded
-        teams_query = text(
-            f"""
-            SELECT DISTINCT team_name
-            FROM {config.WORK_ITEMS_TABLE}
-            WHERE team_name IS NOT NULL
-            ORDER BY team_name
-            """
-        )
-        teams_rows = conn.execute(teams_query).fetchall()
-        available_teams = [row[0] for row in teams_rows if row[0]]
+    except RuntimeError as e:
+        logger.error(f"Cache not loaded: {e}")
+        available_teams = []
 
     selected_sprint_id: Optional[int] = None
     auto_selected = False
@@ -440,18 +431,9 @@ def _fetch_team_closed_sprints(filters: Dict[str, Any], conn: Connection) -> Rep
     from groups_teams_cache import get_team_names_from_cache
     try:
         available_teams = get_team_names_from_cache()
-    except RuntimeError:
-        # Fallback to database if cache not loaded
-        teams_query = text(
-            f"""
-            SELECT DISTINCT team_name
-            FROM {config.WORK_ITEMS_TABLE}
-            WHERE team_name IS NOT NULL
-            ORDER BY team_name
-            """
-        )
-        teams_rows = conn.execute(teams_query).fetchall()
-        available_teams = [row[0] for row in teams_rows if row[0]]
+    except RuntimeError as e:
+        logger.error(f"Cache not loaded: {e}")
+        available_teams = []
 
     # Resolve team names using shared helper function
     team_names_list = resolve_team_names_from_filter(team_name, is_group, conn)
@@ -473,22 +455,36 @@ def _fetch_team_closed_sprints(filters: Dict[str, Any], conn: Connection) -> Rep
 
 def _fetch_team_issues_trend(filters: Dict[str, Any], conn: Connection) -> ReportDataResult:
     team_name = _require_filter(filters, "team_name")
+    is_group = filters.get("isGroup", False)
     issue_type = (filters.get("issue_type") or "Bug").strip() or "Bug"
     months_value = filters.get("months")
     months = _parse_int(months_value, default=6)
     if months <= 0:
         months = 6
 
-    trend_data = get_issues_trend_data_db(team_name, months, issue_type, conn)
+    # Resolve team names using shared helper function (same pattern as other endpoints)
+    from database_team_metrics import resolve_team_names_from_filter
+    team_names_list = resolve_team_names_from_filter(team_name, is_group, conn)
+
+    # Get trend data for all teams
+    trend_data = get_issues_trend_data_db(team_names_list, months, issue_type, conn)
+
+    # Build meta with appropriate fields
+    meta = {
+        "issue_type": issue_type,
+        "months": months,
+        "count": len(trend_data),
+    }
+    
+    if is_group:
+        meta["group_name"] = team_name
+        meta["teams_in_group"] = team_names_list
+    else:
+        meta["team_name"] = team_name
 
     return {
         "data": trend_data,
-        "meta": {
-            "team_name": team_name,
-            "issue_type": issue_type,
-            "months": months,
-            "count": len(trend_data),
-        },
+        "meta": meta,
     }
 
 
@@ -502,18 +498,9 @@ def _fetch_pi_predictability(filters: Dict[str, Any], conn: Connection) -> Repor
     from groups_teams_cache import get_team_names_from_cache
     try:
         available_teams = get_team_names_from_cache()
-    except RuntimeError:
-        # Fallback to database if cache not loaded
-        teams_query = text(
-            f"""
-            SELECT DISTINCT team_name
-            FROM {config.WORK_ITEMS_TABLE}
-            WHERE team_name IS NOT NULL
-            ORDER BY team_name
-            """
-        )
-        teams_rows = conn.execute(teams_query).fetchall()
-        available_teams = [row[0] for row in teams_rows if row[0]]
+    except RuntimeError as e:
+        logger.error(f"Cache not loaded: {e}")
+        available_teams = []
 
     # Fetch available PIs (always)
     pis_query = text(
@@ -675,19 +662,9 @@ def _fetch_issues_bugs_by_priority(filters: Dict[str, Any], conn: Connection) ->
     from groups_teams_cache import get_team_names_from_cache
     try:
         available_teams = get_team_names_from_cache()
-    except RuntimeError:
-        # Fallback to database if cache not loaded
-        available_teams_query = text(
-            f"""
-            SELECT DISTINCT team_name
-            FROM {config.WORK_ITEMS_TABLE}
-            WHERE issue_type = :issue_type
-            AND team_name IS NOT NULL
-            ORDER BY team_name
-            """
-        )
-        available_teams_rows = conn.execute(available_teams_query, {"issue_type": issue_type}).fetchall()
-        available_teams = [row[0] for row in available_teams_rows if row[0]]
+    except RuntimeError as e:
+        logger.error(f"Cache not loaded: {e}")
+        available_teams = []
 
     return {
         "data": {
@@ -1045,18 +1022,9 @@ def _fetch_issues_flow_status_duration(filters: Dict[str, Any], conn: Connection
     from groups_teams_cache import get_team_names_from_cache
     try:
         available_teams = get_team_names_from_cache()
-    except RuntimeError:
-        # Fallback to database if cache not loaded
-        teams_query = text(
-            f"""
-            SELECT DISTINCT team_name
-            FROM {config.WORK_ITEMS_TABLE}
-            WHERE team_name IS NOT NULL
-            ORDER BY team_name
-            """
-        )
-        teams_rows = conn.execute(teams_query).fetchall()
-        available_teams = [row[0] for row in teams_rows if row[0]]
+    except RuntimeError as e:
+        logger.error(f"Cache not loaded: {e}")
+        available_teams = []
 
     # Fetch available issue types (always)
     issue_types_query = text(
@@ -1380,18 +1348,9 @@ def _fetch_pi_metrics_summary(filters: Dict[str, Any], conn: Connection) -> Repo
     from groups_teams_cache import get_team_names_from_cache
     try:
         available_teams = get_team_names_from_cache()
-    except RuntimeError:
-        # Fallback to database if cache not loaded
-        teams_query = text(
-            f"""
-            SELECT DISTINCT team_name
-            FROM {config.WORK_ITEMS_TABLE}
-            WHERE team_name IS NOT NULL
-            ORDER BY team_name
-            """
-        )
-        teams_rows = conn.execute(teams_query).fetchall()
-        available_teams = [row[0] for row in teams_rows if row[0]]
+    except RuntimeError as e:
+        logger.error(f"Cache not loaded: {e}")
+        available_teams = []
 
     # Fetch available issue types (always)
     issue_types_query = text(

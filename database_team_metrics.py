@@ -606,14 +606,14 @@ def get_sprint_burndown_data_db(team_name: str, sprint_name: str, issue_type: st
         raise e
 
 
-def get_issues_trend_data_db(team_name: str, months: int = 6, issue_type: str = "all", conn: Connection = None) -> List[Dict[str, Any]]:
+def get_issues_trend_data_db(team_names: Optional[List[str]], months: int = 6, issue_type: str = "all", conn: Connection = None) -> List[Dict[str, Any]]:
     """
-    Get issues created and resolved over time for a specific team.
+    Get issues created and resolved over time for one or more teams.
     Uses the issues_created_and_resolved_over_time view.
     Returns all columns from the view (pass-through).
     
     Args:
-        team_name (str): Team name to filter by
+        team_names (Optional[List[str]]): List of team names to filter by. If None or empty, returns data for all teams.
         months (int): Number of months to look back (1, 2, 3, 4, 6, 9, 12) - default: 6
         issue_type (str): Issue type filter (default: "all")
         conn (Connection): Database connection from FastAPI dependency
@@ -630,27 +630,31 @@ def get_issues_trend_data_db(team_name: str, months: int = 6, issue_type: str = 
         sql_query = """
             SELECT *
             FROM issues_created_and_resolved_over_time
-            WHERE team_name = :team_name 
-            AND report_month >= :start_date
+            WHERE report_month >= :start_date
         """
+        
+        # Prepare parameters
+        params = {
+            "start_date": start_date.strftime("%Y-%m-%d")
+        }
+        
+        # Add team filter if team_names provided
+        if team_names and len(team_names) > 0:
+            # Build parameterized IN clause (same pattern as closed sprints)
+            placeholders = ", ".join([f":team_name_{i}" for i in range(len(team_names))])
+            sql_query += f" AND team_name IN ({placeholders})"
+            for i, name in enumerate(team_names):
+                params[f"team_name_{i}"] = name
         
         # Add issue type filter if not "all"
         if issue_type and issue_type != "all":
             sql_query += " AND issue_type = :issue_type"
+            params["issue_type"] = issue_type
         
         sql_query += " ORDER BY report_month DESC;"
         
-        logger.info(f"Executing query to get issues trend data for team: {team_name}")
-        logger.info(f"Parameters: team_name={team_name}, months={months}, start_date={start_date}, issue_type={issue_type}")
-        
-        # Prepare parameters
-        params = {
-            "team_name": team_name,
-            "start_date": start_date.strftime("%Y-%m-%d")
-        }
-        
-        if issue_type and issue_type != "all":
-            params["issue_type"] = issue_type
+        logger.info(f"Executing query to get issues trend data for teams: {team_names}")
+        logger.info(f"Parameters: months={months}, start_date={start_date}, issue_type={issue_type}")
         
         result = conn.execute(text(sql_query), params)
         
@@ -664,5 +668,5 @@ def get_issues_trend_data_db(team_name: str, months: int = 6, issue_type: str = 
         return trend_data
             
     except Exception as e:
-        logger.error(f"Error fetching issues trend data for team {team_name}: {e}")
+        logger.error(f"Error fetching issues trend data for teams {team_names}: {e}")
         raise e

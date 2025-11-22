@@ -868,31 +868,33 @@ async def get_closed_sprints(
 
 @team_metrics_router.get("/team-metrics/issues-trend")
 async def get_issues_trend(
-    team_name: str = Query(..., description="Team name to get trend data for"),
+    team_name: str = Query(..., description="Team name or group name (if isGroup=true)"),
     months: int = Query(6, description="Number of months to look back (1, 2, 3, 4, 6, 9, 12)", ge=1, le=12),
     issue_type: str = Query("all", description="Issue type filter (default: 'all')"),
+    isGroup: bool = Query(False, description="If true, team_name is treated as a group name"),
     conn: Connection = Depends(get_db_connection)
 ):
     """
-    Get issues created and resolved over time for a specific team.
+    Get issues created and resolved over time for a specific team(s) or group.
     
     This endpoint retrieves trend data showing issues created, resolved, and cumulative open issues over time.
     Returns all columns from the issues_created_and_resolved_over_time view.
+    When isGroup=true, aggregates data across all teams in the group.
     
     Parameters:
-    - team_name: Name of the team (required)
+    - team_name: Name of the team or group name (if isGroup=true) (required)
     - months: Number of months to look back (optional, default: 6)
       Valid values: 1, 2, 3, 4, 6, 9, 12
       Note: Only values 1, 2, 3, 4, 6, 9 are accepted (will validate in code)
     - issue_type: Issue type filter (optional, default: 'all')
       Examples: 'Bug', 'Story', 'Task', 'all'
+    - isGroup: If true, team_name is treated as a group name and returns trend data for all teams in that group
     
     Returns:
         JSON response with trend data list and metadata
     """
     try:
-        # Validate inputs
-        validated_team_name = validate_team_name(team_name)
+        from database_team_metrics import resolve_team_names_from_filter
         
         # Validate months parameter (same validation as closed sprints)
         if months not in [1, 2, 3, 4, 6, 9]:
@@ -907,25 +909,46 @@ async def get_issues_trend(
         if issue_type.strip() == "":
             issue_type = "all"
         
-        # Get issues trend data from database function
-        trend_data = get_issues_trend_data_db(validated_team_name, months, issue_type, conn)
+        # Validate and resolve team names using shared helper function (same pattern as closed sprints)
+        validated_name = None
+        if isGroup:
+            validated_name = validate_group_name(team_name)
+        else:
+            validated_name = validate_team_name(team_name)
+        
+        # Resolve team names using shared helper function
+        team_names_list = resolve_team_names_from_filter(validated_name, isGroup, conn)
+        
+        # Get issues trend data from database function (now accepts list of team names)
+        trend_data = get_issues_trend_data_db(team_names_list, months, issue_type, conn)
+        
+        # Build response data
+        response_data = {
+            "months": months,
+            "issue_type": issue_type,
+            "trend_data": trend_data,
+            "count": len(trend_data)
+        }
+        
+        # Add metadata based on what was filtered
+        if isGroup:
+            response_data["group_name"] = validated_name
+            response_data["teams_in_group"] = team_names_list
+            message = f"Retrieved issues trend data for group '{validated_name}' ({len(team_names_list)} teams) (last {months} months)"
+        else:
+            response_data["team_name"] = validated_name
+            message = f"Retrieved issues trend data for team '{validated_name}' (last {months} months)"
         
         return {
             "success": True,
-            "data": {
-                "team_name": validated_team_name,
-                "months": months,
-                "issue_type": issue_type,
-                "trend_data": trend_data,
-                "count": len(trend_data)
-            },
-            "message": f"Retrieved issues trend data for team '{validated_team_name}' (last {months} months)"
+            "data": response_data,
+            "message": message
         }
     
     except HTTPException:
         raise # Re-raise FastAPI HTTPExceptions
     except Exception as e:
-        logger.error(f"Error fetching issues trend data for team {validated_team_name}: {e}")
+        logger.error(f"Error fetching issues trend data (team_name={team_name}, isGroup={isGroup}): {e}")
         raise HTTPException(
             status_code=500,
             detail=f"Failed to fetch issues trend data: {str(e)}"
