@@ -230,7 +230,8 @@ async def get_epics_hierarchy(
 async def get_issue_status_duration(
     months: int = Query(3, description="Number of months to look back (1, 2, 3, 4, 6, 9)", ge=1, le=12),
     issue_type: Optional[str] = Query(None, description="Filter by issue type"),
-    team_name: Optional[str] = Query(None, description="Filter by team name"),
+    team_name: Optional[str] = Query(None, description="Filter by team name or group name (if isGroup=true)"),
+    isGroup: bool = Query(False, description="If true, team_name is treated as a group name"),
     conn: Connection = Depends(get_db_connection)
 ):
     """
@@ -242,18 +243,24 @@ async def get_issue_status_duration(
     Args:
         months: Number of months to look back (default: 3, valid: 1, 2, 3, 4, 6, 9)
         issue_type: Optional filter by issue type
-        team_name: Optional filter by team name
+        team_name: Optional filter by team name or group name (if isGroup=true)
+        isGroup: If true, team_name is treated as a group name
     
     Returns:
         JSON response with status duration data list and metadata
     """
     try:
+        from database_team_metrics import resolve_team_names_from_filter
+        
         # Validate months parameter (same validation as closed sprints)
         if months not in [1, 2, 3, 4, 6, 9]:
             raise HTTPException(
                 status_code=400, 
                 detail="Months parameter must be one of: 1, 2, 3, 4, 6, 9"
             )
+        
+        # Resolve team names using shared helper function
+        team_names_list = resolve_team_names_from_filter(team_name, isGroup, conn)
         
         # Calculate start date based on months parameter
         start_date = datetime.now().date() - timedelta(days=months * 30)
@@ -274,9 +281,12 @@ async def get_issue_status_duration(
             where_conditions.append("isd.issue_type = :issue_type")
             params["issue_type"] = issue_type
         
-        if team_name:
-            where_conditions.append("isd.team_name = :team_name")
-            params["team_name"] = team_name
+        if team_names_list:
+            # Build parameterized IN clause (same pattern as closed sprints)
+            placeholders = ", ".join([f":team_name_{i}" for i in range(len(team_names_list))])
+            where_conditions.append(f"isd.team_name IN ({placeholders})")
+            for i, name in enumerate(team_names_list):
+                params[f"team_name_{i}"] = name
         
         # Build SQL query
         where_clause = " AND ".join(where_conditions)
@@ -340,7 +350,8 @@ async def get_issue_status_duration_with_issue_keys(
     months: int = Query(3, description="Number of months to look back (1, 2, 3, 4, 6, 9). Mutually exclusive with year_month.", ge=1, le=12),
     year_month: Optional[str] = Query(None, description="Year and month in YYYY-MM format (e.g., '2025-06'). If provided, returns data only for that specific month. Mutually exclusive with months parameter."),
     issue_type: Optional[str] = Query(None, description="Filter by issue type"),
-    team_name: Optional[str] = Query(None, description="Filter by team name"),
+    team_name: Optional[str] = Query(None, description="Filter by team name or group name (if isGroup=true)"),
+    isGroup: bool = Query(False, description="If true, team_name is treated as a group name"),
     conn: Connection = Depends(get_db_connection)
 ):
     """
@@ -355,12 +366,14 @@ async def get_issue_status_duration_with_issue_keys(
         months: Number of months to look back (default: 3, valid: 1, 2, 3, 4, 6, 9). Mutually exclusive with year_month.
         year_month: Year and month in YYYY-MM format (e.g., '2025-06'). If provided, returns data only for that specific month. Mutually exclusive with months.
         issue_type: Optional filter by issue type
-        team_name: Optional filter by team name
+        team_name: Optional filter by team name or group name (if isGroup=true)
+        isGroup: If true, team_name is treated as a group name
     
     Returns:
         JSON response with issue keys, summaries, and duration data list and metadata
     """
     try:
+        from database_team_metrics import resolve_team_names_from_filter
         # Validate status_name parameter
         if not status_name or not isinstance(status_name, str):
             raise HTTPException(
@@ -457,14 +470,20 @@ async def get_issue_status_duration_with_issue_keys(
             params["start_date"] = start_date.strftime("%Y-%m-%d")
             logger.info(f"Filtering by months: {months}, start_date: {start_date}")
         
+        # Resolve team names using shared helper function
+        team_names_list = resolve_team_names_from_filter(team_name, isGroup, conn)
+        
         # Add optional filters
         if issue_type:
             where_conditions.append("isd.issue_type = :issue_type")
             params["issue_type"] = issue_type
         
-        if team_name:
-            where_conditions.append("isd.team_name = :team_name")
-            params["team_name"] = team_name
+        if team_names_list:
+            # Build parameterized IN clause (same pattern as closed sprints)
+            placeholders = ", ".join([f":team_name_{i}" for i in range(len(team_names_list))])
+            where_conditions.append(f"isd.team_name IN ({placeholders})")
+            for i, name in enumerate(team_names_list):
+                params[f"team_name_{i}"] = name
         
         # Build SQL query
         where_clause = " AND ".join(where_conditions)
@@ -539,7 +558,8 @@ async def get_issue_status_duration_with_issue_keys(
 @issues_router.get("/issues/issue-status-duration-per-month")
 async def get_issue_status_duration_per_month(
     months: int = Query(3, description="Number of months to look back (1, 2, 3, 4, 6, 9, 12)", ge=1, le=12),
-    team_name: Optional[str] = Query(None, description="Filter by team name"),
+    team_name: Optional[str] = Query(None, description="Filter by team name or group name (if isGroup=true)"),
+    isGroup: bool = Query(False, description="If true, team_name is treated as a group name"),
     conn: Connection = Depends(get_db_connection)
 ):
     """
@@ -550,12 +570,14 @@ async def get_issue_status_duration_per_month(
     
     Args:
         months: Number of months to look back (default: 3, valid: 1, 2, 3, 4, 6, 9, 12)
-        team_name: Optional filter by team name
+        team_name: Optional filter by team name or group name (if isGroup=true)
+        isGroup: If true, team_name is treated as a group name
     
     Returns:
         JSON response with labels array (months) and datasets array (one per status with data per month)
     """
     try:
+        from database_team_metrics import resolve_team_names_from_filter
         # Validate months parameter
         if months not in [1, 2, 3, 4, 6, 9, 12]:
             raise HTTPException(
@@ -593,10 +615,16 @@ async def get_issue_status_duration_per_month(
             "end_date": end_date.strftime("%Y-%m-%d")
         }
         
+        # Resolve team names using shared helper function
+        team_names_list = resolve_team_names_from_filter(team_name, isGroup, conn)
+        
         # Add optional team filter
-        if team_name:
-            where_conditions.append("isd.team_name = :team_name")
-            params["team_name"] = team_name
+        if team_names_list:
+            # Build parameterized IN clause (same pattern as closed sprints)
+            placeholders = ", ".join([f":team_name_{i}" for i in range(len(team_names_list))])
+            where_conditions.append(f"isd.team_name IN ({placeholders})")
+            for i, name in enumerate(team_names_list):
+                params[f"team_name_{i}"] = name
         
         # Build SQL query
         where_clause = " AND ".join(where_conditions)

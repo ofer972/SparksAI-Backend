@@ -755,7 +755,7 @@ def _validate_months(months_value: Any, default: int = 3) -> int:
 def _fetch_issue_status_duration_summary(
     months: int,
     issue_type: Optional[str],
-    team_name: Optional[str],
+    team_names: Optional[List[str]],
     conn: Connection,
 ) -> List[Dict[str, Any]]:
     start_date = datetime.now().date() - timedelta(days=months * 30)
@@ -771,9 +771,12 @@ def _fetch_issue_status_duration_summary(
         where_conditions.append("isd.issue_type = :issue_type")
         params["issue_type"] = issue_type
 
-    if team_name:
-        where_conditions.append("isd.team_name = :team_name")
-        params["team_name"] = team_name
+    if team_names:
+        # Build parameterized IN clause (same pattern as closed sprints)
+        placeholders = ", ".join([f":team_name_{i}" for i in range(len(team_names))])
+        where_conditions.append(f"isd.team_name IN ({placeholders})")
+        for i, name in enumerate(team_names):
+            params[f"team_name_{i}"] = name
 
     where_clause = " AND ".join(where_conditions)
 
@@ -829,7 +832,7 @@ def _generate_month_labels(months: int) -> List[str]:
 
 def _fetch_issue_status_duration_monthly(
     months: int,
-    team_name: Optional[str],
+    team_names: Optional[List[str]],
     conn: Connection,
 ) -> Dict[str, Any]:
     end_date = datetime.now().date()
@@ -847,9 +850,12 @@ def _fetch_issue_status_duration_monthly(
         "end_date": end_date.strftime("%Y-%m-%d"),
     }
 
-    if team_name:
-        where_conditions.append("isd.team_name = :team_name")
-        params["team_name"] = team_name
+    if team_names:
+        # Build parameterized IN clause (same pattern as closed sprints)
+        placeholders = ", ".join([f":team_name_{i}" for i in range(len(team_names))])
+        where_conditions.append(f"isd.team_name IN ({placeholders})")
+        for i, name in enumerate(team_names):
+            params[f"team_name_{i}"] = name
 
     where_clause = " AND ".join(where_conditions)
 
@@ -910,7 +916,7 @@ def _fetch_issue_status_duration_monthly(
         "labels": month_labels,
         "datasets": datasets,
         "months": months,
-        "team_name": team_name,
+        "team_name": team_names[0] if team_names and len(team_names) == 1 else None,
     }
 
 
@@ -919,7 +925,7 @@ def _fetch_issue_status_duration_detail(
     months: int,
     year_month: Optional[str],
     issue_type: Optional[str],
-    team_name: Optional[str],
+    team_names: Optional[List[str]],
     conn: Connection,
 ) -> Dict[str, Any]:
     status = status_name.strip()
@@ -954,9 +960,12 @@ def _fetch_issue_status_duration_detail(
         where_conditions.append("isd.issue_type = :issue_type")
         params["issue_type"] = issue_type
 
-    if team_name:
-        where_conditions.append("isd.team_name = :team_name")
-        params["team_name"] = team_name
+    if team_names:
+        # Build parameterized IN clause (same pattern as closed sprints)
+        placeholders = ", ".join([f":team_name_{i}" for i in range(len(team_names))])
+        where_conditions.append(f"isd.team_name IN ({placeholders})")
+        for i, name in enumerate(team_names):
+            params[f"team_name_{i}"] = name
 
     where_clause = " AND ".join(where_conditions)
 
@@ -1001,10 +1010,16 @@ def _fetch_issue_status_duration_detail(
 
 
 def _fetch_issues_flow_status_duration(filters: Dict[str, Any], conn: Connection) -> ReportDataResult:
+    from database_team_metrics import resolve_team_names_from_filter
+    
     months = _validate_months(filters.get("months"), default=3)
     issue_type = (filters.get("issue_type") or "").strip() or None
     team_name = (filters.get("team_name") or "").strip() or None
+    is_group = filters.get("isGroup", False)
     view_mode = (filters.get("view_mode") or "total").strip() or "total"
+
+    # Resolve team names using shared helper function
+    team_names_list = resolve_team_names_from_filter(team_name, is_group, conn)
 
     # Fetch available teams (always)
     teams_query = text(
@@ -1030,8 +1045,8 @@ def _fetch_issues_flow_status_duration(filters: Dict[str, Any], conn: Connection
     issue_types_rows = conn.execute(issue_types_query).fetchall()
     available_issue_types = [row[0] for row in issue_types_rows if row[0]]
 
-    summary_data = _fetch_issue_status_duration_summary(months, issue_type, team_name, conn)
-    monthly_data = _fetch_issue_status_duration_monthly(months, team_name, conn)
+    summary_data = _fetch_issue_status_duration_summary(months, issue_type, team_names_list, conn)
+    monthly_data = _fetch_issue_status_duration_monthly(months, team_names_list, conn)
 
     detail_data = None
     detail_status = filters.get("detail_status")
@@ -1043,7 +1058,7 @@ def _fetch_issues_flow_status_duration(filters: Dict[str, Any], conn: Connection
             _parse_int(detail_months, default=months),
             detail_year_month,
             issue_type,
-            team_name,
+            team_names_list,
             conn,
         )
 
