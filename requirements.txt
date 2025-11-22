@@ -7,3 +7,5 @@ pydantic
 annotated-types
 python-multipart
 httpx
+redis>=5.0.0
+hiredis>=2.2.0
