@@ -342,7 +342,7 @@ def get_top_ai_cards_with_recommendations_filtered(
     filter_column: str,
     filter_value: str,
     limit: int = 4,
-    recommendations_limit: int = 4,
+    recommendations_limit: int = 5,
     categories: Optional[List[str]] = None,
     conn: Connection = None
 ) -> List[Dict[str, Any]]:
@@ -356,7 +356,7 @@ def get_top_ai_cards_with_recommendations_filtered(
         filter_column (str): Column to filter by ('team_name' or 'pi')
         filter_value (str): Value to filter by
         limit (int): Number of AI cards to return (default: 4)
-        recommendations_limit (int): Maximum recommendations per card (default: 4)
+        recommendations_limit (int): Maximum recommendations per card (default: 5)
         categories (Optional[List[str]]): Optional category filter - only return cards with card_type matching insight types for any of these categories
         conn (Connection): Database connection from FastAPI dependency
     

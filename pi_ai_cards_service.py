@@ -114,7 +114,7 @@ async def get_pi_ai_cards(
 async def get_pi_ai_cards_with_recommendations(
     pi: str = Query(..., description="PI name to get PI AI cards for"),
     limit: int = Query(4, description="Number of PI AI cards to return (default: 4, max: 50)"),
-    recommendations_limit: int = Query(4, description="Max recommendations per card (default: 4)"),
+    recommendations_limit: int = Query(5, description="Max recommendations per card (default: 5)"),
     category: Optional[List[str]] = Query(None, description="Filter by insight category/categories (e.g., 'Daily', 'Planning'). Can specify multiple: ?category=Daily&category=Planning"),
     conn: Connection = Depends(get_db_connection)
 ):
@@ -130,7 +130,7 @@ async def get_pi_ai_cards_with_recommendations(
     Args:
         pi: Name of the PI
         limit: Number of PI AI cards to return (default: 4)
-        recommendations_limit: Maximum recommendations per card (default: 4)
+        recommendations_limit: Maximum recommendations per card (default: 5)
         category: Optional category filter(s) - only return cards with card_type matching insight types for any of these categories.
                  Can specify multiple: ?category=Daily&category=Planning
     
