@@ -331,11 +331,12 @@ def resolve_team_names_from_filter(
 ) -> Optional[List[str]]:
     """
     Resolve team names from a filter (single team, group, or None for all teams).
+    Uses groups/teams cache for fast lookups.
     
     Args:
         team_name: Optional team name or group name (if is_group=True)
         is_group: If true, team_name is treated as a group name
-        conn: Database connection
+        conn: Database connection (used for cache refresh if needed, but not for reads)
     
     Returns:
         List of team names, or None if no filter (meaning all teams)
@@ -344,11 +345,23 @@ def resolve_team_names_from_filter(
         HTTPException: If validation fails or group not found
     """
     from fastapi import HTTPException
-    from sqlalchemy import text
+    from groups_teams_cache import (
+        get_teams_for_group_from_cache,
+        group_exists_by_name_in_cache,
+        team_exists_by_name_in_cache,
+        is_groups_teams_cache_loaded
+    )
     import re
     
     if not team_name:
         return None  # None means all teams
+    
+    # Check if cache is loaded
+    if not is_groups_teams_cache_loaded():
+        raise HTTPException(
+            status_code=500,
+            detail="Groups/Teams cache not loaded. Please restart the application."
+        )
     
     if is_group:
         # Validate group name
@@ -360,26 +373,22 @@ def resolve_team_names_from_filter(
         if not sanitized_group_name:
             raise HTTPException(status_code=400, detail="Group name contains invalid characters")
         
-        # Get all teams under this group
-        get_teams_query = text("""
-            SELECT t.team_name
-            FROM public.teams t
-            JOIN public.team_groups tg ON t.team_key = tg.team_id
-            JOIN public.groups g ON tg.group_id = g.group_key
-            WHERE g.group_name = :group_name
-            ORDER BY t.team_name
-        """)
-        
-        teams_result = conn.execute(get_teams_query, {"group_name": sanitized_group_name})
-        team_rows = teams_result.fetchall()
-        
-        if not team_rows:
+        # Check if group exists in cache
+        if not group_exists_by_name_in_cache(sanitized_group_name):
             raise HTTPException(
                 status_code=404,
                 detail=f"Group '{sanitized_group_name}' not found or has no teams"
             )
         
-        team_names_list = [row[0] for row in team_rows]
+        # Get teams from cache (recursive - includes descendant groups)
+        team_names_list = get_teams_for_group_from_cache(sanitized_group_name, include_children=True)
+        
+        if not team_names_list:
+            raise HTTPException(
+                status_code=404,
+                detail=f"Group '{sanitized_group_name}' has no teams"
+            )
+        
         return team_names_list
     else:
         # Single team - validate it
@@ -390,6 +399,13 @@ def resolve_team_names_from_filter(
         
         if not sanitized:
             raise HTTPException(status_code=400, detail="Team name contains invalid characters")
+        
+        # Verify team exists in cache
+        if not team_exists_by_name_in_cache(sanitized):
+            raise HTTPException(
+                status_code=404,
+                detail=f"Team '{sanitized}' not found"
+            )
         
         return [sanitized]
 

@@ -31,33 +31,15 @@ async def get_all_groups(conn: Connection = Depends(get_db_connection)):
     """
     Get all groups (flat list with hierarchy info).
     Returns empty array with 200 status if no groups exist.
+    Uses groups/teams cache for fast retrieval.
     
     Returns:
         JSON response with list of groups (id, name, parent_id)
     """
     try:
-        query = text("""
-            SELECT
-                group_key AS id,
-                group_name AS name,
-                parent_group_key AS parent_id
-            FROM public.groups
-            ORDER BY group_name
-        """)
+        from groups_teams_cache import get_all_groups_from_cache
         
-        logger.info("Executing query to get all groups")
-        
-        result = conn.execute(query)
-        rows = result.fetchall()
-        
-        # Convert rows to list of dictionaries
-        groups = []
-        for row in rows:
-            groups.append({
-                "id": row[0],
-                "name": row[1],
-                "parent_id": row[2]
-            })
+        groups = get_all_groups_from_cache()
         
         return {
             "success": True,
@@ -68,6 +50,12 @@ async def get_all_groups(conn: Connection = Depends(get_db_connection)):
             "message": f"Retrieved {len(groups)} groups"
         }
     
+    except RuntimeError as e:
+        logger.error(f"Cache not loaded: {e}")
+        raise HTTPException(
+            status_code=500,
+            detail="Groups/Teams cache not loaded. Please restart the application."
+        )
     except Exception as e:
         logger.error(f"Error fetching groups: {e}")
         raise HTTPException(
@@ -83,6 +71,7 @@ async def get_teams_in_group(
 ):
     """
     Get all teams in a specific group.
+    Uses groups/teams cache for fast retrieval.
     
     Args:
         groupId: The ID of the group
@@ -91,34 +80,19 @@ async def get_teams_in_group(
         JSON response with list of teams in the group
     """
     try:
+        from groups_teams_cache import get_teams_in_group_from_cache, group_exists_in_cache
+        
         validated_group_id = validate_id(groupId, "Group ID")
         
-        query = text("""
-            SELECT 
-                t.team_key,
-                t.team_name,
-                t.number_of_team_members,
-                tg.group_id AS group_key
-            FROM public.teams t
-            INNER JOIN public.team_groups tg ON t.team_key = tg.team_id
-            WHERE tg.group_id = :group_key
-            ORDER BY t.team_name
-        """)
+        # Check if group exists
+        if not group_exists_in_cache(validated_group_id):
+            raise HTTPException(
+                status_code=404,
+                detail=f"Group with ID {validated_group_id} not found"
+            )
         
-        logger.info(f"Executing query to get teams for group {validated_group_id}")
-        
-        result = conn.execute(query, {"group_key": validated_group_id})
-        rows = result.fetchall()
-        
-        # Convert rows to list of dictionaries
-        teams = []
-        for row in rows:
-            teams.append({
-                "team_key": row[0],
-                "team_name": row[1],
-                "number_of_team_members": row[2],
-                "group_key": row[3]
-            })
+        # Get teams from cache (direct only, not recursive)
+        teams = get_teams_in_group_from_cache(validated_group_id, include_children=False)
         
         return {
             "success": True,
@@ -132,6 +106,12 @@ async def get_teams_in_group(
     
     except HTTPException:
         raise
+    except RuntimeError as e:
+        logger.error(f"Cache not loaded: {e}")
+        raise HTTPException(
+            status_code=500,
+            detail="Groups/Teams cache not loaded. Please restart the application."
+        )
     except Exception as e:
         logger.error(f"Error fetching teams for group {groupId}: {e}")
         raise HTTPException(
@@ -169,13 +149,11 @@ async def create_group(
         # Validate parent_group_key if provided
         parent_key = None
         if request.parent_group_key is not None:
+            from groups_teams_cache import group_exists_in_cache
+            
             parent_key = validate_id(request.parent_group_key, "Parent group key")
-            # Verify parent group exists
-            check_query = text("""
-                SELECT group_key FROM public.groups WHERE group_key = :parent_key
-            """)
-            check_result = conn.execute(check_query, {"parent_key": parent_key})
-            if not check_result.fetchone():
+            # Verify parent group exists in cache
+            if not group_exists_in_cache(parent_key):
                 raise HTTPException(
                     status_code=404,
                     detail=f"Parent group with ID {parent_key} not found"
@@ -195,6 +173,10 @@ async def create_group(
         })
         row = result.fetchone()
         conn.commit()
+        
+        # Refresh cache after mutation
+        from groups_teams_cache import refresh_groups_teams_cache
+        refresh_groups_teams_cache(conn)
         
         # Return database field names to match pattern in other services
         group = {
@@ -238,14 +220,12 @@ async def update_group(
         JSON response with updated group
     """
     try:
+        from groups_teams_cache import group_exists_in_cache
+        
         validated_group_id = validate_id(groupId, "Group ID")
         
-        # Check if group exists
-        check_query = text("""
-            SELECT group_key FROM public.groups WHERE group_key = :group_key
-        """)
-        check_result = conn.execute(check_query, {"group_key": validated_group_id})
-        if not check_result.fetchone():
+        # Check if group exists in cache
+        if not group_exists_in_cache(validated_group_id):
             raise HTTPException(
                 status_code=404,
                 detail=f"Group with ID {validated_group_id} not found"
@@ -261,12 +241,8 @@ async def update_group(
                     status_code=400,
                     detail="Group cannot be its own parent"
                 )
-            # Verify parent group exists
-            check_query = text("""
-                SELECT group_key FROM public.groups WHERE group_key = :parent_key
-            """)
-            check_result = conn.execute(check_query, {"parent_key": parent_key})
-            if not check_result.fetchone():
+            # Verify parent group exists in cache
+            if not group_exists_in_cache(parent_key):
                 raise HTTPException(
                     status_code=404,
                     detail=f"Parent group with ID {parent_key} not found"
@@ -310,6 +286,10 @@ async def update_group(
                 detail=f"Group with ID {validated_group_id} not found"
             )
         
+        # Refresh cache after mutation
+        from groups_teams_cache import refresh_groups_teams_cache
+        refresh_groups_teams_cache(conn)
+        
         # Return database field names to match pattern in other services
         group = {
             "group_key": row[0],
@@ -350,14 +330,12 @@ async def delete_group(
         JSON response with deletion confirmation
     """
     try:
+        from groups_teams_cache import group_exists_in_cache
+        
         validated_group_id = validate_id(groupId, "Group ID")
         
-        # Check if group exists
-        check_query = text("""
-            SELECT group_key FROM public.groups WHERE group_key = :group_key
-        """)
-        check_result = conn.execute(check_query, {"group_key": validated_group_id})
-        if not check_result.fetchone():
+        # Check if group exists in cache
+        if not group_exists_in_cache(validated_group_id):
             raise HTTPException(
                 status_code=404,
                 detail=f"Group with ID {validated_group_id} not found"
@@ -384,6 +362,10 @@ async def delete_group(
                 status_code=404,
                 detail=f"Group with ID {validated_group_id} not found"
             )
+        
+        # Refresh cache after mutation
+        from groups_teams_cache import refresh_groups_teams_cache
+        refresh_groups_teams_cache(conn)
         
         logger.info(f"Deleted group {validated_group_id} and moved teams to null")
         

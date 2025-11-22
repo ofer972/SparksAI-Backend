@@ -169,17 +169,22 @@ def _fetch_team_sprint_burndown(filters: Dict[str, Any], conn: Connection) -> Re
     issue_type = (filters.get("issue_type") or "all").strip() or "all"
     sprint_name = filters.get("sprint_name")
 
-    # Fetch available teams (always)
-    teams_query = text(
-        f"""
-        SELECT DISTINCT team_name
-        FROM {config.WORK_ITEMS_TABLE}
-        WHERE team_name IS NOT NULL
-        ORDER BY team_name
-        """
-    )
-    teams_rows = conn.execute(teams_query).fetchall()
-    available_teams = [row[0] for row in teams_rows if row[0]]
+    # Fetch available teams from cache
+    from groups_teams_cache import get_team_names_from_cache
+    try:
+        available_teams = get_team_names_from_cache()
+    except RuntimeError:
+        # Fallback to database if cache not loaded
+        teams_query = text(
+            f"""
+            SELECT DISTINCT team_name
+            FROM {config.WORK_ITEMS_TABLE}
+            WHERE team_name IS NOT NULL
+            ORDER BY team_name
+            """
+        )
+        teams_rows = conn.execute(teams_query).fetchall()
+        available_teams = [row[0] for row in teams_rows if row[0]]
 
     selected_sprint_id: Optional[int] = None
     auto_selected = False
@@ -431,17 +436,22 @@ def _fetch_team_closed_sprints(filters: Dict[str, Any], conn: Connection) -> Rep
     if months not in [1, 2, 3, 4, 6, 9]:
         months = 3
 
-    # Fetch available teams (always)
-    teams_query = text(
-        f"""
-        SELECT DISTINCT team_name
-        FROM {config.WORK_ITEMS_TABLE}
-        WHERE team_name IS NOT NULL
-        ORDER BY team_name
-        """
-    )
-    teams_rows = conn.execute(teams_query).fetchall()
-    available_teams = [row[0] for row in teams_rows if row[0]]
+    # Fetch available teams from cache
+    from groups_teams_cache import get_team_names_from_cache
+    try:
+        available_teams = get_team_names_from_cache()
+    except RuntimeError:
+        # Fallback to database if cache not loaded
+        teams_query = text(
+            f"""
+            SELECT DISTINCT team_name
+            FROM {config.WORK_ITEMS_TABLE}
+            WHERE team_name IS NOT NULL
+            ORDER BY team_name
+            """
+        )
+        teams_rows = conn.execute(teams_query).fetchall()
+        available_teams = [row[0] for row in teams_rows if row[0]]
 
     # Resolve team names using shared helper function
     team_names_list = resolve_team_names_from_filter(team_name, is_group, conn)
@@ -488,17 +498,22 @@ def _fetch_pi_predictability(filters: Dict[str, Any], conn: Connection) -> Repor
 
     team_name = filters.get("team_name")
     
-    # Fetch available teams (always)
-    teams_query = text(
-        f"""
-        SELECT DISTINCT team_name
-        FROM {config.WORK_ITEMS_TABLE}
-        WHERE team_name IS NOT NULL
-        ORDER BY team_name
-        """
-    )
-    teams_rows = conn.execute(teams_query).fetchall()
-    available_teams = [row[0] for row in teams_rows if row[0]]
+    # Fetch available teams from cache
+    from groups_teams_cache import get_team_names_from_cache
+    try:
+        available_teams = get_team_names_from_cache()
+    except RuntimeError:
+        # Fallback to database if cache not loaded
+        teams_query = text(
+            f"""
+            SELECT DISTINCT team_name
+            FROM {config.WORK_ITEMS_TABLE}
+            WHERE team_name IS NOT NULL
+            ORDER BY team_name
+            """
+        )
+        teams_rows = conn.execute(teams_query).fetchall()
+        available_teams = [row[0] for row in teams_rows if row[0]]
 
     # Fetch available PIs (always)
     pis_query = text(
@@ -656,18 +671,23 @@ def _fetch_issues_bugs_by_priority(filters: Dict[str, Any], conn: Connection) ->
         for team, data in teams_dict.items()
     ]
 
-    # Fetch all available team names (without filters) for the dropdown
-    available_teams_query = text(
-        f"""
-        SELECT DISTINCT team_name
-        FROM {config.WORK_ITEMS_TABLE}
-        WHERE issue_type = :issue_type
-        AND team_name IS NOT NULL
-        ORDER BY team_name
-        """
-    )
-    available_teams_rows = conn.execute(available_teams_query, {"issue_type": issue_type}).fetchall()
-    available_teams = [row[0] for row in available_teams_rows if row[0]]
+    # Fetch all available team names from cache (for dropdown - no issue_type filter needed)
+    from groups_teams_cache import get_team_names_from_cache
+    try:
+        available_teams = get_team_names_from_cache()
+    except RuntimeError:
+        # Fallback to database if cache not loaded
+        available_teams_query = text(
+            f"""
+            SELECT DISTINCT team_name
+            FROM {config.WORK_ITEMS_TABLE}
+            WHERE issue_type = :issue_type
+            AND team_name IS NOT NULL
+            ORDER BY team_name
+            """
+        )
+        available_teams_rows = conn.execute(available_teams_query, {"issue_type": issue_type}).fetchall()
+        available_teams = [row[0] for row in available_teams_rows if row[0]]
 
     return {
         "data": {
@@ -1021,17 +1041,22 @@ def _fetch_issues_flow_status_duration(filters: Dict[str, Any], conn: Connection
     # Resolve team names using shared helper function
     team_names_list = resolve_team_names_from_filter(team_name, is_group, conn)
 
-    # Fetch available teams (always)
-    teams_query = text(
-        f"""
-        SELECT DISTINCT team_name
-        FROM {config.WORK_ITEMS_TABLE}
-        WHERE team_name IS NOT NULL
-        ORDER BY team_name
-        """
-    )
-    teams_rows = conn.execute(teams_query).fetchall()
-    available_teams = [row[0] for row in teams_rows if row[0]]
+    # Fetch available teams from cache
+    from groups_teams_cache import get_team_names_from_cache
+    try:
+        available_teams = get_team_names_from_cache()
+    except RuntimeError:
+        # Fallback to database if cache not loaded
+        teams_query = text(
+            f"""
+            SELECT DISTINCT team_name
+            FROM {config.WORK_ITEMS_TABLE}
+            WHERE team_name IS NOT NULL
+            ORDER BY team_name
+            """
+        )
+        teams_rows = conn.execute(teams_query).fetchall()
+        available_teams = [row[0] for row in teams_rows if row[0]]
 
     # Fetch available issue types (always)
     issue_types_query = text(
@@ -1351,17 +1376,22 @@ def _fetch_pi_metrics_summary(filters: Dict[str, Any], conn: Connection) -> Repo
     team = (filters.get("team_name") or filters.get("team") or "").strip() or None
     plan_grace_period = _parse_int(filters.get("plan_grace_period"), default=5)
 
-    # Fetch available teams (always)
-    teams_query = text(
-        f"""
-        SELECT DISTINCT team_name
-        FROM {config.WORK_ITEMS_TABLE}
-        WHERE team_name IS NOT NULL
-        ORDER BY team_name
-        """
-    )
-    teams_rows = conn.execute(teams_query).fetchall()
-    available_teams = [row[0] for row in teams_rows if row[0]]
+    # Fetch available teams from cache
+    from groups_teams_cache import get_team_names_from_cache
+    try:
+        available_teams = get_team_names_from_cache()
+    except RuntimeError:
+        # Fallback to database if cache not loaded
+        teams_query = text(
+            f"""
+            SELECT DISTINCT team_name
+            FROM {config.WORK_ITEMS_TABLE}
+            WHERE team_name IS NOT NULL
+            ORDER BY team_name
+            """
+        )
+        teams_rows = conn.execute(teams_query).fetchall()
+        available_teams = [row[0] for row in teams_rows if row[0]]
 
     # Fetch available issue types (always)
     issue_types_query = text(
