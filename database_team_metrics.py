@@ -16,50 +16,53 @@ import config
 logger = logging.getLogger(__name__)
 
 
-def get_team_avg_sprint_metrics(team_name: str, sprint_count: int = 5, conn: Connection = None) -> Dict[str, float]:
+def get_team_avg_sprint_metrics(sprint_count: int = 5, team_names: Optional[List[str]] = None, conn: Connection = None) -> List[Dict[str, Any]]:
     """
-    Get average sprint metrics for a team over the last N closed sprints.
-    Uses get_sprint_metrics_by_team database function.
-    Copied exact logic from JiraDashboard-NEWUI project.
+    Get sprint metrics trend data for team(s) over the last N sprints.
+    Uses get_sprint_metrics_trend_data_all_issues database function.
+    Returns raw team-by-team data (averages calculated in endpoint).
     
     Args:
-        team_name (str): Team name
-        sprint_count (int): Number of recent sprints to average (default: 5)
+        sprint_count (int): Number of recent sprints to include (default: 5)
+        team_names (Optional[List[str]]): List of team names, or None for all teams
         conn (Connection): Database connection from FastAPI dependency
     
     Returns:
-        dict: Dictionary with 'velocity', 'cycle_time', and 'predictability' values
+        list: List of dictionaries with team-by-team metrics (raw data, not averaged)
     """
     try:
-        # SECURE: Parameterized query prevents SQL injection
-        sql_query = """
-            SELECT 
-                average_velocity_issue_count,
-                average_cycle_time_days,
-                overall_predictability_percent
-            FROM get_sprint_metrics_by_team(:sprint_count, :team_name);
-        """
+        # Build parameters
+        params = {"sprint_count": sprint_count}
         
-        logger.info(f"Executing query to get average sprint metrics for team: {team_name}")
-        logger.info(f"Parameters: sprint_count={sprint_count}, team_name={team_name}")
-        
-        result = conn.execute(text(sql_query), {
-            "sprint_count": sprint_count, 
-            "team_name": team_name
-        })
-        row = result.fetchone()
-        
-        if row and row[0] is not None and row[1] is not None and row[2] is not None:
-            return {
-                'velocity': int(round(float(row[0]), 0)) if row[0] else 0,
-                'cycle_time': float(row[1]) if row[1] else 0.0,
-                'predictability': float(row[2]) if row[2] else 0.0
-            }
+        if team_names:
+            # Pass array of team names
+            sql_query = """
+                SELECT * 
+                FROM public.get_sprint_metrics_trend_data_all_issues(:sprint_count, CAST(:team_names AS text[]))
+            """
+            params["team_names"] = team_names
         else:
-            return {'velocity': 0, 'cycle_time': 0.0, 'predictability': 0.0}
+            # Pass NULL for all teams
+            sql_query = """
+                SELECT * 
+                FROM public.get_sprint_metrics_trend_data_all_issues(:sprint_count, NULL)
+            """
+        
+        logger.info(f"Executing query to get sprint metrics trend data")
+        logger.info(f"Parameters: sprint_count={sprint_count}, team_names={team_names}")
+        
+        result = conn.execute(text(sql_query), params)
+        rows = result.fetchall()
+        
+        # Convert rows to list of dictionaries
+        metrics_data = []
+        for row in rows:
+            metrics_data.append(dict(row._mapping))
+        
+        return metrics_data
             
     except Exception as e:
-        logger.error(f"Error fetching average sprint metrics for team {team_name}: {e}")
+        logger.error(f"Error fetching sprint metrics trend data: {e}")
         raise e
 
 

@@ -292,54 +292,172 @@ def calculate_days_in_sprint(start_date: date, end_date: date) -> Optional[int]:
 
 @team_metrics_router.get("/team-metrics/get-avg-sprint-metrics")
 async def get_avg_sprint_metrics(
-    team_name: str = Query(..., description="Team name to get metrics for"),
+    team_name: str = Query(..., description="Team name or group name (if isGroup=true)"),
     sprint_count: int = Query(5, description="Number of sprints to average (default: 5, max: 20)", ge=1, le=20),
+    isGroup: bool = Query(False, description="If true, team_name is treated as a group name"),
     conn: Connection = Depends(get_db_connection)
 ):
     """
-    Get average sprint metrics for a specific team.
+    Get average sprint metrics for a specific team or group.
     
     Returns velocity, cycle time, and predictability metrics averaged over the last N sprints.
+    When isGroup=true, calculates averages across all teams in the group.
     
     Args:
-        team_name: Name of the team
+        team_name: Name of the team or group name (if isGroup=true)
         sprint_count: Number of recent sprints to average (default: 5)
+        isGroup: If true, team_name is treated as a group name
     
     Returns:
         JSON response with velocity, cycle_time, and predictability metrics
     """
     try:
-        # Validate inputs
-        validated_team_name = validate_team_name(team_name)
+        from database_team_metrics import resolve_team_names_from_filter
+        
+        # Validate sprint_count
         validated_sprint_count = validate_sprint_count(sprint_count)
         
-        # Get metrics from database function
-        metrics = get_team_avg_sprint_metrics(validated_team_name, validated_sprint_count, conn)
+        # Validate and resolve team names (validate first, then resolve)
+        validated_name = None
+        if isGroup:
+            validated_name = validate_group_name(team_name)
+        else:
+            validated_name = validate_team_name(team_name)
+        
+        # Resolve team names using shared helper function (same as other endpoints)
+        team_names_list = resolve_team_names_from_filter(validated_name, isGroup, conn)
+        
+        # Get raw metrics data from database function (team-by-team rows)
+        raw_data = get_team_avg_sprint_metrics(validated_sprint_count, team_names_list, conn)
+        
+        # Calculate averages from all rows
+        # Velocity: average of completed issues count per sprint
+        velocities = [row['issues_completed_count'] for row in raw_data if row.get('issues_completed_count') is not None]
+        avg_velocity = int(round(sum(velocities) / len(velocities), 0)) if velocities else 0
+        
+        # Cycle time: total cycle time / total issues (weighted average)
+        total_cycle_time = sum(row['total_cycle_time_sum_days'] for row in raw_data if row.get('total_cycle_time_sum_days') is not None)
+        total_issues = sum(row['issues_completed_count'] for row in raw_data if row.get('issues_completed_count') is not None)
+        avg_cycle_time = total_cycle_time / total_issues if total_issues > 0 else 0.0
+        
+        # Predictability: weighted by issue counts (total completed / total planned * 100)
+        total_completed = sum(row['issues_completed_count'] for row in raw_data if row.get('issues_completed_count') is not None)
+        total_planned = sum(row['issues_in_sprint_count'] for row in raw_data if row.get('issues_in_sprint_count') is not None)
+        avg_predictability = (total_completed / total_planned * 100) if total_planned > 0 else 0.0
+        
+        # Calculate trend data grouped by sprint_id (aggregate across teams)
+        trend_data = []
+        try:
+            from collections import defaultdict
+            
+            # Debug: Log data structure
+            if raw_data:
+                logger.info(f"DEBUG: raw_data has {len(raw_data)} rows")
+                logger.info(f"DEBUG: First row keys: {list(raw_data[0].keys())}")
+                logger.info(f"DEBUG: First row sprint_id (out_sprint_id): {raw_data[0].get('out_sprint_id')}")
+            else:
+                logger.info("DEBUG: raw_data is empty")
+            
+            sprint_groups = defaultdict(lambda: {
+                'issues_completed': 0,
+                'total_cycle_time': 0.0,
+                'issues_planned': 0,
+                'sprint_complete_date': None
+            })
+            
+            # Aggregate data by sprint_id (across all teams)
+            rows_processed = 0
+            rows_skipped = 0
+            for row in raw_data:
+                sprint_id = row.get('out_sprint_id')
+                if sprint_id is None:
+                    rows_skipped += 1
+                    continue
+                rows_processed += 1
+                
+                # Convert Decimal to float/int to avoid type mismatch errors
+                issues_completed = row.get('issues_completed_count', 0) or 0
+                cycle_time = row.get('total_cycle_time_sum_days', 0) or 0.0
+                issues_planned = row.get('issues_in_sprint_count', 0) or 0
+                
+                sprint_groups[sprint_id]['issues_completed'] += int(issues_completed) if issues_completed else 0
+                sprint_groups[sprint_id]['total_cycle_time'] += float(cycle_time) if cycle_time else 0.0
+                sprint_groups[sprint_id]['issues_planned'] += int(issues_planned) if issues_planned else 0
+                if row.get('sprint_complete_date') and not sprint_groups[sprint_id]['sprint_complete_date']:
+                    sprint_groups[sprint_id]['sprint_complete_date'] = row.get('sprint_complete_date')
+            
+            # Calculate per-sprint metrics
+            for sprint_id, data in sprint_groups.items():
+                sprint_velocity = data['issues_completed']
+                sprint_cycle_time = data['total_cycle_time'] / data['issues_completed'] if data['issues_completed'] > 0 else 0.0
+                sprint_predictability = (data['issues_completed'] / data['issues_planned'] * 100) if data['issues_planned'] > 0 else 0.0
+                
+                # Format date if available
+                sprint_date = None
+                if data['sprint_complete_date']:
+                    if hasattr(data['sprint_complete_date'], 'strftime'):
+                        sprint_date = data['sprint_complete_date'].strftime('%Y-%m-%d')
+                    else:
+                        sprint_date = str(data['sprint_complete_date'])
+                
+                trend_data.append({
+                    'sprint_id': sprint_id,
+                    'sprint_complete_date': sprint_date,
+                    'velocity': sprint_velocity,
+                    'cycle_time': round(sprint_cycle_time, 2),
+                    'predictability': round(sprint_predictability, 2)
+                })
+            
+            # Sort by sprint_complete_date (oldest first), then by sprint_id
+            # Fix: Handle type mismatches in sorting
+            trend_data.sort(key=lambda x: (
+                x['sprint_complete_date'] or '0000-00-00',
+                int(x['sprint_id']) if x['sprint_id'] is not None else 0
+            ))
+            
+            # Debug: Log results
+            logger.info(f"DEBUG: Rows processed: {rows_processed}, skipped: {rows_skipped}, trend_data items: {len(trend_data)}")
+        except Exception as e:
+            logger.error(f"Error calculating trend data: {e}")
+            logger.exception(e)  # Log full traceback
+            trend_data = []  # Return empty array on error
         
         # Calculate status for each metric
-        velocity_status = get_velocity_status(metrics['velocity'])
-        cycle_time_status = get_cycle_time_status(metrics['cycle_time'])
-        predictability_status = get_predictability_status(metrics['predictability'])
+        velocity_status = get_velocity_status(avg_velocity)
+        cycle_time_status = get_cycle_time_status(avg_cycle_time)
+        predictability_status = get_predictability_status(avg_predictability)
+        
+        # Build response data (same format as closed-sprints)
+        response_data = {
+            "velocity": avg_velocity,
+            "cycle_time": avg_cycle_time,
+            "predictability": avg_predictability,
+            "velocity_status": velocity_status,
+            "cycle_time_status": cycle_time_status,
+            "predictability_status": predictability_status,
+            "sprint_count": validated_sprint_count,
+            "trend_data": trend_data
+        }
+        
+        # Add metadata based on isGroup flag (same as closed-sprints endpoint)
+        if isGroup:
+            response_data["group_name"] = validated_name
+            response_data["teams_in_group"] = team_names_list
+            message = f"Retrieved average sprint metrics for group '{validated_name}'"
+        else:
+            response_data["team_name"] = validated_name
+            message = f"Retrieved average sprint metrics for team '{validated_name}'"
         
         return {
             "success": True,
-            "data": {
-                "velocity": metrics['velocity'],
-                "cycle_time": metrics['cycle_time'],
-                "predictability": metrics['predictability'],
-                "velocity_status": velocity_status,
-                "cycle_time_status": cycle_time_status,
-                "predictability_status": predictability_status,
-                "team_name": validated_team_name,
-                "sprint_count": validated_sprint_count
-            },
-            "message": f"Retrieved average sprint metrics for team '{validated_team_name}'"
+            "data": response_data,
+            "message": message
         }
     
     except HTTPException:
         raise  # Re-raise FastAPI HTTPExceptions
     except Exception as e:
-        logger.error(f"Error fetching average sprint metrics for team {validated_team_name}: {e}")
+        logger.error(f"Error fetching average sprint metrics (team_name={team_name}, isGroup={isGroup}): {e}")
         raise HTTPException(
             status_code=500,
             detail=f"Failed to fetch average sprint metrics: {str(e)}"
