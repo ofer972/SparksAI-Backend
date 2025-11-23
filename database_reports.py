@@ -1008,13 +1008,14 @@ def _fetch_issue_status_duration_detail(
         f"""
         SELECT 
             isd.issue_key,
-            isd.summary,
+            ji.summary,
             isd.duration_days,
             isd.time_entered,
             isd.time_exited,
             isd.team_name,
             isd.issue_type
         FROM public.issue_status_durations isd
+        INNER JOIN public.jira_issues ji ON isd.issue_key = ji.issue_key
         WHERE {where_clause}
         ORDER BY isd.time_exited DESC
         """
