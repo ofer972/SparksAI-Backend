@@ -1157,7 +1157,7 @@ def create_recommendations_table_if_not_exists(engine=None) -> bool:
                 CREATE TABLE public.recommendations (
                     id SERIAL PRIMARY KEY,
                     team_name VARCHAR(255) NOT NULL,
-                    date TIMESTAMP WITH TIME ZONE NOT NULL,
+                    date DATE NOT NULL,
                     action_text TEXT NOT NULL,
                     rational TEXT,
                     full_information TEXT,
@@ -1167,7 +1167,8 @@ def create_recommendations_table_if_not_exists(engine=None) -> bool:
                     source_job_id INTEGER,
                     source_ai_summary_id INTEGER,
                     created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
-                    updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+                    updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+                    UNIQUE (date, team_name, source_ai_summary_id)
                 );
                 
                 CREATE INDEX idx_recommendations_team_date ON public.recommendations(team_name, date DESC);

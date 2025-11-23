@@ -771,10 +771,17 @@ def create_ai_card(data: Dict[str, Any], conn: Connection = None) -> Dict[str, A
 
         columns_sql = ", ".join(filtered.keys())
         values_sql = ", ".join([f":{k}" for k in filtered.keys()])
+        
+        # Build UPDATE clause for ON CONFLICT - update all fields except created_at
+        update_fields = [k for k in filtered.keys() if k != "created_at"]
+        set_clauses = ", ".join([f"{k} = EXCLUDED.{k}" for k in update_fields])
+        set_clauses += ", updated_at = CURRENT_TIMESTAMP"
 
         query = text(f"""
             INSERT INTO {config.AI_SUMMARY_TABLE} ({columns_sql})
             VALUES ({values_sql})
+            ON CONFLICT (date, team_name, card_name, pi)
+            DO UPDATE SET {set_clauses}
             RETURNING *
         """)
 
@@ -855,10 +862,17 @@ def create_recommendation(data: Dict[str, Any], conn: Connection = None) -> Dict
 
         columns_sql = ", ".join(filtered.keys())
         values_sql = ", ".join([f":{k}" for k in filtered.keys()])
+        
+        # Build UPDATE clause for ON CONFLICT - update all fields except created_at
+        update_fields = [k for k in filtered.keys() if k != "created_at"]
+        set_clauses = ", ".join([f"{k} = EXCLUDED.{k}" for k in update_fields])
+        set_clauses += ", updated_at = CURRENT_TIMESTAMP"
 
         query = text(f"""
             INSERT INTO {config.RECOMMENDATIONS_TABLE} ({columns_sql})
             VALUES ({values_sql})
+            ON CONFLICT (date, team_name, source_ai_summary_id)
+            DO UPDATE SET {set_clauses}
             RETURNING *
         """)
 
