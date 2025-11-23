@@ -89,14 +89,14 @@ LLM_SQL_SERVICE_URL = os.getenv("LLM_SQL_SERVICE_URL", "http://localhost:8002")
 SQL_AI_TRIGGER = "!"  # Trigger character to detect SQL queries in user questions (first character check)
 
 # --- Redis Configuration ---
-REDIS_HOST = os.getenv("REDIS_HOST", "localhost")
-REDIS_PORT = int(os.getenv("REDIS_PORT", "6379"))
-REDIS_DB = int(os.getenv("REDIS_DB", "0"))
-REDIS_PASSWORD = os.getenv("REDIS_PASSWORD", None)
-REDIS_ENABLED = os.getenv("REDIS_ENABLED", "true").lower() == "true"
+REDIS_HOST = os.getenv("REDIS_HOST") or "localhost"
+REDIS_PORT = int(os.getenv("REDIS_PORT") or "6379")
+REDIS_DB = int(os.getenv("REDIS_DB") or "0")
+REDIS_PASSWORD = os.getenv("REDIS_PASSWORD") or None
+REDIS_ENABLED = (os.getenv("REDIS_ENABLED") or "true").lower() == "true"
 
 # Cache TTL defaults (in seconds) by report type
-CACHE_TTL_REALTIME = int(os.getenv("CACHE_TTL_REALTIME", "60"))  # 1 minute
-CACHE_TTL_AGGREGATE = int(os.getenv("CACHE_TTL_AGGREGATE", "300"))  # 5 minutes
-CACHE_TTL_HISTORICAL = int(os.getenv("CACHE_TTL_HISTORICAL", "1800"))  # 30 minutes
-CACHE_TTL_DEFINITIONS = int(os.getenv("CACHE_TTL_DEFINITIONS", "3600"))  # 1 hour
+CACHE_TTL_REALTIME = int(os.getenv("CACHE_TTL_REALTIME") or "60")  # 1 minute
+CACHE_TTL_AGGREGATE = int(os.getenv("CACHE_TTL_AGGREGATE") or "300")  # 5 minutes
+CACHE_TTL_HISTORICAL = int(os.getenv("CACHE_TTL_HISTORICAL") or "1800")  # 30 minutes
+CACHE_TTL_DEFINITIONS = int(os.getenv("CACHE_TTL_DEFINITIONS") or "3600")  # 1 hour

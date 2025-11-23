@@ -57,6 +57,7 @@ def generate_cache_key(report_id: str, filters: dict) -> str:
     Returns:
         A cache key string in the format: report:{report_id}:{hash}
     """
+
     sorted_filters = json.dumps(filters, sort_keys=True)
     hash_obj = hashlib.md5(f"{report_id}:{sorted_filters}".encode())
     return f"report:{report_id}:{hash_obj.hexdigest()}"
