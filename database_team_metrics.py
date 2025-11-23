@@ -346,22 +346,13 @@ def resolve_team_names_from_filter(
     """
     from fastapi import HTTPException
     from groups_teams_cache import (
-        get_teams_for_group_from_cache,
-        group_exists_by_name_in_cache,
-        team_exists_by_name_in_cache,
-        is_groups_teams_cache_loaded
+        get_cached_groups, get_cached_teams,
+        group_exists_by_name_in_db, team_exists_by_name_in_db
     )
     import re
     
     if not team_name:
         return None  # None means all teams
-    
-    # Check if cache is loaded
-    if not is_groups_teams_cache_loaded():
-        raise HTTPException(
-            status_code=500,
-            detail="Groups/Teams cache not loaded. Please restart the application."
-        )
     
     if is_group:
         # Validate group name
@@ -373,15 +364,23 @@ def resolve_team_names_from_filter(
         if not sanitized_group_name:
             raise HTTPException(status_code=400, detail="Group name contains invalid characters")
         
-        # Check if group exists in cache
-        if not group_exists_by_name_in_cache(sanitized_group_name):
+        # Check if group exists
+        cached_groups = get_cached_groups()
+        if cached_groups:
+            groups = cached_groups.get("groups", [])
+            group_exists = any(g.get("name") == sanitized_group_name for g in groups)
+        else:
+            group_exists = group_exists_by_name_in_db(sanitized_group_name, conn)
+        
+        if not group_exists:
             raise HTTPException(
                 status_code=404,
                 detail=f"Group '{sanitized_group_name}' not found or has no teams"
             )
         
-        # Get teams from cache (recursive - includes descendant groups)
-        team_names_list = get_teams_for_group_from_cache(sanitized_group_name, include_children=True)
+        # Get teams - use cache with recursive support
+        from groups_teams_cache import get_recursive_teams_for_group_from_cache
+        team_names_list = get_recursive_teams_for_group_from_cache(sanitized_group_name, conn, include_children=True)
         
         if not team_names_list:
             raise HTTPException(
@@ -400,8 +399,15 @@ def resolve_team_names_from_filter(
         if not sanitized:
             raise HTTPException(status_code=400, detail="Team name contains invalid characters")
         
-        # Verify team exists in cache
-        if not team_exists_by_name_in_cache(sanitized):
+        # Verify team exists
+        cached_teams = get_cached_teams()
+        if cached_teams:
+            teams = cached_teams.get("teams", [])
+            team_exists = any(t.get("team_name") == sanitized for t in teams)
+        else:
+            team_exists = team_exists_by_name_in_db(sanitized, conn)
+        
+        if not team_exists:
             raise HTTPException(
                 status_code=404,
                 detail=f"Team '{sanitized}' not found"

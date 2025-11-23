@@ -73,9 +73,18 @@ async def get_team_names(conn: Connection = Depends(get_db_connection)):
         JSON response with list of team names and count
     """
     try:
-        from groups_teams_cache import get_team_names_from_cache
+        from groups_teams_cache import get_cached_teams, set_cached_teams, load_team_names_from_db, load_all_teams_from_db
         
-        team_names = get_team_names_from_cache()
+        # Try cache first
+        cached = get_cached_teams()
+        if cached:
+            team_names = [t["team_name"] for t in cached.get("teams", [])]
+        else:
+            # Cache miss - load from DB
+            team_names = load_team_names_from_db(conn)
+            # Also build full teams cache for future use
+            all_teams = load_all_teams_from_db(conn)
+            set_cached_teams({"teams": all_teams, "count": len(all_teams)})
         
         return {
             "success": True,
@@ -86,12 +95,6 @@ async def get_team_names(conn: Connection = Depends(get_db_connection)):
             "message": f"Retrieved {len(team_names)} team names"
         }
     
-    except RuntimeError as e:
-        logger.error(f"Cache not loaded: {e}")
-        raise HTTPException(
-            status_code=500,
-            detail="Groups/Teams cache not loaded. Please restart the application."
-        )
     except Exception as e:
         logger.error(f"Error fetching team names: {e}")
         raise HTTPException(
@@ -132,15 +135,32 @@ async def get_all_teams(
         if group_key is not None:
             validated_group_key = validate_id(group_key, "Group key")
         
-        # Use cache instead of database query
-        from groups_teams_cache import get_all_teams_from_cache
+        # Try cache first
+        from groups_teams_cache import get_cached_teams, set_cached_teams, load_all_teams_from_db
         
-        teams = get_all_teams_from_cache(
-            group_key=validated_group_key if group_key is not None else None,
-            search=search,
-            ai_insight=ai_insight,
-            limit=validated_limit
-        )
+        cached = get_cached_teams()
+        if cached:
+            all_teams = cached.get("teams", [])
+        else:
+            # Cache miss - load from DB
+            all_teams = load_all_teams_from_db(conn)
+            set_cached_teams({"teams": all_teams, "count": len(all_teams)})
+        
+        # Apply filters in service layer
+        teams = []
+        for team in all_teams:
+            # Apply filters
+            if validated_group_key is not None and validated_group_key not in team.get("group_keys", []):
+                continue
+            if search and search.lower() not in team["team_name"].lower():
+                continue
+            if ai_insight is not None and team.get("ai_insight") != ai_insight:
+                continue
+            teams.append(team)
+        
+        # Sort and limit
+        teams.sort(key=lambda x: x["team_name"])
+        teams = teams[:validated_limit]
         
         return {
             "success": True,
@@ -189,14 +209,21 @@ async def create_team(
     """
     try:
         # Validate group_keys if provided
-        from groups_teams_cache import group_exists_in_cache
+        from groups_teams_cache import get_cached_groups, group_exists_in_db
         
         group_keys = []
         if request.group_keys:
+            cached_groups = get_cached_groups()
             for gk in request.group_keys:
                 validated_gk = validate_id(gk, "Group key")
-                # Verify group exists in cache
-                if not group_exists_in_cache(validated_gk):
+                # Verify group exists
+                if cached_groups:
+                    groups = cached_groups.get("groups", [])
+                    group_exists = any(g.get("id") == validated_gk for g in groups)
+                else:
+                    group_exists = group_exists_in_db(validated_gk, conn)
+                
+                if not group_exists:
                     raise HTTPException(
                         status_code=404,
                         detail=f"Group with ID {validated_gk} not found"
@@ -239,8 +266,8 @@ async def create_team(
         conn.commit()
         
         # Refresh cache after mutation
-        from groups_teams_cache import refresh_groups_teams_cache
-        refresh_groups_teams_cache(conn)
+        from groups_teams_cache import invalidate_groups_teams_cache
+        invalidate_groups_teams_cache()
         
         team = {
             "team_key": row[0],
@@ -284,12 +311,22 @@ async def update_team(
         JSON response with updated team
     """
     try:
-        from groups_teams_cache import team_exists_in_cache, group_exists_in_cache
+        from groups_teams_cache import (
+            get_cached_groups, get_cached_teams,
+            team_exists_in_db, group_exists_in_db
+        )
         
         validated_team_id = validate_id(teamId, "Team ID")
         
-        # Check if team exists in cache
-        if not team_exists_in_cache(validated_team_id):
+        # Check if team exists
+        cached_teams = get_cached_teams()
+        if cached_teams:
+            teams = cached_teams.get("teams", [])
+            team_exists = any(t.get("team_key") == validated_team_id for t in teams)
+        else:
+            team_exists = team_exists_in_db(validated_team_id, conn)
+        
+        if not team_exists:
             raise HTTPException(
                 status_code=404,
                 detail=f"Team with ID {validated_team_id} not found"
@@ -299,10 +336,17 @@ async def update_team(
         group_keys = None
         if request.group_keys is not None:
             group_keys = []
+            cached_groups = get_cached_groups()
             for gk in request.group_keys:
                 validated_gk = validate_id(gk, "Group key")
-                # Verify group exists in cache
-                if not group_exists_in_cache(validated_gk):
+                # Verify group exists
+                if cached_groups:
+                    groups = cached_groups.get("groups", [])
+                    group_exists = any(g.get("id") == validated_gk for g in groups)
+                else:
+                    group_exists = group_exists_in_db(validated_gk, conn)
+                
+                if not group_exists:
                     raise HTTPException(
                         status_code=404,
                         detail=f"Group with ID {validated_gk} not found"
@@ -384,8 +428,8 @@ async def update_team(
         conn.commit()
         
         # Refresh cache after mutation
-        from groups_teams_cache import refresh_groups_teams_cache
-        refresh_groups_teams_cache(conn)
+        from groups_teams_cache import invalidate_groups_teams_cache
+        invalidate_groups_teams_cache()
         
         # Fetch current group associations from database (after refresh, cache is up to date)
         fetch_groups_query = text("""
@@ -456,8 +500,8 @@ async def delete_team(
             )
         
         # Refresh cache after mutation
-        from groups_teams_cache import refresh_groups_teams_cache
-        refresh_groups_teams_cache(conn)
+        from groups_teams_cache import invalidate_groups_teams_cache
+        invalidate_groups_teams_cache()
         
         return {
             "success": True,
@@ -508,10 +552,17 @@ async def batch_assign_teams_to_group(
                 detail="team_ids array cannot be empty"
             )
         
-        # Verify group exists in cache
-        from groups_teams_cache import group_exists_in_cache, team_exists_in_cache
+        # Verify group exists
+        from groups_teams_cache import get_cached_groups, get_cached_teams, group_exists_in_db, team_exists_in_db
         
-        if not group_exists_in_cache(validated_group_id):
+        cached_groups = get_cached_groups()
+        if cached_groups:
+            groups = cached_groups.get("groups", [])
+            group_exists = any(g.get("id") == validated_group_id for g in groups)
+        else:
+            group_exists = group_exists_in_db(validated_group_id, conn)
+        
+        if not group_exists:
             raise HTTPException(
                 status_code=404,
                 detail=f"Group with ID {validated_group_id} not found"
@@ -521,9 +572,16 @@ async def batch_assign_teams_to_group(
         logger.info(f"Batch assigning {len(validated_team_ids)} teams to group {validated_group_id}")
         
         updated_count = 0
+        cached_teams = get_cached_teams()
         for team_id in validated_team_ids:
-            # Verify team exists in cache
-            if not team_exists_in_cache(team_id):
+            # Verify team exists
+            if cached_teams:
+                teams = cached_teams.get("teams", [])
+                team_exists = any(t.get("team_key") == team_id for t in teams)
+            else:
+                team_exists = team_exists_in_db(team_id, conn)
+            
+            if not team_exists:
                 logger.warning(f"Team {team_id} not found, skipping")
                 continue
             
@@ -539,8 +597,8 @@ async def batch_assign_teams_to_group(
         conn.commit()
         
         # Refresh cache after mutation
-        from groups_teams_cache import refresh_groups_teams_cache
-        refresh_groups_teams_cache(conn)
+        from groups_teams_cache import invalidate_groups_teams_cache
+        invalidate_groups_teams_cache()
         
         return {
             "success": True,
@@ -577,12 +635,18 @@ async def remove_team_from_group(
         JSON response with confirmation
     """
     try:
-        from groups_teams_cache import get_team_by_id_from_cache
-        
         validated_team_id = validate_id(teamId, "Team ID")
         
-        # Verify team exists in cache and get team data
-        team_data = get_team_by_id_from_cache(validated_team_id)
+        # Verify team exists and get team data
+        from groups_teams_cache import get_cached_teams, get_team_by_id_from_db
+        
+        cached_teams = get_cached_teams()
+        if cached_teams:
+            teams = cached_teams.get("teams", [])
+            team_data = next((t for t in teams if t.get("team_key") == validated_team_id), None)
+        else:
+            team_data = get_team_by_id_from_db(validated_team_id, conn)
+        
         if not team_data:
             raise HTTPException(
                 status_code=404,
@@ -603,8 +667,8 @@ async def remove_team_from_group(
         conn.commit()
         
         # Refresh cache after mutation
-        from groups_teams_cache import refresh_groups_teams_cache
-        refresh_groups_teams_cache(conn)
+        from groups_teams_cache import invalidate_groups_teams_cache
+        invalidate_groups_teams_cache()
         
         removed_count = delete_result.rowcount
         
@@ -692,11 +756,16 @@ async def populate_teams_from_jira_issues(
         
         conn.commit()
         
-        # Refresh cache after bulk mutation
-        from groups_teams_cache import refresh_groups_teams_cache
-        refresh_groups_teams_cache(conn)
+        # Refresh cache after bulk mutation - invalidate and rebuild
+        from groups_teams_cache import invalidate_groups_teams_cache, populate_groups_teams_cache
         
-        logger.info(f"Populated teams: {inserted_count} inserted, {existed_count} already existed")
+        invalidate_groups_teams_cache()
+        cache_success, _, _ = populate_groups_teams_cache(conn)
+        
+        if cache_success:
+            logger.info(f"Populated teams: {inserted_count} inserted, {existed_count} already existed. Cache refreshed.")
+        else:
+            logger.warning(f"Populated teams: {inserted_count} inserted, {existed_count} already existed. Cache refresh failed (Redis unavailable).")
         
         return {
             "success": True,

@@ -170,12 +170,17 @@ def _fetch_team_sprint_burndown(filters: Dict[str, Any], conn: Connection) -> Re
     sprint_name = filters.get("sprint_name")
 
     # Fetch available teams from cache
-    from groups_teams_cache import get_team_names_from_cache
-    try:
-        available_teams = get_team_names_from_cache()
-    except RuntimeError as e:
-        logger.error(f"Cache not loaded: {e}")
-        available_teams = []
+    from groups_teams_cache import get_cached_teams, set_cached_teams, load_team_names_from_db, load_all_teams_from_db
+    
+    cached = get_cached_teams()
+    if cached:
+        available_teams = [t["team_name"] for t in cached.get("teams", [])]
+    else:
+        # Cache miss - load from DB
+        available_teams = load_team_names_from_db(conn)
+        # Also build full teams cache for future use
+        all_teams = load_all_teams_from_db(conn)
+        set_cached_teams({"teams": all_teams, "count": len(all_teams)})
 
     selected_sprint_id: Optional[int] = None
     auto_selected = False
@@ -428,12 +433,17 @@ def _fetch_team_closed_sprints(filters: Dict[str, Any], conn: Connection) -> Rep
         months = 3
 
     # Fetch available teams from cache
-    from groups_teams_cache import get_team_names_from_cache
-    try:
-        available_teams = get_team_names_from_cache()
-    except RuntimeError as e:
-        logger.error(f"Cache not loaded: {e}")
-        available_teams = []
+    from groups_teams_cache import get_cached_teams, set_cached_teams, load_team_names_from_db, load_all_teams_from_db
+    
+    cached = get_cached_teams()
+    if cached:
+        available_teams = [t["team_name"] for t in cached.get("teams", [])]
+    else:
+        # Cache miss - load from DB
+        available_teams = load_team_names_from_db(conn)
+        # Also build full teams cache for future use
+        all_teams = load_all_teams_from_db(conn)
+        set_cached_teams({"teams": all_teams, "count": len(all_teams)})
 
     # Resolve team names using shared helper function
     team_names_list = resolve_team_names_from_filter(team_name, is_group, conn)
@@ -495,12 +505,17 @@ def _fetch_pi_predictability(filters: Dict[str, Any], conn: Connection) -> Repor
     team_name = filters.get("team_name")
     
     # Fetch available teams from cache
-    from groups_teams_cache import get_team_names_from_cache
-    try:
-        available_teams = get_team_names_from_cache()
-    except RuntimeError as e:
-        logger.error(f"Cache not loaded: {e}")
-        available_teams = []
+    from groups_teams_cache import get_cached_teams, set_cached_teams, load_team_names_from_db, load_all_teams_from_db
+    
+    cached = get_cached_teams()
+    if cached:
+        available_teams = [t["team_name"] for t in cached.get("teams", [])]
+    else:
+        # Cache miss - load from DB
+        available_teams = load_team_names_from_db(conn)
+        # Also build full teams cache for future use
+        all_teams = load_all_teams_from_db(conn)
+        set_cached_teams({"teams": all_teams, "count": len(all_teams)})
 
     # Fetch available PIs (always)
     pis_query = text(
@@ -1058,12 +1073,17 @@ def _fetch_issues_flow_status_duration(filters: Dict[str, Any], conn: Connection
     team_names_list = resolve_team_names_from_filter(team_name, is_group, conn)
 
     # Fetch available teams from cache
-    from groups_teams_cache import get_team_names_from_cache
-    try:
-        available_teams = get_team_names_from_cache()
-    except RuntimeError as e:
-        logger.error(f"Cache not loaded: {e}")
-        available_teams = []
+    from groups_teams_cache import get_cached_teams, set_cached_teams, load_team_names_from_db, load_all_teams_from_db
+    
+    cached = get_cached_teams()
+    if cached:
+        available_teams = [t["team_name"] for t in cached.get("teams", [])]
+    else:
+        # Cache miss - load from DB
+        available_teams = load_team_names_from_db(conn)
+        # Also build full teams cache for future use
+        all_teams = load_all_teams_from_db(conn)
+        set_cached_teams({"teams": all_teams, "count": len(all_teams)})
 
     # Fetch available issue types (always)
     issue_types_query = text(
@@ -1384,12 +1404,17 @@ def _fetch_pi_metrics_summary(filters: Dict[str, Any], conn: Connection) -> Repo
     plan_grace_period = _parse_int(filters.get("plan_grace_period"), default=5)
 
     # Fetch available teams from cache
-    from groups_teams_cache import get_team_names_from_cache
-    try:
-        available_teams = get_team_names_from_cache()
-    except RuntimeError as e:
-        logger.error(f"Cache not loaded: {e}")
-        available_teams = []
+    from groups_teams_cache import get_cached_teams, set_cached_teams, load_team_names_from_db, load_all_teams_from_db
+    
+    cached = get_cached_teams()
+    if cached:
+        available_teams = [t["team_name"] for t in cached.get("teams", [])]
+    else:
+        # Cache miss - load from DB
+        available_teams = load_team_names_from_db(conn)
+        # Also build full teams cache for future use
+        all_teams = load_all_teams_from_db(conn)
+        set_cached_teams({"teams": all_teams, "count": len(all_teams)})
 
     # Fetch available issue types (always)
     issue_types_query = text(

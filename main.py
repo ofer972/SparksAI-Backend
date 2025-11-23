@@ -207,21 +207,25 @@ app.include_router(reports_router, prefix="/api/v1", tags=["reports"])
 
 @app.on_event("startup")
 async def startup_event():
-    """Load groups/teams cache on application startup"""
-    from database_connection import get_db_engine
-    from groups_teams_cache import load_groups_teams_cache
-    
+    """Application startup - populate groups/teams cache"""
     try:
+        from database_connection import get_db_engine
+        
         engine = get_db_engine()
-        if engine:
-            with engine.connect() as conn:
-                load_groups_teams_cache(conn)
-                logger.info("✅ Groups/Teams cache loaded on startup")
-        else:
-            logger.warning("⚠️ Could not load cache: No database connection")
+        if not engine:
+            logger.warning("⚠️  Database engine not available. Cache will be built on first use.")
+            return
+        
+        with engine.connect() as conn:
+            from groups_teams_cache import populate_groups_teams_cache
+            
+            success, groups_count, teams_count = populate_groups_teams_cache(conn)
+            if success:
+                logger.info(f"✅ Cache populated: {groups_count} groups, {teams_count} teams")
+            else:
+                logger.warning("⚠️  Cache population failed (Redis unavailable).")
     except Exception as e:
-        logger.error(f"❌ Failed to load groups/teams cache on startup: {e}")
-        # Don't fail startup if cache load fails
+        logger.warning(f"⚠️  Startup cache population failed: {e}. Cache will be built on first use.")
 
 
 @app.get("/")

@@ -100,3 +100,4 @@ CACHE_TTL_REALTIME = int(os.getenv("CACHE_TTL_REALTIME") or "60")  # 1 minute
 CACHE_TTL_AGGREGATE = int(os.getenv("CACHE_TTL_AGGREGATE") or "300")  # 5 minutes
 CACHE_TTL_HISTORICAL = int(os.getenv("CACHE_TTL_HISTORICAL") or "1800")  # 30 minutes
 CACHE_TTL_DEFINITIONS = int(os.getenv("CACHE_TTL_DEFINITIONS") or "3600")  # 1 hour
+CACHE_TTL_GROUPS_TEAMS = int(os.getenv("CACHE_TTL_GROUPS_TEAMS") or "3600")  # 1 hour
