@@ -413,7 +413,7 @@ def resolve_team_names_from_filter(
 def get_closed_sprints_data_db(team_names: Optional[List[str]], months: int = 3, conn: Connection = None) -> List[Dict[str, Any]]:
     """
     Get closed sprints data for specific team(s) or all teams with detailed metrics.
-    Uses the closed_sprint_summary view to get comprehensive sprint completion data.
+    Uses the get_closed_sprint_summary_fn database function to get comprehensive sprint completion data.
     
     Args:
         team_names (Optional[List[str]]): List of team names to filter by, or None for all teams
@@ -424,77 +424,51 @@ def get_closed_sprints_data_db(team_names: Optional[List[str]], months: int = 3,
         list: List of closed sprint dictionaries with detailed metrics (includes team_name)
     """
     try:
-        # Calculate start date based on months parameter
-        start_date = datetime.now().date() - timedelta(days=months * 30)
+        # Build parameters for the function call
+        params = {"months_back": months}
         
-        # Build query with IN clause or no filter
+        # Build query - pass team_names as array or NULL
         if team_names:
-            # Build parameterized IN clause
-            placeholders = ", ".join([f":team_name_{i}" for i in range(len(team_names))])
-            params = {f"team_name_{i}": name for i, name in enumerate(team_names)}
-            params["start_date"] = start_date.strftime("%Y-%m-%d")
-            
-            sql_query = f"""
-                SELECT 
-                    team_name,
-                    sprint_name,
-                    start_date,
-                    end_date,
-                    completed_percentage,
-                    issues_at_start,
-                    issues_added,
-                    issues_done,
-                    issues_remaining,
-                    sprint_goal
-                FROM closed_sprint_summary
-                WHERE team_name IN ({placeholders})
-                AND end_date >= :start_date
+            # Pass array of team names to function
+            params["p_team_names"] = team_names
+            query = text("""
+                SELECT *
+                FROM public.get_closed_sprint_summary_fn(:months_back, CAST(:p_team_names AS text[]))
                 ORDER BY team_name, end_date DESC
-            """
+            """)
             
             logger.info(f"Executing query to get closed sprints data for teams: {team_names}")
-            logger.info(f"Parameters: team_names={team_names}, months={months}, start_date={start_date}")
+            logger.info(f"Parameters: team_names={team_names}, months={months}")
             
-            result = conn.execute(text(sql_query), params)
+            result = conn.execute(query, params)
         else:
-            # No team filter - return all teams
-            sql_query = """
-                SELECT 
-                    team_name,
-                    sprint_name,
-                    start_date,
-                    end_date,
-                    completed_percentage,
-                    issues_at_start,
-                    issues_added,
-                    issues_done,
-                    issues_remaining,
-                    sprint_goal
-                FROM closed_sprint_summary
-                WHERE end_date >= :start_date
+            # Pass NULL for all teams
+            query = text("""
+                SELECT *
+                FROM public.get_closed_sprint_summary_fn(:months_back, NULL)
                 ORDER BY team_name, end_date DESC
-            """
+            """)
             
             logger.info(f"Executing query to get closed sprints data for all teams")
-            logger.info(f"Parameters: months={months}, start_date={start_date}")
+            logger.info(f"Parameters: months={months}")
             
-            result = conn.execute(text(sql_query), {
-                "start_date": start_date.strftime("%Y-%m-%d")
-            })
+            result = conn.execute(query, params)
         
+        # Convert rows to list of dictionaries
         closed_sprints = []
         for row in result:
+            row_dict = dict(row._mapping)
             closed_sprints.append({
-                'team_name': row[0],
-                'sprint_name': row[1],
-                'start_date': row[2],
-                'end_date': row[3],
-                'completed_percentage': float(row[4]) if row[4] else 0.0,
-                'issues_at_start': int(row[5]) if row[5] else 0,
-                'issues_added': int(row[6]) if row[6] else 0,
-                'issues_done': int(row[7]) if row[7] else 0,
-                'issues_remaining': int(row[8]) if row[8] else 0,
-                'sprint_goal': row[9] if row[9] else ""
+                'team_name': row_dict.get('team_name'),
+                'sprint_name': row_dict.get('sprint_name'),
+                'start_date': row_dict.get('start_date'),
+                'end_date': row_dict.get('end_date'),
+                'completed_percentage': float(row_dict.get('completed_percentage', 0)) if row_dict.get('completed_percentage') is not None else 0.0,
+                'issues_at_start': int(row_dict.get('issues_at_start', 0)) if row_dict.get('issues_at_start') is not None else 0,
+                'issues_added': int(row_dict.get('issues_added', 0)) if row_dict.get('issues_added') is not None else 0,
+                'issues_done': int(row_dict.get('issues_done', 0)) if row_dict.get('issues_done') is not None else 0,
+                'issues_remaining': int(row_dict.get('issues_remaining', 0)) if row_dict.get('issues_remaining') is not None else 0,
+                'sprint_goal': row_dict.get('sprint_goal') if row_dict.get('sprint_goal') else ""
             })
         
         return closed_sprints
