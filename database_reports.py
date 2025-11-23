@@ -702,12 +702,17 @@ def _fetch_issues_bugs_by_priority(filters: Dict[str, Any], conn: Connection) ->
     ]
 
     # Fetch all available team names from cache (for dropdown - no issue_type filter needed)
-    from groups_teams_cache import get_team_names_from_cache
-    try:
-        available_teams = get_team_names_from_cache()
-    except RuntimeError as e:
-        logger.error(f"Cache not loaded: {e}")
-        available_teams = []
+    from groups_teams_cache import get_cached_teams, set_cached_teams, load_team_names_from_db, load_all_teams_from_db
+    
+    cached = get_cached_teams()
+    if cached:
+        available_teams = [t["team_name"] for t in cached.get("teams", [])]
+    else:
+        # Cache miss - load from DB
+        available_teams = load_team_names_from_db(conn)
+        # Also build full teams cache for future use
+        all_teams = load_all_teams_from_db(conn)
+        set_cached_teams({"teams": all_teams, "count": len(all_teams)})
 
     # Build meta with appropriate fields
     meta = {
