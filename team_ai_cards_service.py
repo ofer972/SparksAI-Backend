@@ -341,7 +341,9 @@ async def create_team_ai_card(
         validated_team_name = validate_team_name(request.team_name)
         payload = request.model_dump()
         payload["team_name"] = validated_team_name
-        # If pi not provided, default to None (will be null in DB)
+        # If pi not provided, default to empty string (pi is NOT NULL in DB)
+        if payload.get("pi") is None:
+            payload["pi"] = ""
         created = create_ai_card(payload, conn)
         return {
             "success": True,
