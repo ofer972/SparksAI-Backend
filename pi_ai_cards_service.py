@@ -378,8 +378,12 @@ async def update_pi_ai_card(
         updates = request.model_dump(exclude_unset=True)
         if "pi" in updates and updates["pi"] is not None:
             updates["pi"] = validate_pi_name(updates["pi"])
-        if "team_name" in updates and updates["team_name"] is not None:
-            updates["team_name"] = re.sub(r'[^a-zA-Z0-9\s\-_]', '', updates["team_name"].strip())
+        # Normalize team_name: None -> empty string for consistency with UNIQUE constraint
+        if "team_name" in updates:
+            if updates["team_name"] is None:
+                updates["team_name"] = ""
+            elif updates["team_name"] is not None:
+                updates["team_name"] = re.sub(r'[^a-zA-Z0-9\s\-_]', '', updates["team_name"].strip())
 
         updated = update_ai_card_by_id(id, updates, conn)
         if not updated:
