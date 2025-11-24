@@ -347,8 +347,11 @@ async def create_pi_ai_card(
         validated_pi = validate_pi_name(request.pi)
         payload = request.model_dump()
         payload["pi"] = validated_pi
-        # Optional team_name can be sanitized using team rules if provided
-        if payload.get("team_name") is not None:
+        # Normalize team_name: None -> empty string for consistency with UNIQUE constraint
+        if payload.get("team_name") is None:
+            payload["team_name"] = ""
+        elif payload.get("team_name") is not None:
+            # Optional team_name can be sanitized using team rules if provided
             # Reuse same rules as team validation
             payload["team_name"] = re.sub(r'[^a-zA-Z0-9\s\-_]', '', payload["team_name"].strip())
 
