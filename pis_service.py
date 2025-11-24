@@ -194,6 +194,85 @@ def get_progress_delta_pct_status(progress_delta_pct: Optional[float]) -> str:
         return "red"
 
 
+def fetch_wip_data_from_db(
+    pi: str,
+    team: Optional[str] = None,
+    project: Optional[str] = None,
+    conn: Connection = None
+) -> Dict[str, Any]:
+    """
+    Fetch WIP (Work In Progress) data from jira_issues table.
+    Reusable helper function to calculate WIP metrics for epics.
+    
+    Args:
+        pi: PI name (required)
+        team: Team name filter (optional)
+        project: Project key filter (optional)
+        conn: Database connection
+    
+    Returns:
+        Dictionary with WIP metrics:
+        - total_epics: Total number of epics
+        - in_progress_epics: Number of epics in progress
+        - in_progress_percentage: Percentage of epics in progress
+        - count_in_progress_status: Status color (green/yellow/red)
+    """
+    # Build WHERE clause conditions
+    where_conditions = [
+        "issue_type = 'Epic'",
+        "quarter_pi = :pi"
+    ]
+    
+    params = {
+        "pi": pi
+    }
+    
+    # Add optional filters
+    if team:
+        where_conditions.append("team_name = :team")
+        params["team"] = team
+    
+    if project:
+        where_conditions.append("project_key = :project")
+        params["project"] = project
+    
+    # Build SQL query
+    where_clause = " AND ".join(where_conditions)
+    
+    query = text(f"""
+        SELECT 
+            COUNT(*) as total_epics,
+            COUNT(CASE WHEN status_category = 'In Progress' THEN 1 END) as in_progress_epics
+        FROM public.jira_issues
+        WHERE {where_clause}
+    """)
+    
+    logger.info(f"Executing WIP query for PI: {pi}, team={team}, project={project}")
+    
+    result = conn.execute(query, params)
+    row = result.fetchone()
+    
+    if not row:
+        total_epics = 0
+        in_progress_epics = 0
+    else:
+        total_epics = int(row[0]) if row[0] else 0
+        in_progress_epics = int(row[1]) if row[1] else 0
+    
+    # Calculate percentage
+    in_progress_percentage = (in_progress_epics / total_epics * 100) if total_epics > 0 else 0.0
+    
+    # Calculate status
+    count_in_progress_status = get_wip_count_status(in_progress_epics, total_epics)
+    
+    return {
+        "total_epics": total_epics,
+        "in_progress_epics": in_progress_epics,
+        "in_progress_percentage": round(in_progress_percentage, 2),
+        "count_in_progress_status": count_in_progress_status
+    }
+
+
 def get_pi_in_progress_issues_status(
     in_progress_issues: int,
     total_issues: int
@@ -522,10 +601,34 @@ async def get_pi_status_for_today(
             conn=conn
         )
         
-        # Add progress_delta_pct_status field to each record
+        # Fetch WIP data using the same logic as WIP endpoint
+        wip_data = None
+        if pi:  # Only fetch WIP if PI is provided
+            wip_data = fetch_wip_data_from_db(
+                pi=pi,
+                team=team,
+                project=project,
+                conn=conn
+            )
+        
+        # Add progress_delta_pct_status and WIP fields to each record
         for record in summary_data:
             progress_delta_pct = record.get('progress_delta_pct')
             record['progress_delta_pct_status'] = get_progress_delta_pct_status(progress_delta_pct)
+            
+            # Add WIP fields from database query (if available)
+            if wip_data:
+                record['in_progress_issues'] = wip_data['in_progress_epics']
+                record['in_progress_percentage'] = wip_data['in_progress_percentage']
+                record['count_in_progress_status'] = wip_data['count_in_progress_status']
+            else:
+                # Fallback: try to get from database function response if PI not provided
+                in_progress_issues = record.get('in_progress_issues', 0) or 0
+                total_issues = record.get('total_issues', 0) or 0
+                record['in_progress_issues'] = in_progress_issues
+                in_progress_percentage = ((in_progress_issues / total_issues) * 100) if total_issues > 0 else 0.0
+                record['in_progress_percentage'] = round(in_progress_percentage, 2)
+                record['count_in_progress_status'] = get_wip_count_status(in_progress_issues, total_issues)
         
         return {
             "success": True,
@@ -578,69 +681,26 @@ async def get_pi_wip(
                 detail="pi parameter is required"
             )
         
-        # Build WHERE clause conditions
-        where_conditions = [
-            "issue_type = 'Epic'",
-            "quarter_pi = :pi"
-        ]
-        
-        params = {
-            "pi": pi
-        }
-        
-        # Add optional filters
-        if team:
-            where_conditions.append("team_name = :team")
-            params["team"] = team
-        
-        if project:
-            # Try project_key first, if column doesn't exist, we'll handle it
-            where_conditions.append("project_key = :project")
-            params["project"] = project
-        
-        # Build SQL query
-        where_clause = " AND ".join(where_conditions)
-        
-        query = text(f"""
-            SELECT 
-                COUNT(*) as total_epics,
-                COUNT(CASE WHEN status_category = 'In Progress' THEN 1 END) as in_progress_epics
-            FROM public.jira_issues
-            WHERE {where_clause}
-        """)
-        
-        logger.info(f"Executing query to get PI WIP counts for PI: {pi}")
-        logger.info(f"Filters: team={team}, project={project}")
-        
-        result = conn.execute(query, params)
-        row = result.fetchone()
-        
-        if not row:
-            # Return zeros if no data found
-            total_epics = 0
-            in_progress_epics = 0
-        else:
-            total_epics = int(row[0]) if row[0] else 0
-            in_progress_epics = int(row[1]) if row[1] else 0
-        
-        # Calculate percentage
-        in_progress_percentage = (in_progress_epics / total_epics * 100) if total_epics > 0 else 0.0
-        
-        # Calculate status
-        count_in_progress_status = get_wip_count_status(in_progress_epics, total_epics)
+        # Use shared helper function to fetch WIP data
+        wip_data = fetch_wip_data_from_db(
+            pi=pi,
+            team=team,
+            project=project,
+            conn=conn
+        )
         
         return {
             "success": True,
             "data": {
-                "count_in_progress": in_progress_epics,
-                "count_in_progress_status": count_in_progress_status,
-                "total_epics": total_epics,
-                "in_progress_percentage": round(in_progress_percentage, 2),
+                "count_in_progress": wip_data['in_progress_epics'],
+                "count_in_progress_status": wip_data['count_in_progress_status'],
+                "total_epics": wip_data['total_epics'],
+                "in_progress_percentage": wip_data['in_progress_percentage'],
                 "pi": pi,
                 "team": team,
                 "project": project
             },
-            "message": f"Retrieved WIP counts: {in_progress_epics} epics in progress out of {total_epics} total epics ({in_progress_percentage:.2f}%)"
+            "message": f"Retrieved WIP counts: {wip_data['in_progress_epics']} epics in progress out of {wip_data['total_epics']} total epics ({wip_data['in_progress_percentage']:.2f}%)"
         }
     
     except HTTPException:
