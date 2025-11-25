@@ -38,6 +38,15 @@ DEFAULT_INSIGHT_TYPES = [
         "cron_config": {"hour": 5, "minute": 40}
     },
     {
+        "insight_type": "PI Planning Gaps",
+        "insight_description": "Identifies gaps and issues in PI planning",
+        "insight_categories": ["PI Planning Gaps"],
+        "active": True,
+        "requires_pi": True,
+        "requires_team": False,
+        "cron_config": {"hour": 5, "minute": 40}
+    },
+    {
         "insight_type": "Daily Progress",
         "insight_description": "Analysis of team progress in the sprint",
         "insight_categories": ["Daily"],

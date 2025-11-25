@@ -40,6 +40,7 @@ INSIGHT_CATEGORIES = [
     {"name": "PI Planning-Train", "class": "PI"},
     {"name": "PI Preparation-Train", "class": "PI"},
     {"name": "PI Dependencies", "class": "PI"},
+    {"name": "PI Planning Gaps", "class": "PI"},
 ]
 
 
