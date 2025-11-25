@@ -218,48 +218,28 @@ async def get_active_sprint_summary_by_team(
         JSON response with active sprint summary (all columns from view)
     """
     try:
-        team_names_list = []
+        from database_team_metrics import resolve_team_names_from_filter
+        
+        # Resolve team names using shared helper function
+        team_names_list = resolve_team_names_from_filter(team_name, isGroup, conn)
+        
+        # Build filter description for logging and response
         filter_description = None
         validated_name = None
         
-        # Build team list based on parameters
         if team_name is not None:
             if isGroup:
-                # Validate as group name
-                validated_group_name = validate_group_name(team_name)
-                validated_name = validated_group_name
-                
-                # Get all teams under this group
-                get_teams_query = text("""
-                    SELECT t.team_name
-                    FROM public.teams t
-                    JOIN public.team_groups g ON t.group_key = g.group_key
-                    WHERE g.group_name = :group_name
-                    ORDER BY t.team_name
-                """)
-                
-                logger.info(f"Fetching teams for group: {validated_group_name}")
-                teams_result = conn.execute(get_teams_query, {"group_name": validated_group_name})
-                team_rows = teams_result.fetchall()
-                
-                if not team_rows:
-                    # Group doesn't exist or has no teams
-                    raise HTTPException(
-                        status_code=404,
-                        detail=f"Group '{validated_group_name}' not found or has no teams"
-                    )
-                
-                team_names_list = [row[0] for row in team_rows]
-                filter_description = f"group '{validated_group_name}' ({len(team_names_list)} teams)"
-                logger.info(f"Found {len(team_names_list)} teams in group '{validated_group_name}': {team_names_list}")
+                validated_name = team_name
+                if team_names_list:
+                    filter_description = f"group '{team_name}' ({len(team_names_list)} teams)"
+                    logger.info(f"Found {len(team_names_list)} teams in group '{team_name}': {team_names_list}")
             else:
-                # Validate as team name
-                validated_team_name = validate_team_name(team_name)
-                validated_name = validated_team_name
-                team_names_list = [validated_team_name]
-                filter_description = f"team '{validated_team_name}'"
+                validated_name = team_name
+                if team_names_list:
+                    filter_description = f"team '{team_name}'"
         
         # Build query with IN clause or no filter
+        # Always exclude sprints without team_name
         if team_names_list:
             # Build parameterized IN clause
             placeholders = ", ".join([f":team_name_{i}" for i in range(len(team_names_list))])
@@ -269,15 +249,19 @@ async def get_active_sprint_summary_by_team(
                 SELECT *
                 FROM public.active_sprint_summary_with_issue_keys
                 WHERE team_name IN ({placeholders})
+                AND team_name IS NOT NULL
+                AND team_name != ''
             """)
             
             logger.info(f"Executing query to get active sprint summary for {filter_description}")
             result = conn.execute(query, params)
         else:
-            # No filter - return all summaries
+            # No filter - return all summaries (excluding sprints without team_name)
             query = text("""
                 SELECT *
                 FROM public.active_sprint_summary_with_issue_keys
+                WHERE team_name IS NOT NULL
+                AND team_name != ''
             """)
             
             logger.info("Executing query to get active sprint summary for all teams")
@@ -333,7 +317,8 @@ async def get_active_sprint_summary_by_team(
         if validated_name:
             if isGroup:
                 response_data["group_name"] = validated_name
-                response_data["teams_in_group"] = team_names_list
+                if team_names_list:
+                    response_data["teams_in_group"] = team_names_list
             else:
                 response_data["team_name"] = validated_name
         
