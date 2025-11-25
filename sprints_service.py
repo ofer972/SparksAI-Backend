@@ -11,12 +11,96 @@ from sqlalchemy.engine import Connection
 from typing import List, Dict, Any, Optional
 import logging
 import re
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, date
 from database_connection import get_db_connection
 
 logger = logging.getLogger(__name__)
 
 sprints_router = APIRouter()
+
+
+def get_sprint_progress_status_with_slack(
+    overall_progress_pct: Optional[float],
+    start_date: Any,
+    end_date: Any,
+    slack_threshold: float = 20.0
+) -> Optional[str]:
+    """
+    Determine sprint progress status based on timeline vs actual completion with 20% slack.
+    
+    Compares actual progress percentage (overall_progress_pct) against expected completion 
+    based on how much of the sprint has elapsed.
+    
+    Args:
+        overall_progress_pct: Actual progress percentage (0-100) from view
+        start_date: Sprint start date (date, datetime, or timestamptz)
+        end_date: Sprint end date (date, datetime, or timestamptz)
+        slack_threshold: Percentage slack allowed (default: 20%)
+    
+    Returns:
+        "green" if ahead of schedule (actual >= expected - slack)
+        "yellow" if slightly behind (expected - 40% <= actual < expected - slack)
+        "red" if significantly behind (actual < expected - 40%)
+        None if unable to calculate (edge cases: missing data, invalid dates, sprint not started)
+    """
+    # Handle edge cases - return None instead of "green"
+    if start_date is None or end_date is None:
+        return None
+    
+    if overall_progress_pct is None:
+        return None
+    
+    # Convert datetime/timestamptz to date if needed
+    if isinstance(start_date, datetime):
+        start_date = start_date.date()
+    elif isinstance(start_date, str):
+        # Try to parse if it's a string
+        try:
+            start_date = datetime.fromisoformat(start_date.replace('Z', '+00:00')).date()
+        except:
+            return None
+    
+    if isinstance(end_date, datetime):
+        end_date = end_date.date()
+    elif isinstance(end_date, str):
+        # Try to parse if it's a string
+        try:
+            end_date = datetime.fromisoformat(end_date.replace('Z', '+00:00')).date()
+        except:
+            return None
+    
+    today = date.today()
+    
+    # If sprint hasn't started yet - return None
+    if today < start_date:
+        return None
+    
+    # If sprint has ended
+    if today >= end_date:
+        # Compare actual completion to 100% expected
+        if overall_progress_pct >= 100 - slack_threshold:
+            return "green"
+        elif overall_progress_pct >= 75:
+            return "yellow"
+        else:
+            return "red"
+    
+    # Calculate expected completion based on timeline
+    total_sprint_days = (end_date - start_date).days
+    if total_sprint_days <= 0:
+        return None
+    
+    days_elapsed = (today - start_date).days
+    expected_completion = (days_elapsed / total_sprint_days) * 100
+    
+    # Determine status with slack (20%)
+    if overall_progress_pct >= expected_completion - slack_threshold:
+        return "green"
+    elif overall_progress_pct >= expected_completion - 40.0:
+        return "yellow"
+    else:
+        return "red"
+
 
 def validate_team_name(team_name: str) -> str:
     """
@@ -205,6 +289,22 @@ async def get_active_sprint_summary_by_team(
         summaries = []
         for row in rows:
             summary_dict = dict(row._mapping)
+            
+            # Store original date values for calculation before formatting
+            start_date_raw = summary_dict.get('start_date')
+            end_date_raw = summary_dict.get('end_date')
+            overall_progress_pct = summary_dict.get('overall_progress_pct')
+            
+            # Calculate overall_progress_pct_color
+            if start_date_raw is not None and end_date_raw is not None and overall_progress_pct is not None:
+                summary_dict['overall_progress_pct_color'] = get_sprint_progress_status_with_slack(
+                    overall_progress_pct=float(overall_progress_pct) if overall_progress_pct is not None else None,
+                    start_date=start_date_raw,
+                    end_date=end_date_raw,
+                    slack_threshold=20.0
+                )
+            else:
+                summary_dict['overall_progress_pct_color'] = None  # Return None if data missing
             
             # Format date/datetime fields if they exist
             for key, value in summary_dict.items():
