@@ -121,7 +121,7 @@ async def get_active_sprint_summary_by_team(
     conn: Connection = Depends(get_db_connection)
 ):
     """
-    Get active sprint summary by team from the active_sprint_summary_by_team view.
+    Get active sprint summary by team from the active_sprint_summary_with_issue_keys view.
     
     Returns all columns from the view for the specified team(s) or group.
     If team_name is not provided, returns summaries for all teams.
@@ -183,7 +183,7 @@ async def get_active_sprint_summary_by_team(
             
             query = text(f"""
                 SELECT *
-                FROM public.active_sprint_summary_by_team
+                FROM public.active_sprint_summary_with_issue_keys
                 WHERE team_name IN ({placeholders})
             """)
             
@@ -193,7 +193,7 @@ async def get_active_sprint_summary_by_team(
             # No filter - return all summaries
             query = text("""
                 SELECT *
-                FROM public.active_sprint_summary_by_team
+                FROM public.active_sprint_summary_with_issue_keys
             """)
             
             logger.info("Executing query to get active sprint summary for all teams")
