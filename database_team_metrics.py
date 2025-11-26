@@ -460,27 +460,29 @@ def get_closed_sprints_data_db(team_names: Optional[List[str]], months: int = 3,
             
             result = conn.execute(query, params)
         
-        # Convert rows to list of dictionaries
+        # Convert rows to list of dictionaries - return all fields from database function
         closed_sprints = []
         for row in result:
             row_dict = dict(row._mapping)
+            
             # Format complete_date if it exists
             complete_date = row_dict.get('complete_date')
             if complete_date and hasattr(complete_date, 'strftime'):
                 complete_date = complete_date.strftime('%Y-%m-%d')
             
-            closed_sprints.append({
-                'team_name': row_dict.get('team_name'),
-                'sprint_name': row_dict.get('sprint_name'),
-                'start_date': row_dict.get('start_date'),
-                'complete_date': complete_date,
-                'completed_percentage': float(row_dict.get('completed_percentage', 0)) if row_dict.get('completed_percentage') is not None else 0.0,
-                'issues_at_start': int(row_dict.get('issues_at_start', 0)) if row_dict.get('issues_at_start') is not None else 0,
-                'issues_added': int(row_dict.get('issues_added', 0)) if row_dict.get('issues_added') is not None else 0,
-                'issues_done': int(row_dict.get('issues_done', 0)) if row_dict.get('issues_done') is not None else 0,
-                'issues_remaining': int(row_dict.get('issues_remaining', 0)) if row_dict.get('issues_remaining') is not None else 0,
-                'sprint_goal': row_dict.get('sprint_goal') if row_dict.get('sprint_goal') else ""
-            })
+            # Remove end_date, keep only complete_date
+            if 'end_date' in row_dict:
+                del row_dict['end_date']
+            
+            # Set complete_date (will be None if not present in DB)
+            row_dict['complete_date'] = complete_date
+            
+            # Format other date fields if they exist (excluding complete_date which is already formatted)
+            for key, value in row_dict.items():
+                if value is not None and hasattr(value, 'strftime') and key != 'complete_date':
+                    row_dict[key] = value.strftime('%Y-%m-%d')
+            
+            closed_sprints.append(row_dict)
         
         return closed_sprints
             
