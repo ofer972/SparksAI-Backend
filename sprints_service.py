@@ -540,8 +540,8 @@ async def get_sprint_predictability(
         for row in rows:
             data_dict = dict(row._mapping)
             
-            # Format complete_date if it exists
-            complete_date = data_dict.get('complete_date')
+            # Format complete_date if it exists (from "Sprint Actual Complete Date" field)
+            complete_date = data_dict.get('Sprint Actual Complete Date') or data_dict.get('sprint_actual_complete_date')
             if complete_date and hasattr(complete_date, 'strftime'):
                 complete_date = complete_date.strftime('%Y-%m-%d')
             
@@ -550,6 +550,10 @@ async def get_sprint_predictability(
                 del data_dict['end_date']
             if 'sprint_official_end_date' in data_dict:
                 del data_dict['sprint_official_end_date']
+            if 'Sprint Actual Complete Date' in data_dict:
+                del data_dict['Sprint Actual Complete Date']
+            if 'sprint_actual_complete_date' in data_dict:
+                del data_dict['sprint_actual_complete_date']
             
             # Set complete_date (will be None if not present in DB)
             data_dict['complete_date'] = complete_date
