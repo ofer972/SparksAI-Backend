@@ -1370,24 +1370,12 @@ def _fetch_sprint_predictability(filters: Dict[str, Any], conn: Connection) -> R
     for row in rows:
         row_dict = dict(row._mapping)
         
-        # Format complete_date if it exists (from "Sprint Actual Complete Date" field)
-        complete_date = row_dict.get('Sprint Actual Complete Date') or row_dict.get('sprint_actual_complete_date')
-        if complete_date and hasattr(complete_date, 'strftime'):
-            complete_date = complete_date.strftime('%Y-%m-%d')
+        # Format all date fields if they exist
+        for key, value in row_dict.items():
+            if value is not None and hasattr(value, 'strftime'):
+                row_dict[key] = value.strftime('%Y-%m-%d')
         
-        # Remove end_date and sprint_official_end_date, keep only complete_date
-        if 'end_date' in row_dict:
-            del row_dict['end_date']
-        if 'sprint_official_end_date' in row_dict:
-            del row_dict['sprint_official_end_date']
-        if 'Sprint Actual Complete Date' in row_dict:
-            del row_dict['Sprint Actual Complete Date']
-        if 'sprint_actual_complete_date' in row_dict:
-            del row_dict['sprint_actual_complete_date']
-        
-        # Set complete_date (will be None if not present in DB)
-        row_dict['complete_date'] = complete_date
-        
+        # Process issue key arrays (split comma-separated strings)
         for key in (
             "completed_issue_keys",
             "total_committed_issue_keys",
