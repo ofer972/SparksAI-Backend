@@ -1369,8 +1369,21 @@ def _fetch_sprint_predictability(filters: Dict[str, Any], conn: Connection) -> R
     data: List[Dict[str, Any]] = []
     for row in rows:
         row_dict = dict(row._mapping)
-        if row_dict.get("sprint_official_end_date") and hasattr(row_dict["sprint_official_end_date"], "strftime"):
-            row_dict["sprint_official_end_date"] = row_dict["sprint_official_end_date"].strftime("%Y-%m-%d")
+        
+        # Format complete_date if it exists
+        complete_date = row_dict.get('complete_date')
+        if complete_date and hasattr(complete_date, 'strftime'):
+            complete_date = complete_date.strftime('%Y-%m-%d')
+        
+        # Remove end_date and sprint_official_end_date, keep only complete_date
+        if 'end_date' in row_dict:
+            del row_dict['end_date']
+        if 'sprint_official_end_date' in row_dict:
+            del row_dict['sprint_official_end_date']
+        
+        # Set complete_date (will be None if not present in DB)
+        row_dict['complete_date'] = complete_date
+        
         for key in (
             "completed_issue_keys",
             "total_committed_issue_keys",

@@ -464,11 +464,16 @@ def get_closed_sprints_data_db(team_names: Optional[List[str]], months: int = 3,
         closed_sprints = []
         for row in result:
             row_dict = dict(row._mapping)
+            # Format complete_date if it exists
+            complete_date = row_dict.get('complete_date')
+            if complete_date and hasattr(complete_date, 'strftime'):
+                complete_date = complete_date.strftime('%Y-%m-%d')
+            
             closed_sprints.append({
                 'team_name': row_dict.get('team_name'),
                 'sprint_name': row_dict.get('sprint_name'),
                 'start_date': row_dict.get('start_date'),
-                'end_date': row_dict.get('end_date'),
+                'complete_date': complete_date,
                 'completed_percentage': float(row_dict.get('completed_percentage', 0)) if row_dict.get('completed_percentage') is not None else 0.0,
                 'issues_at_start': int(row_dict.get('issues_at_start', 0)) if row_dict.get('issues_at_start') is not None else 0,
                 'issues_added': int(row_dict.get('issues_added', 0)) if row_dict.get('issues_added') is not None else 0,
