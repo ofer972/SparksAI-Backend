@@ -2,7 +2,7 @@
 Database connection utilities for SparksAI Backend Services.
 
 This module handles database engine creation, connection management,
-and related utilities. Uses the exact same pattern as JiraDashboard-NEWUI.
+and related utilities.
 """
 
 import configparser
@@ -55,7 +55,6 @@ def get_db_engine() -> Optional[create_engine]:
     """
     Create and configure the database engine with connection pooling and retry logic.
     Uses caching to prevent multiple engine creation.
-    Uses the exact same pattern as JiraDashboard-NEWUI.
     
     Returns:
         SQLAlchemy engine or None if connection fails
@@ -103,7 +102,7 @@ def get_db_engine() -> Optional[create_engine]:
         logger.error("Error: No database connection string configured.")
         return None
     
-    # Add connection pooling and retry settings (same as JiraDashboard-NEWUI)
+    # Add connection pooling and retry settings
     max_retries = 3
     try:
         logger.info("🚀 DATABASE: Creating NEW engine (not from pool) - this should be rare!")

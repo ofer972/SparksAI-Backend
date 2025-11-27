@@ -3,7 +3,6 @@ Database Team Metrics - Database access functions for team metrics.
 
 This module contains database access functions for team metrics.
 Uses FastAPI dependencies for clean connection management and SQL injection protection.
-Copied exact logic, SQL statements, and functions from JiraDashboard-NEWUI project.
 """
 
 from sqlalchemy import text
@@ -70,7 +69,6 @@ def get_team_count_in_progress(team_name: str, conn: Connection = None) -> Dict[
     """
     Get current work in progress (WIP) for a team with breakdown by issue type.
     WIP = number of issues currently in progress, grouped by issue type.
-    Copied exact logic from JiraDashboard-NEWUI project.
     
     Args:
         team_name (str): Team name
@@ -202,7 +200,6 @@ def get_team_active_sprint_metrics(team_name: str, conn: Connection = None) -> D
     """
     Get active sprint metrics for a team.
     Helper function used by get_team_current_sprint_completion.
-    Copied exact logic from JiraDashboard-NEWUI project.
     
     Args:
         team_name (str): Team name
@@ -495,7 +492,6 @@ def get_sprint_burndown_data_db(team_name: str, sprint_name: str, issue_type: st
     """
     Get sprint burndown data for a specific team and sprint.
     Uses the get_sprint_burndown_data_for_team database function.
-    Copied exact logic from JiraDashboard-NEWUI project.
     
     Args:
         team_name (str): Team name
@@ -546,7 +542,6 @@ def get_sprint_burndown_data_db(team_name: str, sprint_name: str, issue_type: st
     """
     Get sprint burndown data for a specific team and sprint.
     Uses the get_sprint_burndown_data_for_team database function.
-    Copied exact logic from JiraDashboard-NEWUI project.
     
     Args:
         team_name (str): Team name

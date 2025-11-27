@@ -3,7 +3,6 @@ Database table creation module.
 
 This module contains all table creation functions and the initialization logic
 that runs when the database engine is created (new connection, not from pool).
-Copied from JiraDashboard-NEWUI project without any logic changes.
 """
 
 import sys

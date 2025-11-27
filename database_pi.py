@@ -2,7 +2,6 @@
 Database PI - Database access functions for PI-related operations.
 
 This module contains database access functions for PI operations.
-Copied EXACT logic from JiraDashboard-NEWUI project - database.py fetch_pi_predictability_data function.
 """
 
 from sqlalchemy import text
@@ -16,7 +15,6 @@ logger = logging.getLogger(__name__)
 def fetch_pi_predictability_data(pi_names, team_name=None, conn: Connection = None) -> List[Dict[str, Any]]:
     """
     Fetch PI predictability data from the database function.
-    Copied EXACT logic from JiraDashboard-NEWUI database.py lines 578-611
     
     For multiple PIs: loop through each PI and call the database function for each one.
     This matches the logic from pi_predictability_table.py lines 189-195.
@@ -82,7 +80,6 @@ def fetch_pi_predictability_data(pi_names, team_name=None, conn: Connection = No
 def fetch_pi_burndown_data(pi_name: str, project_keys: str = None, issue_type: str = None, team_names: str = None, conn: Connection = None) -> List[Dict[str, Any]]:
     """
     Fetch PI burndown data from the database function.
-    Copied EXACT logic from JiraDashboard-NEWUI database.py lines 538-576
     
     Args:
         pi_name (str): PI name to fetch data for (mandatory)
@@ -150,7 +147,6 @@ def fetch_pi_burndown_data(pi_name: str, project_keys: str = None, issue_type: s
 def fetch_scope_changes_data(quarters: List[str], conn: Connection = None) -> List[Dict[str, Any]]:
     """
     Fetch scope changes data for specified quarters.
-    Copied EXACT logic from JiraDashboard-NEWUI _db_data_fetchers.py lines 792-832
     
     Uses the view: public.epic_pi_scope_changes_long_with_issues
     Columns: "Quarter Name" (as quarter), "Metric Name" (as metric_name), "Value" (as value)

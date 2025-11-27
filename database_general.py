@@ -940,7 +940,6 @@ def get_all_settings_db(conn: Connection = None) -> Dict[str, str]:
     
     Returns dictionary of setting_key: setting_value pairs.
     Includes full API keys as stored in database.
-    Copied exact logic from JiraDashboard-NEWUI project.
     
     Args:
         conn (Connection): Database connection from FastAPI dependency
@@ -1072,6 +1071,57 @@ def set_settings_batch_db(
     except Exception as e:
         logger.error(f"Error in batch settings update: {e}")
         conn.rollback()
+        raise e
+
+
+# -------------------------------------------------------------
+# ETL Settings helpers
+# -------------------------------------------------------------
+def get_etl_setting_from_db(conn: Connection, setting_key: str, default_value: Optional[str] = None) -> Optional[str]:
+    """
+    Get a single ETL setting value from the database.
+    
+    Args:
+        conn: Database connection
+        setting_key: Setting key to retrieve
+        default_value: Default value if not found
+        
+    Returns:
+        Setting value or default_value
+    """
+    try:
+        query = text("SELECT setting_value FROM etl_settings WHERE setting_key = :key")
+        result = conn.execute(query, {"key": setting_key})
+        row = result.fetchone()
+        
+        if row and row[0] is not None:
+            return row[0]
+        return default_value
+    except Exception as e:
+        logger.error(f"Error fetching ETL setting '{setting_key}': {e}")
+        return default_value
+
+
+def get_all_etl_settings_from_db(conn: Connection) -> Dict[str, str]:
+    """
+    Get all ETL settings from the database.
+    
+    Args:
+        conn: Database connection
+        
+    Returns:
+        Dictionary of setting_key: setting_value pairs
+    """
+    try:
+        query = text("SELECT setting_key, setting_value FROM etl_settings ORDER BY setting_key")
+        result = conn.execute(query)
+        
+        # Convert rows to dictionary of key-value pairs
+        settings = {row[0]: row[1] for row in result}
+        
+        return settings
+    except Exception as e:
+        logger.error(f"Error fetching all ETL settings: {e}")
         raise e
 
 
