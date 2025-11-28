@@ -190,6 +190,7 @@ class TeamCreateRequest(BaseModel):
 class TeamUpdateRequest(BaseModel):
     team_name: Optional[str] = None
     number_of_team_members: Optional[int] = None
+    ai_insight: Optional[bool] = None
     group_keys: Optional[list[int]] = None  # Changed from group_key to group_keys (list)
 
 
@@ -372,6 +373,10 @@ async def update_team(
             updates.append("number_of_team_members = :number_of_team_members")
             params["number_of_team_members"] = request.number_of_team_members
         
+        if request.ai_insight is not None:
+            updates.append("ai_insight = :ai_insight")
+            params["ai_insight"] = request.ai_insight
+        
         if not updates and group_keys is None:
             raise HTTPException(
                 status_code=400,
@@ -385,7 +390,7 @@ async def update_team(
                 UPDATE public.teams
                 SET {set_clause}
                 WHERE team_key = :team_key
-                RETURNING team_key, team_name, number_of_team_members
+                RETURNING team_key, team_name, number_of_team_members, ai_insight
             """)
             
             logger.info(f"Updating team {validated_team_id}")
@@ -401,7 +406,7 @@ async def update_team(
         else:
             # Just fetch current team data
             query = text("""
-                SELECT team_key, team_name, number_of_team_members
+                SELECT team_key, team_name, number_of_team_members, ai_insight
                 FROM public.teams
                 WHERE team_key = :team_key
             """)
@@ -445,6 +450,7 @@ async def update_team(
             "team_key": row[0],
             "team_name": row[1],
             "number_of_team_members": row[2],
+            "ai_insight": row[3],
             "group_keys": current_group_keys
         }
         
