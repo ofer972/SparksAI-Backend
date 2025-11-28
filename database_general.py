@@ -991,21 +991,19 @@ def set_setting_db(
         # Use UPSERT (INSERT ... ON CONFLICT UPDATE)
         upsert_sql = """
         INSERT INTO public.global_settings 
-        (setting_key, setting_value, updated_at, updated_by)
-        VALUES (:key, :value, CURRENT_TIMESTAMP, :updated_by)
+        (setting_key, setting_value, updated_at)
+        VALUES (:key, :value, CURRENT_TIMESTAMP)
         ON CONFLICT (setting_key) 
         DO UPDATE SET 
             setting_value = EXCLUDED.setting_value,
-            updated_at = CURRENT_TIMESTAMP,
-            updated_by = EXCLUDED.updated_by
+            updated_at = CURRENT_TIMESTAMP
         """
         
         logger.info(f"Setting global setting '{setting_key}' by {updated_by}")
         
         result = conn.execute(text(upsert_sql), {
             'key': setting_key,
-            'value': setting_value,
-            'updated_by': updated_by
+            'value': setting_value
         })
         conn.commit()
         
@@ -1040,13 +1038,12 @@ def set_settings_batch_db(
         # SECURE: Parameterized query prevents SQL injection
         upsert_sql = """
         INSERT INTO public.global_settings 
-        (setting_key, setting_value, updated_at, updated_by)
-        VALUES (:key, :value, CURRENT_TIMESTAMP, :updated_by)
+        (setting_key, setting_value, updated_at)
+        VALUES (:key, :value, CURRENT_TIMESTAMP)
         ON CONFLICT (setting_key) 
         DO UPDATE SET 
             setting_value = EXCLUDED.setting_value,
-            updated_at = CURRENT_TIMESTAMP,
-            updated_by = EXCLUDED.updated_by
+            updated_at = CURRENT_TIMESTAMP
         """
         
         logger.info(f"Setting {len(settings)} global settings by {updated_by}")
@@ -1055,8 +1052,7 @@ def set_settings_batch_db(
             try:
                 conn.execute(text(upsert_sql), {
                     'key': setting_key,
-                    'value': setting_value,
-                    'updated_by': updated_by
+                    'value': setting_value
                 })
                 results[setting_key] = True
                 logger.debug(f"Successfully set global setting '{setting_key}'")
