@@ -799,6 +799,92 @@ def create_global_settings_table_if_not_exists(engine=None) -> bool:
         return False
 
 
+def create_llm_settings_table_if_not_exists(engine=None) -> bool:
+    """Create llm_settings table if it doesn't exist"""
+    # Skip if tables are already initialized (no need to check again)
+    global _tables_initialized
+    if _tables_initialized:
+        return True
+    
+    import database_connection
+    
+    if engine is None:
+        engine = database_connection.get_db_engine()
+    if engine is None:
+        print("Warning: Database engine not available, cannot create llm_settings table")
+        return False
+    
+    try:
+        with engine.connect() as conn:
+            # Check if table exists
+            check_table_sql = """
+            SELECT EXISTS (
+                SELECT FROM information_schema.tables 
+                WHERE table_schema = 'public' 
+                AND table_name = 'llm_settings'
+            );
+            """
+            result = conn.execute(text(check_table_sql))
+            table_exists = result.scalar()
+            
+            if not table_exists:
+                print("Creating llm_settings table...")
+                create_table_sql = """
+                CREATE TABLE public.llm_settings (
+                    setting_key VARCHAR(255) PRIMARY KEY,
+                    setting_value TEXT NOT NULL,
+                    updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+                    updated_by VARCHAR(255) DEFAULT 'admin'
+                );
+                
+                CREATE INDEX idx_llm_settings_updated_at ON public.llm_settings(updated_at);
+                """
+                conn.execute(text(create_table_sql))
+                conn.commit()
+                print("LLM settings table created successfully")
+                
+                # Insert default LLM settings
+                insert_default_llm_settings(engine)
+            else:
+                print("LLM settings table already exists")
+            
+            return True
+            
+    except Exception as e:
+        print(f"Error creating llm_settings table: {e}")
+        traceback.print_exc()
+        return False
+
+
+def insert_default_llm_settings(engine=None):
+    """Insert default LLM settings"""
+    import database_connection
+    
+    if engine is None:
+        engine = database_connection.get_db_engine()
+    if engine is None:
+        print("Warning: Database engine not available, cannot insert default LLM settings")
+        return
+    
+    try:
+        with engine.connect() as conn:
+            insert_sql = """
+            INSERT INTO public.llm_settings (setting_key, setting_value, updated_by) 
+            VALUES 
+                ('ai_provider', 'gemini', 'admin'),
+                ('ai_chatgpt_model', 'gpt-4o', 'admin'),
+                ('ai_gemini_model', 'gemini-2.5-flash', 'admin'),
+                ('ai_gemini_temperature', '0', 'admin'),
+                ('ai_chatgpt_temperature', '0.7', 'admin')
+            ON CONFLICT (setting_key) DO NOTHING;
+            """
+            conn.execute(text(insert_sql))
+            conn.commit()
+            print("Default LLM settings inserted")
+    except Exception as e:
+        print(f"Error inserting default LLM settings: {e}")
+
+
 def create_agent_jobs_table_if_not_exists(engine=None) -> bool:
     """Create agent_jobs table if it doesn't exist"""
     # Skip if tables are already initialized (no need to check again)
@@ -1894,6 +1980,7 @@ def initialize_database_tables_with_engine(engine) -> None:
     create_prompts_table_if_not_exists(engine)
     create_security_logs_table_if_not_exists(engine)
     create_global_settings_table_if_not_exists(engine)
+    create_llm_settings_table_if_not_exists(engine)
     create_teams_and_team_groups_tables_if_not_exists(engine)
     create_team_ai_summary_cards_table_if_not_exists(engine)
     create_pi_ai_summary_cards_table_if_not_exists(engine)
@@ -1920,6 +2007,7 @@ def initialize_database_tables() -> None:
     create_prompts_table_if_not_exists()
     create_security_logs_table_if_not_exists()
     create_global_settings_table_if_not_exists()
+    create_llm_settings_table_if_not_exists()
     create_teams_and_team_groups_tables_if_not_exists()
     create_team_ai_summary_cards_table_if_not_exists()
     create_pi_ai_summary_cards_table_if_not_exists()

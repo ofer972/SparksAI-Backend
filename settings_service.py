@@ -10,10 +10,8 @@ from pydantic import BaseModel, Field
 from sqlalchemy.engine import Connection
 from typing import Dict, Any, Optional
 import logging
-import httpx
 from database_connection import get_db_connection
 from database_general import get_all_settings_db, set_setting_db, set_settings_batch_db
-import config
 
 logger = logging.getLogger(__name__)
 
@@ -64,28 +62,6 @@ async def get_all_settings_alias(conn: Connection = Depends(get_db_connection)):
     return await get_all_settings(conn)
 
 
-async def call_llm_reset_settings() -> None:
-    """
-    Call LLM service /reset-settings endpoint to clear settings cache.
-    This is called after settings are updated.
-    """
-    llm_service_url = f"{config.LLM_SERVICE_URL}/reset-settings"
-    
-    try:
-        async with httpx.AsyncClient(timeout=10.0) as client:
-            response = await client.post(llm_service_url)
-            if response.status_code == 200:
-                logger.info("LLM service settings cache cleared successfully")
-            else:
-                logger.warning(f"LLM service reset-settings returned status {response.status_code}")
-    except httpx.HTTPError as e:
-        logger.warning(f"Failed to call LLM service reset-settings: {e}")
-        # Don't fail the request if LLM service is unavailable
-    except Exception as e:
-        logger.warning(f"Error calling LLM service reset-settings: {e}")
-        # Don't fail the request if LLM service is unavailable
-
-
 @settings_router.put("/settings/batch")
 async def update_settings_batch(
     request: BatchSettingsUpdateRequest,
@@ -126,10 +102,6 @@ async def update_settings_batch(
         # Check if any failed
         failed = [key for key, success in results.items() if not success]
         success_count = sum(1 for success in results.values() if success)
-        
-        # Call LLM service to reset settings cache (if any succeeded)
-        if success_count > 0:
-            await call_llm_reset_settings()
         
         return {
             "success": True,
@@ -188,9 +160,6 @@ async def update_setting(
                 status_code=500,
                 detail=f"Failed to update setting '{setting_key}'"
             )
-        
-        # Call LLM service to reset settings cache
-        await call_llm_reset_settings()
         
         return {
             "success": True,
