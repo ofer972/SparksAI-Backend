@@ -112,6 +112,10 @@ async def update_settings_batch(
         
         updated_by = request.updated_by or 'admin'
         
+        # Log all settings received from client in compact format
+        settings_list = [f"{k}={v}" for k, v in request.settings.items()]
+        logger.info(f"Client settings: {', '.join(settings_list)}")
+        
         # Update settings in database
         results = set_settings_batch_db(
             settings=request.settings,
@@ -168,6 +172,9 @@ async def update_setting(
         JSON response with success status and message
     """
     try:
+        # Log setting received from client
+        logger.info(f"Client setting: {setting_key}={value}")
+        
         # Update setting in database
         success = set_setting_db(
             setting_key=setting_key,

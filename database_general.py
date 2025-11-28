@@ -989,10 +989,11 @@ def set_setting_db(
     try:
         # SECURE: Parameterized query prevents SQL injection
         # Use UPSERT (INSERT ... ON CONFLICT UPDATE)
+        # setting_type defaults to 'string' for new inserts, preserved on updates
         upsert_sql = """
         INSERT INTO public.global_settings 
-        (setting_key, setting_value, updated_at)
-        VALUES (:key, :value, CURRENT_TIMESTAMP)
+        (setting_key, setting_value, setting_type, updated_at)
+        VALUES (:key, :value, 'string', CURRENT_TIMESTAMP)
         ON CONFLICT (setting_key) 
         DO UPDATE SET 
             setting_value = EXCLUDED.setting_value,
@@ -1036,10 +1037,11 @@ def set_settings_batch_db(
     
     try:
         # SECURE: Parameterized query prevents SQL injection
+        # setting_type defaults to 'string' for new inserts, preserved on updates
         upsert_sql = """
         INSERT INTO public.global_settings 
-        (setting_key, setting_value, updated_at)
-        VALUES (:key, :value, CURRENT_TIMESTAMP)
+        (setting_key, setting_value, setting_type, updated_at)
+        VALUES (:key, :value, 'string', CURRENT_TIMESTAMP)
         ON CONFLICT (setting_key) 
         DO UPDATE SET 
             setting_value = EXCLUDED.setting_value,
