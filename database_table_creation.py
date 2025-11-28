@@ -831,21 +831,20 @@ def create_agent_jobs_table_if_not_exists(engine=None) -> bool:
                 print("Creating agent_jobs table...")
                 create_table_sql = """
                 CREATE TABLE public.agent_jobs (
-                    id SERIAL PRIMARY KEY,
-                    job_name VARCHAR(255) NOT NULL,
+                    job_id SERIAL PRIMARY KEY,
                     job_type VARCHAR(100) NOT NULL,
                     status VARCHAR(50) NOT NULL DEFAULT 'pending',
-                    team_name VARCHAR(255),
-                    pi VARCHAR(50),
-                    parameters JSONB,
-                    result_data JSONB,
-                    error_message TEXT,
-                    started_at TIMESTAMP WITH TIME ZONE,
-                    completed_at TIMESTAMP WITH TIME ZONE,
+                    claimed_by VARCHAR(100),
+                    claimed_at TIMESTAMP WITH TIME ZONE,
+                    job_data JSONB,
+                    result TEXT,
+                    error TEXT,
                     created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+                    completed_at TIMESTAMP WITH TIME ZONE,
                     updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
-                    created_by VARCHAR(255),
-                    FOREIGN KEY (created_by) REFERENCES public.users(email_address)
+                    team_name VARCHAR(255),
+                    input_sent TEXT,
+                    pi VARCHAR(50)
                 );
                 
                 CREATE INDEX idx_agent_jobs_status ON public.agent_jobs(status);
@@ -1277,6 +1276,21 @@ def add_input_sent_column_to_agent_jobs(engine=None) -> bool:
     
     try:
         with engine.connect() as conn:
+            # First check if table exists
+            check_table_sql = """
+            SELECT EXISTS (
+                SELECT FROM information_schema.tables 
+                WHERE table_schema = 'public' 
+                AND table_name = 'agent_jobs'
+            );
+            """
+            result = conn.execute(text(check_table_sql))
+            table_exists = result.scalar()
+            
+            if not table_exists:
+                print("agent_jobs table does not exist, skipping input_sent column addition")
+                return True
+            
             # Check if column exists
             check_column_sql = """
             SELECT EXISTS (
