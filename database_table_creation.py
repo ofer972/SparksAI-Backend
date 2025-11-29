@@ -662,8 +662,8 @@ def create_prompts_table_if_not_exists(engine=None) -> bool:
                 conn.commit()
                 print("Prompts table created successfully")
                 
-                # Insert test data
-                insert_test_data_for_prompts()
+                # Insert prompts from SQL file
+                insert_prompts_from_sql_file(engine)
             else:
                 print("Prompts table already exists")
             
@@ -1746,27 +1746,70 @@ def insert_test_data_for_users():
         print(f"Error inserting test user data: {e}")
 
 
-def insert_test_data_for_prompts():
-    """Insert test data for prompts table"""
+def insert_prompts_from_sql_file(engine=None):
+    """Insert prompts from SQL/prompts_insert.sql file"""
     import database_connection
+    import os
+    from pathlib import Path
     
-    engine = database_connection.get_db_engine()
     if engine is None:
-        print("Warning: Database engine not available, cannot insert test prompt data")
+        engine = database_connection.get_db_engine()
+    if engine is None:
+        print("Warning: Database engine not available, cannot insert prompts from SQL file")
         return
     
     try:
+        # Get the path to the SQL file (relative to this file's location)
+        current_file = Path(__file__).resolve()
+        sql_file_path = current_file.parent / "SQL" / "prompts_insert.sql"
+        
+        if not sql_file_path.exists():
+            print(f"Warning: SQL file not found at {sql_file_path}")
+            return
+        
+        # Read the SQL file
+        with open(sql_file_path, 'r', encoding='utf-8') as f:
+            sql_content = f.read()
+        
+        if not sql_content.strip():
+            print("Warning: SQL file is empty")
+            return
+        
+        # Execute the SQL file
         with engine.connect() as conn:
-            insert_sql = """
-            INSERT INTO public.prompts (email_address, prompt_name, prompt_description, prompt_type, prompt_active) 
-            VALUES ('admin@example.com', 'test_prompt', 'This is a test prompt', 'general', TRUE)
-            ON CONFLICT (email_address, prompt_name) DO NOTHING;
-            """
-            conn.execute(text(insert_sql))
-            conn.commit()
-            print("Test prompt data inserted")
+            # Execute the entire SQL content
+            # PostgreSQL can handle multiple statements separated by semicolons
+            try:
+                conn.execute(text(sql_content))
+                conn.commit()
+                print("Prompts inserted from SQL file successfully")
+            except Exception as e:
+                # If bulk execution fails, try executing statements individually
+                # This handles cases where some statements might fail due to conflicts
+                conn.rollback()
+                print(f"Bulk execution failed, trying individual statements: {str(e)[:200]}")
+                
+                # Split by semicolon and execute each statement
+                statements = [s.strip() for s in sql_content.split(';') if s.strip()]
+                executed_count = 0
+                failed_count = 0
+                
+                for statement in statements:
+                    try:
+                        conn.execute(text(statement))
+                        executed_count += 1
+                    except Exception as stmt_error:
+                        # Log but continue - some statements might fail due to conflicts (ON CONFLICT DO NOTHING)
+                        failed_count += 1
+                        if failed_count <= 3:  # Only log first few failures to avoid spam
+                            print(f"Warning: Statement failed (likely conflict): {str(stmt_error)[:100]}")
+                
+                conn.commit()
+                print(f"Prompts inserted from SQL file: {executed_count} statements executed, {failed_count} skipped (conflicts)")
+            
     except Exception as e:
-        print(f"Error inserting test prompt data: {e}")
+        print(f"Error inserting prompts from SQL file: {e}")
+        traceback.print_exc()
 
 
 def insert_test_data_for_team_ai_summary_cards():
