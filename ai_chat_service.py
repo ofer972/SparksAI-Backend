@@ -234,6 +234,7 @@ class AIChatRequest(BaseModel):
     chat_type: Optional[ChatType] = Field(None, description="Type of chat")
     recommendation_id: Optional[str] = Field(None, description="ID of recommendation")
     insights_id: Optional[str] = Field(None, description="ID of insights")
+    dashboard_data: Optional[Dict[str, Any]] = Field(None, description="Dashboard layout and filters")
 
     class Config:
         use_enum_values = True
@@ -943,6 +944,150 @@ async def call_llm_service(
         )
 
 
+async def fetch_dashboard_reports_data(
+    dashboard_data: Dict[str, Any],
+    conn: Connection
+) -> str:
+    """
+    Fetch all report data from dashboard layout config.
+    
+    Args:
+        dashboard_data: Dashboard state with layoutConfig, topBarFilters, reportFilters, pinnedFilters
+        conn: Database connection
+        
+    Returns:
+        Formatted string containing all report data for LLM context
+    """
+    import json
+    from datetime import datetime, date
+    from decimal import Decimal
+    from database_reports import get_report_definition_by_id, resolve_report_data
+    from cache_utils import generate_cache_key, get_cached_report, set_cached_report, get_report_cache_ttl
+    
+    # Custom JSON encoder to handle datetime and Decimal objects
+    class DateTimeEncoder(json.JSONEncoder):
+        def default(self, obj):
+            if isinstance(obj, (datetime, date)):
+                return obj.isoformat()
+            if isinstance(obj, Decimal):
+                return float(obj)
+            return super().default(obj)
+    
+    logger.info("=" * 80)
+    logger.info("DASHBOARD DATA COLLECTION - Starting")
+    logger.info("=" * 80)
+    logger.info(f"Received dashboard_data: {json.dumps(dashboard_data, indent=2, cls=DateTimeEncoder)}")
+    
+    layout_config = dashboard_data.get('layoutConfig')
+    if not layout_config:
+        logger.warning("No dashboard layout configured")
+        return "No dashboard layout configured."
+    
+    top_bar_filters = dashboard_data.get('topBarFilters', {})
+    report_filters = dashboard_data.get('reportFilters', {})
+    
+    logger.info(f"Top bar filters: {json.dumps(top_bar_filters, indent=2, cls=DateTimeEncoder)}")
+    logger.info(f"Report filters: {json.dumps(report_filters, indent=2, cls=DateTimeEncoder)}")
+    
+    # Extract all report IDs from layout
+    report_ids = []
+    for row in layout_config.get('rows', []):
+        report_ids.extend(row.get('reportIds', []))
+    
+    if not report_ids:
+        logger.warning("No reports in dashboard layout")
+        return "No reports in dashboard layout."
+    
+    logger.info(f"Fetching data for {len(report_ids)} reports: {report_ids}")
+    
+    # Fetch data for each report
+    formatted_reports = []
+    for idx, report_id in enumerate(report_ids, 1):
+        try:
+            logger.info(f"[{idx}/{len(report_ids)}] Processing report: {report_id}")
+            
+            # Get report definition
+            definition = get_report_definition_by_id(report_id, conn)
+            if not definition:
+                logger.warning(f"Report '{report_id}' not found, skipping")
+                continue
+            
+            # Merge filters: default < top bar < report-specific
+            default_filters = definition.get("default_filters", {})
+            merged_filters = {**default_filters, **top_bar_filters}
+            
+            # Apply report-specific filters if any
+            if report_id in report_filters:
+                logger.info(f"  Applying report-specific filters: {report_filters[report_id]}")
+                merged_filters.update(report_filters[report_id])
+            
+            logger.info(f"  Merged filters: {json.dumps(merged_filters, indent=2, cls=DateTimeEncoder)}")
+            
+            # Check cache first
+            cache_key = generate_cache_key(report_id, merged_filters)
+            cached_data = get_cached_report(cache_key)
+            
+            if cached_data:
+                logger.info(f"  ✓ Using cached data for report '{report_id}'")
+                report_data = cached_data
+            else:
+                # Fetch fresh data
+                logger.info(f"  → Fetching fresh data for report '{report_id}'")
+                resolved_payload = resolve_report_data(definition["data_source"], merged_filters, conn)
+                
+                report_data = {
+                    "definition": {
+                        "report_id": definition["report_id"],
+                        "report_name": definition["report_name"],
+                        "chart_type": definition["chart_type"],
+                        "description": definition.get("description"),
+                    },
+                    "filters": merged_filters,
+                    "result": resolved_payload.get("data"),
+                    "meta": resolved_payload.get("meta", {}),
+                }
+                
+                # Cache the result
+                ttl = get_report_cache_ttl(report_id)
+                set_cached_report(cache_key, report_data, ttl=ttl)
+                logger.info(f"  ✓ Cached report data with TTL: {ttl}s")
+            
+            # Format report data for LLM
+            report_name = report_data["definition"]["report_name"]
+            report_desc = report_data["definition"].get("description", "")
+            report_result = report_data.get("result", [])
+            
+            logger.info(f"  Report data: {len(report_result)} items")
+            
+            formatted_report = f"\n## {report_name}\n"
+            if report_desc:
+                formatted_report += f"Description: {report_desc}\n"
+            formatted_report += f"Filters: {json.dumps(merged_filters, indent=2, cls=DateTimeEncoder)}\n"
+            formatted_report += f"Data: {json.dumps(report_result, indent=2, cls=DateTimeEncoder)}\n"
+            
+            formatted_reports.append(formatted_report)
+            logger.info(f"  ✓ Successfully formatted report '{report_id}'")
+            logger.info("-" * 80)
+            
+        except Exception as e:
+            logger.error(f"Error fetching report '{report_id}': {e}")
+            formatted_reports.append(f"\n## {report_id}\nError: Failed to fetch data - {str(e)}\n")
+    
+    final_context = "\n".join(formatted_reports)
+    logger.info(f"Successfully formatted {len(formatted_reports)} reports for LLM context")
+    logger.info(f"Total context length: {len(final_context)} characters")
+    logger.info("=" * 80)
+    logger.info("DASHBOARD DATA COLLECTION - Complete")
+    logger.info("=" * 80)
+    logger.info("FULL FORMATTED CONTEXT FOR LLM:")
+    logger.info("=" * 80)
+    logger.info(final_context)
+    logger.info("=" * 80)
+    logger.info("END OF FORMATTED CONTEXT")
+    logger.info("=" * 80)
+    return final_context
+
+
 @ai_chat_router.post("/ai-chat")
 async def ai_chat(
     request: AIChatRequest,
@@ -1201,8 +1346,43 @@ async def ai_chat(
         else:
             logger.info("chat_type not provided; using default system message")
 
-        # 2.8.5. Handle dashboard chat types (PI_dashboard, Team_dashboard)
-        if chat_type_str == "Team_dashboard":
+        # 2.8.5. Handle dashboard data if provided (for Team_dashboard or PI_dashboard chat types)
+        if request.dashboard_data and conversation_context is None:
+            logger.info("Processing dashboard data for AI chat")
+            try:
+                dashboard_context = await fetch_dashboard_reports_data(request.dashboard_data, conn)
+                
+                # Get content intro prompt from DB
+                content_prompt_name = "Team_dashboard-Content" if request.selected_team else "PI_dashboard-Content"
+                content_intro = None
+                try:
+                    content_prompt = get_prompt_by_email_and_name(
+                        email_address='admin',
+                        prompt_name=content_prompt_name,
+                        conn=conn,
+                        active=True
+                    )
+                    if content_prompt and content_prompt.get('prompt_description'):
+                        content_intro = str(content_prompt['prompt_description'])
+                        logger.info(f"Using DB content prompt for '{content_prompt_name}'")
+                except Exception as e:
+                    logger.warning(f"Failed to fetch DB content prompt: {e}")
+                
+                if not content_intro:
+                    content_intro = "Here is the current dashboard data. Please analyze it and provide insights."
+                
+                # Build conversation context
+                conversation_context = content_intro + '\n\n=== DASHBOARD DATA STARTS HERE ===\n\n' + dashboard_context
+                logger.info(f"Built dashboard conversation context (length: {len(conversation_context)} chars)")
+                
+            except Exception as e:
+                logger.error(f"Error processing dashboard data: {e}")
+                raise HTTPException(
+                    status_code=500,
+                    detail=f"Failed to process dashboard data: {str(e)}"
+                )
+        # Fallback to old dashboard context builders if no dashboard_data provided
+        elif chat_type_str == "Team_dashboard":
             if conversation_context is None:  # Only set if not already set by other chat types
                 conversation_context = build_team_dashboard_context(
                     team_name=request.selected_team,

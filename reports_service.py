@@ -399,6 +399,6 @@ async def get_cache_stats():
                 "available": False,
                 "error": str(e),
             }
-        }
+    }
 
 
