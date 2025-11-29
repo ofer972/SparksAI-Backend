@@ -1693,6 +1693,23 @@ Results ({row_count} row{'s' if row_count != 1 else ''}):
         
         ai_response = llm_response.get("response", "")
         
+        # Log LLM response details
+        logger.info("=" * 80)
+        logger.info("LLM RESPONSE RECEIVED")
+        logger.info("=" * 80)
+        logger.info(f"Response length: {len(ai_response)} chars")
+        if ai_response:
+            preview_length = min(500, len(ai_response))
+            logger.info(f"Response preview (first {preview_length} chars): {ai_response[:preview_length]}...")
+            if len(ai_response) > preview_length:
+                logger.info(f"... (truncated, {len(ai_response) - preview_length} more chars)")
+        else:
+            logger.warning("LLM response is empty")
+        logger.info(f"Provider: {llm_response.get('provider', 'N/A')}")
+        logger.info(f"Model: {llm_response.get('model', 'N/A')}")
+        logger.info(f"Tokens used: {llm_response.get('tokens_used', 'N/A')}")
+        logger.info("=" * 80)
+        
         # 4. Update chat history with new exchange
         # Remove "!" trigger from question before saving to history
         clean_question_for_history = request.question
