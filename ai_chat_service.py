@@ -459,7 +459,7 @@ def build_team_dashboard_context(
             # 1. Fetch closed sprints (last 3 months)
             closed_sprints = []
             try:
-                closed_sprints = get_closed_sprints_data_db([team_name], months=3, conn=conn)
+                closed_sprints = get_closed_sprints_data_db([team_name], months=3, issue_type=None, conn=conn)
                 logger.info(f"Fetched {len(closed_sprints)} closed sprints for Team_dashboard")
             except Exception as e:
                 logger.warning(f"Failed to fetch closed sprints for Team_dashboard: {e}")

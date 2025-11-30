@@ -740,6 +740,7 @@ async def get_closed_sprints(
     team_name: Optional[str] = Query(None, description="Team name or group name (if isGroup=true). If not provided, returns all closed sprints."),
     months: int = Query(3, description="Number of months to look back (1, 2, 3, 4, 6, 9)", ge=1, le=12),
     isGroup: bool = Query(False, description="If true, team_name is treated as a group name"),
+    issue_type: Optional[str] = Query(None, description="Issue type filter (optional, e.g., 'Story', 'Bug', 'Task')"),
     conn: Connection = Depends(get_db_connection)
 ):
     """
@@ -762,6 +763,7 @@ async def get_closed_sprints(
         - months=6: Last 6 months
         - months=9: Last 9 months
     - isGroup: If true, team_name is treated as a group name and returns closed sprints for all teams in that group
+    - issue_type: Optional issue type filter (e.g., 'Story', 'Bug', 'Task')
     
     Returns:
         JSON response with closed sprints grouped by team and metadata
@@ -816,7 +818,7 @@ async def get_closed_sprints(
             )
         
         # Get closed sprints from database function (supports multiple teams)
-        closed_sprints_all = get_closed_sprints_data_db(team_names_list if team_names_list else None, months, conn)
+        closed_sprints_all = get_closed_sprints_data_db(team_names_list if team_names_list else None, months, issue_type=issue_type, conn=conn)
         
         # Group closed sprints by team_name
         sprints_by_team = {}

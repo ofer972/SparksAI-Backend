@@ -294,14 +294,16 @@ DEFAULT_REPORT_DEFINITIONS = [
         "description": "Displays completed sprint metrics for a given team across recent months.",
         "default_filters": {
             "team_name": None,
-            "months": 3
+            "months": 3,
+            "issue_type": None
         },
         "meta_schema": {
             "required_filters": [],
-            "optional_filters": ["team_name", "months"],
+            "optional_filters": ["team_name", "months", "issue_type"],
             "parameters": {
                 "team_name": {"type": "string", "description": "Team identifier"},
-                "months": {"type": "integer", "description": "Number of months to look back (1, 2, 3, 4, 6, 9)"}
+                "months": {"type": "integer", "description": "Number of months to look back (1, 2, 3, 4, 6, 9)"},
+                "issue_type": {"type": "string", "description": "Issue type filter (optional, e.g., 'Story', 'Bug', 'Task')"}
             },
             "allowed_views": ["team-dashboard"]
         }

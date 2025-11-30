@@ -432,6 +432,9 @@ def _fetch_team_closed_sprints(filters: Dict[str, Any], conn: Connection) -> Rep
     if months not in [1, 2, 3, 4, 6, 9]:
         months = 3
 
+    # Get issue_type filter (optional)
+    issue_type = filters.get("issue_type")
+
     # Fetch available teams from cache
     from groups_teams_cache import get_cached_teams, set_cached_teams, load_team_names_from_db, load_all_teams_from_db
     
@@ -445,11 +448,23 @@ def _fetch_team_closed_sprints(filters: Dict[str, Any], conn: Connection) -> Rep
         all_teams = load_all_teams_from_db(conn)
         set_cached_teams({"teams": all_teams, "count": len(all_teams)})
 
+    # Fetch available issue types (always)
+    issue_types_query = text(
+        f"""
+        SELECT DISTINCT issue_type
+        FROM {config.WORK_ITEMS_TABLE}
+        WHERE issue_type IS NOT NULL
+        ORDER BY issue_type
+        """
+    )
+    issue_types_rows = conn.execute(issue_types_query).fetchall()
+    available_issue_types = [row[0] for row in issue_types_rows if row[0]]
+
     # Resolve team names using shared helper function
     team_names_list = resolve_team_names_from_filter(team_name, is_group, conn)
 
     # Fetch closed sprints (supports None for all teams, or list of team names)
-    closed_sprints = get_closed_sprints_data_db(team_names_list, months, conn)
+    closed_sprints = get_closed_sprints_data_db(team_names_list, months, issue_type, conn)
 
     return {
         "data": closed_sprints,
@@ -457,8 +472,10 @@ def _fetch_team_closed_sprints(filters: Dict[str, Any], conn: Connection) -> Rep
             "team_name": team_name,
             "isGroup": is_group,
             "months": months,
+            "issue_type": issue_type,
             "count": len(closed_sprints),
             "available_teams": available_teams,
+            "available_issue_types": available_issue_types,
         },
     }
 
