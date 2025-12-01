@@ -1234,3 +1234,64 @@ async def get_issue(
             status_code=500,
             detail=f"Failed to fetch issue: {str(e)}"
         )
+
+
+@issues_router.get("/issues/issue-types")
+async def get_issue_types(
+    conn: Connection = Depends(get_db_connection)
+):
+    """
+    Get all issue types from the issue_types table.
+    
+    Returns all issue types with their metadata including description, iconUrl, name, subtask, and hierarchyLevel.
+    
+    Returns:
+        JSON response with list of issue types and count
+    """
+    try:
+        # SECURE: Parameterized query prevents SQL injection
+        query = text(f"""
+            SELECT 
+                issue_type,
+                description,
+                "iconUrl",
+                name,
+                subtask,
+                "hierarchyLevel"
+            FROM {config.ISSUE_TYPES_TABLE}
+            ORDER BY issue_type
+        """)
+        
+        logger.info("Executing query to get issue types")
+        
+        result = conn.execute(query)
+        rows = result.fetchall()
+        
+        # Convert rows to list of dictionaries
+        issue_types = []
+        for row in rows:
+            issue_type_dict = {
+                "issue_type": row[0],
+                "description": row[1],
+                "iconUrl": row[2],
+                "name": row[3],
+                "subtask": row[4],
+                "hierarchyLevel": row[5]
+            }
+            issue_types.append(issue_type_dict)
+        
+        return {
+            "success": True,
+            "data": {
+                "issue_types": issue_types,
+                "count": len(issue_types)
+            },
+            "message": f"Retrieved {len(issue_types)} issue types"
+        }
+    
+    except Exception as e:
+        logger.error(f"Error fetching issue types: {e}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to fetch issue types: {str(e)}"
+        )

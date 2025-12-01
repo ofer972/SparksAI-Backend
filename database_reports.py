@@ -451,9 +451,8 @@ def _fetch_team_closed_sprints(filters: Dict[str, Any], conn: Connection) -> Rep
     # Fetch available issue types (always)
     issue_types_query = text(
         f"""
-        SELECT DISTINCT issue_type
-        FROM {config.WORK_ITEMS_TABLE}
-        WHERE issue_type IS NOT NULL
+        SELECT issue_type
+        FROM {config.ISSUE_TYPES_TABLE}
         ORDER BY issue_type
         """
     )
@@ -1110,9 +1109,8 @@ def _fetch_issues_flow_status_duration(filters: Dict[str, Any], conn: Connection
     # Fetch available issue types (always)
     issue_types_query = text(
         f"""
-        SELECT DISTINCT issue_type
-        FROM {config.WORK_ITEMS_TABLE}
-        WHERE issue_type IS NOT NULL
+        SELECT issue_type
+        FROM {config.ISSUE_TYPES_TABLE}
         ORDER BY issue_type
         """
     )
@@ -1446,9 +1444,8 @@ def _fetch_pi_metrics_summary(filters: Dict[str, Any], conn: Connection) -> Repo
     # Fetch available issue types (always)
     issue_types_query = text(
         f"""
-        SELECT DISTINCT issue_type
-        FROM {config.WORK_ITEMS_TABLE}
-        WHERE issue_type IS NOT NULL
+        SELECT issue_type
+        FROM {config.ISSUE_TYPES_TABLE}
         ORDER BY issue_type
         """
     )
