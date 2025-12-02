@@ -1179,6 +1179,319 @@ async def get_epic_outbound_dependency_metrics_by_quarter(
         )
 
 
+@issues_router.get("/issues/epics-by-pi")
+async def get_epics_by_pi(
+    pi: str = Query(..., description="PI name (quarter_pi) to filter epics"),
+    team_name: Optional[str] = Query(None, description="Team name or group name (if isGroup=true)"),
+    isGroup: bool = Query(False, description="If true, team_name is treated as a group name"),
+    conn: Connection = Depends(get_db_connection)
+):
+    """
+    Get comprehensive information about EPICs in a specific PI.
+    
+    Returns epic information including current state, historical baseline data,
+    story tracking, team involvement, and dependency metrics.
+    
+    Args:
+        pi: PI name (quarter_pi) to filter epics (required)
+        team_name: Optional team name or group name (if isGroup=true)
+        isGroup: If true, team_name is treated as a group name
+    
+    Returns:
+        JSON response with list of epics and their detailed metrics
+    """
+    try:
+        from database_team_metrics import resolve_team_names_from_filter
+        
+        # Resolve team names (handles group to teams translation)
+        team_names_list = resolve_team_names_from_filter(team_name, isGroup, conn)
+        
+        # Step 1: Get all epics for the PI
+        where_conditions = [
+            "issue_type = 'Epic'",
+            "quarter_pi = :pi"
+        ]
+        params = {"pi": pi}
+        
+        # Add team filter if provided
+        if team_names_list:
+            placeholders = ", ".join([f":team_name_{i}" for i in range(len(team_names_list))])
+            where_conditions.append(f"team_name IN ({placeholders})")
+            for i, name in enumerate(team_names_list):
+                params[f"team_name_{i}"] = name
+        
+        where_clause = " AND ".join(where_conditions)
+        
+        query1 = text(f"""
+            SELECT 
+                issue_key as epic_key,
+                summary as epic_name,
+                team_name as owning_team,
+                quarter_pi,
+                status_category,
+                issue_id
+            FROM {config.WORK_ITEMS_TABLE}
+            WHERE {where_clause}
+            ORDER BY issue_key
+        """)
+        
+        logger.info(f"Executing query to get epics for PI: {pi}, team_name={team_name}, isGroup={isGroup}")
+        
+        result1 = conn.execute(query1, params)
+        epic_rows = result1.fetchall()
+        
+        if not epic_rows:
+            return {
+                "success": True,
+                "data": {
+                    "epics": [],
+                    "count": 0
+                },
+                "message": f"No epics found for PI {pi}"
+            }
+        
+        # Extract epic keys for subsequent queries
+        epic_keys = [row[0] for row in epic_rows]
+        epic_data = {}
+        
+        # Initialize epic data structure
+        for row in epic_rows:
+            epic_key = row[0]
+            epic_data[epic_key] = {
+                "epic_name": row[1],
+                "epic_key": epic_key,
+                "owning_team": row[2],
+                "planned_for_quarter": "Yes" if row[3] == pi else "No",
+                "epic_status": row[4],  # Use status_category directly
+                "in_progress_date": None,
+                "in_progress_sprint": None,
+                "stories_at_in_progress": 0,
+                "current_story_count": 0,
+                "stories_added": 0,
+                "stories_removed": 0,
+                "stories_completed": 0,
+                "stories_remaining": 0,
+                "team_progress_breakdown": [],
+                "number_of_relying_teams": 0,
+                "dependent_issues_total": 0,
+                "dependent_issues_done": 0
+            }
+        
+        # Step 2: Get in-progress dates for all epics (batch)
+        if epic_keys:
+            placeholders = ", ".join([f":epic_key_{i}" for i in range(len(epic_keys))])
+            params2 = {}
+            for i, key in enumerate(epic_keys):
+                params2[f"epic_key_{i}"] = key
+            
+            query2 = text(f"""
+                SELECT 
+                    h1.issue_key,
+                    h1.snapshot_date as in_progress_date,
+                    h1.sprint_ids[1] as in_progress_sprint
+                FROM (
+                    SELECT 
+                        issue_key,
+                        MIN(snapshot_date) as min_date
+                    FROM jira_issue_history
+                    WHERE issue_key IN ({placeholders})
+                      AND status_category = 'In Progress'
+                    GROUP BY issue_key
+                ) first_in_progress
+                INNER JOIN jira_issue_history h1 
+                    ON h1.issue_key = first_in_progress.issue_key
+                    AND h1.snapshot_date = first_in_progress.min_date
+                    AND h1.status_category = 'In Progress'
+                ORDER BY h1.snapshot_date
+            """)
+            
+            result2 = conn.execute(query2, params2)
+            in_progress_rows = result2.fetchall()
+            
+            # Store in-progress dates
+            for row in in_progress_rows:
+                epic_key = row[0]
+                if epic_key in epic_data:
+                    epic_data[epic_key]["in_progress_date"] = row[1].strftime("%Y-%m-%d") if row[1] else None
+                    epic_data[epic_key]["in_progress_sprint"] = row[2] if row[2] else None
+            
+            # Step 3: Get baseline story count (batch query for epics with in_progress_date)
+            epics_with_dates = [k for k, v in epic_data.items() if v["in_progress_date"]]
+            
+            if epics_with_dates:
+                placeholders3 = ", ".join([f":epic_key_{i}" for i in range(len(epics_with_dates))])
+                params3 = {}
+                for i, key in enumerate(epics_with_dates):
+                    params3[f"epic_key_{i}"] = key
+                
+                query3 = text(f"""
+                    SELECT 
+                        h.parent_key as epic_key,
+                        COUNT(DISTINCT h.issue_key) as story_count
+                    FROM jira_issue_history h
+                    INNER JOIN (
+                        SELECT 
+                            h1.issue_key,
+                            h1.snapshot_date as in_progress_date
+                        FROM (
+                            SELECT 
+                                issue_key,
+                                MIN(snapshot_date) as min_date
+                            FROM jira_issue_history
+                            WHERE issue_key IN ({placeholders3})
+                              AND status_category = 'In Progress'
+                            GROUP BY issue_key
+                        ) first_in_progress
+                        INNER JOIN jira_issue_history h1 
+                            ON h1.issue_key = first_in_progress.issue_key
+                            AND h1.snapshot_date = first_in_progress.min_date
+                            AND h1.status_category = 'In Progress'
+                    ) epic_dates ON h.parent_key = epic_dates.issue_key
+                        AND h.snapshot_date = epic_dates.in_progress_date
+                    WHERE h.issuetype = 'Story'
+                    GROUP BY h.parent_key
+                """)
+                
+                result3 = conn.execute(query3, params3)
+                baseline_rows = result3.fetchall()
+                
+                for row in baseline_rows:
+                    epic_key = row[0]
+                    if epic_key in epic_data:
+                        epic_data[epic_key]["stories_at_in_progress"] = int(row[1]) if row[1] else 0
+            
+            # Step 4: Get current story metrics (batch for all epics)
+            placeholders4 = ", ".join([f":epic_key_{i}" for i in range(len(epic_keys))])
+            params4 = {}
+            for i, key in enumerate(epic_keys):
+                params4[f"epic_key_{i}"] = key
+            
+            # Team breakdown
+            query4a = text(f"""
+                SELECT 
+                    parent_key as epic_key,
+                    team_name,
+                    COUNT(*) as total,
+                    COUNT(CASE WHEN status_category = 'Done' THEN 1 END) as done
+                FROM {config.WORK_ITEMS_TABLE}
+                WHERE parent_key IN ({placeholders4})
+                  AND issue_type = 'Story'
+                GROUP BY parent_key, team_name
+                ORDER BY parent_key, team_name
+            """)
+            
+            result4a = conn.execute(query4a, params4)
+            team_breakdown_rows = result4a.fetchall()
+            
+            # Total story counts
+            query4b = text(f"""
+                SELECT 
+                    parent_key as epic_key,
+                    COUNT(*) as current_story_count,
+                    COUNT(CASE WHEN status_category = 'Done' THEN 1 END) as stories_completed
+                FROM {config.WORK_ITEMS_TABLE}
+                WHERE parent_key IN ({placeholders4})
+                  AND issue_type = 'Story'
+                GROUP BY parent_key
+            """)
+            
+            result4b = conn.execute(query4b, params4)
+            story_count_rows = result4b.fetchall()
+            
+            # Process team breakdown
+            team_breakdown_by_epic = {}
+            
+            for row in team_breakdown_rows:
+                epic_key = row[0]
+                team_name = row[1]
+                total = int(row[2]) if row[2] else 0
+                done = int(row[3]) if row[3] else 0
+                
+                if epic_key not in team_breakdown_by_epic:
+                    team_breakdown_by_epic[epic_key] = []
+                
+                team_breakdown_by_epic[epic_key].append({
+                    "team_name": team_name,
+                    "done": done,
+                    "total": total
+                })
+            
+            # Process story counts
+            for row in story_count_rows:
+                epic_key = row[0]
+                if epic_key in epic_data:
+                    epic_data[epic_key]["current_story_count"] = int(row[1]) if row[1] else 0
+                    epic_data[epic_key]["stories_completed"] = int(row[2]) if row[2] else 0
+                    epic_data[epic_key]["stories_remaining"] = epic_data[epic_key]["current_story_count"] - epic_data[epic_key]["stories_completed"]
+                    epic_data[epic_key]["team_progress_breakdown"] = team_breakdown_by_epic.get(epic_key, [])
+            
+            # Calculate stories_added and stories_removed
+            for epic_key, data in epic_data.items():
+                baseline = data["stories_at_in_progress"]
+                current = data["current_story_count"]
+                
+                if baseline == 0 and data["in_progress_date"] is None:
+                    # Epic never entered "In Progress" - use current as baseline
+                    data["stories_at_in_progress"] = current
+                    data["stories_added"] = 0
+                    data["stories_removed"] = 0
+                else:
+                    if current > baseline:
+                        data["stories_added"] = current - baseline
+                        data["stories_removed"] = 0
+                    elif baseline > current:
+                        data["stories_added"] = 0
+                        data["stories_removed"] = baseline - current
+                    else:
+                        data["stories_added"] = 0
+                        data["stories_removed"] = 0
+            
+            # Step 5: Get dependency metrics (batch for all epics)
+            # Number of relying teams and dependent issues (using dependency = true)
+            query5 = text(f"""
+                SELECT 
+                    parent_key as epic_key,
+                    COUNT(DISTINCT team_name) as number_of_relying_teams,
+                    COUNT(*) as total_dependent_issues,
+                    COUNT(CASE WHEN status_category = 'Done' THEN 1 END) as done_dependent_issues
+                FROM {config.WORK_ITEMS_TABLE}
+                WHERE parent_key IN ({placeholders4})
+                  AND dependency = true
+                GROUP BY parent_key
+            """)
+            
+            result5 = conn.execute(query5, params4)
+            dependency_rows = result5.fetchall()
+            
+            for row in dependency_rows:
+                epic_key = row[0]
+                if epic_key in epic_data:
+                    epic_data[epic_key]["number_of_relying_teams"] = int(row[1]) if row[1] else 0
+                    epic_data[epic_key]["dependent_issues_total"] = int(row[2]) if row[2] else 0
+                    epic_data[epic_key]["dependent_issues_done"] = int(row[3]) if row[3] else 0
+        
+        # Convert to list
+        epics_list = list(epic_data.values())
+        
+        return {
+            "success": True,
+            "data": {
+                "epics": epics_list,
+                "count": len(epics_list)
+            },
+            "message": f"Retrieved {len(epics_list)} epics for PI {pi}"
+        }
+    
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error fetching epics by PI: {e}", exc_info=True)
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to fetch epics by PI: {str(e)}"
+        )
+
+
 @issues_router.get("/issues/{issue_id}")
 async def get_issue(
     issue_id: str,
