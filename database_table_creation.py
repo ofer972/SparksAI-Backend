@@ -542,6 +542,33 @@ DEFAULT_REPORT_DEFINITIONS = [
             },
             "allowed_views": ["pi-dashboard"]
         }
+    },
+    {
+        "report_id": "pi-metrics-summary-by-team",
+        "report_name": "PI Metrics Summary by Team",
+        "chart_type": "table",
+        "data_source": "pi_metrics_summary_by_team",
+        "description": "Displays PI closure progress and WIP metrics broken down by team (one row per team).",
+        "default_filters": {
+            "pi": None,
+            "project": None,
+            "issue_type": "Epic",
+            "team_name": None,
+            "plan_grace_period": 5
+        },
+        "meta_schema": {
+            "required_filters": [],
+            "optional_filters": ["pi", "project", "issue_type", "team_name", "plan_grace_period", "isGroup"],
+            "parameters": {
+                "pi": {"type": "string", "description": "PI name filter"},
+                "project": {"type": "string", "description": "Project key filter"},
+                "issue_type": {"type": "string", "description": "Issue type filter (default 'Epic')"},
+                "team_name": {"type": "string", "description": "Team name filter (or group name if isGroup=true)"},
+                "plan_grace_period": {"type": "integer", "description": "Grace period in days (default 5)"},
+                "isGroup": {"type": "boolean", "description": "If true, team_name is treated as a group name"}
+            },
+            "allowed_views": ["pi-dashboard"]
+        }
     }
 ]
 
@@ -1595,11 +1622,7 @@ def create_insight_types_table_if_not_exists(engine=None) -> bool:
 
 
 def create_report_definitions_table_if_not_exists(engine=None) -> bool:
-    """Create report_definitions table if it doesn't exist."""
-    global _tables_initialized
-    if _tables_initialized:
-        return True
-
+    """Create report_definitions table if it doesn't exist and upsert default definitions."""
     import database_connection
 
     if engine is None:
@@ -1643,6 +1666,8 @@ def create_report_definitions_table_if_not_exists(engine=None) -> bool:
             else:
                 print("report_definitions table already exists")
 
+            # Always upsert report definitions (even if table already exists)
+            # This ensures new reports are added and existing ones are updated
             insert_default_report_definitions(engine)
 
             return True

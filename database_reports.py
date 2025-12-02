@@ -20,6 +20,7 @@ from database_pi import (
     fetch_pi_predictability_data,
     fetch_scope_changes_data,
     fetch_pi_summary_data,
+    fetch_pi_summary_data_by_team,
 )
 from database_team_metrics import (
     get_sprint_burndown_data_db,
@@ -1587,6 +1588,152 @@ def _fetch_pi_metrics_summary(filters: Dict[str, Any], conn: Connection) -> Repo
     }
 
 
+def _fetch_pi_metrics_summary_by_team(filters: Dict[str, Any], conn: Connection) -> ReportDataResult:
+    from database_team_metrics import resolve_team_names_from_filter
+    
+    pi_name = (filters.get("pi") or filters.get("pi_name") or "").strip() or None
+    project = (filters.get("project") or "").strip() or None
+    issue_type = (filters.get("issue_type") or "Epic").strip() or "Epic"
+    team = (filters.get("team_name") or filters.get("team") or "").strip() or None
+    is_group = filters.get("isGroup", False)
+    plan_grace_period = _parse_int(filters.get("plan_grace_period"), default=5)
+
+    # Fetch available teams from cache
+    from groups_teams_cache import get_cached_teams, set_cached_teams, load_team_names_from_db, load_all_teams_from_db
+    
+    cached = get_cached_teams()
+    if cached:
+        available_teams = [t["team_name"] for t in cached.get("teams", [])]
+    else:
+        # Cache miss - load from DB
+        available_teams = load_team_names_from_db(conn)
+        # Also build full teams cache for future use
+        all_teams = load_all_teams_from_db(conn)
+        set_cached_teams({"teams": all_teams, "count": len(all_teams)})
+
+    # Fetch available issue types (always)
+    issue_types_query = text(
+        f"""
+        SELECT issue_type
+        FROM {config.ISSUE_TYPES_TABLE}
+        ORDER BY issue_type
+        """
+    )
+    issue_types_rows = conn.execute(issue_types_query).fetchall()
+    available_issue_types = [row[0] for row in issue_types_rows if row[0]]
+
+    # Fetch available PIs (always)
+    pis_query = text(
+        f"""
+        SELECT DISTINCT pi_name
+        FROM {config.PIS_TABLE}
+        WHERE pi_name IS NOT NULL
+        ORDER BY pi_name DESC
+        """
+    )
+    pis_rows = conn.execute(pis_query).fetchall()
+    available_pis = [row[0] for row in pis_rows if row[0]]
+
+    # Resolve team names using shared helper function (handles single team, group, or None)
+    team_names_list = resolve_team_names_from_filter(team, is_group, conn)
+
+    summary_data = fetch_pi_summary_data_by_team(
+        target_pi_name=pi_name,
+        target_project_keys=project,
+        target_issue_type=issue_type,
+        target_team_names=team_names_list,
+        planned_grace_period_days=plan_grace_period,
+        conn=conn,
+    )
+
+    # Fetch per-team WIP data
+    wip_data_by_team = []
+    if pi_name:
+        wip_where = [
+            "issue_type = 'Epic'",
+            "quarter_pi = :pi"
+        ]
+        wip_params: Dict[str, Any] = {"pi": pi_name}
+
+        if team_names_list:
+            wip_where.append("team_name = ANY(:team_names)")
+            wip_params["team_names"] = team_names_list
+        
+        if project:
+            wip_where.append("project_key = :project")
+            wip_params["project"] = project
+
+        where_clause = " AND ".join(wip_where)
+
+        wip_query = text(
+            f"""
+            SELECT 
+                team_name,
+                COUNT(*) AS total_epics,
+                COUNT(CASE WHEN status_category = 'In Progress' THEN 1 END) AS in_progress_epics
+            FROM public.jira_issues
+            WHERE {where_clause}
+            GROUP BY team_name
+            ORDER BY team_name
+            """
+        )
+
+        wip_result = conn.execute(wip_query, wip_params)
+        
+        def _wip_status(count_in_progress: int, total: int) -> str:
+            if total <= 0:
+                return "gray"
+            percentage = (count_in_progress / total) * 100
+            if percentage < 30:
+                return "green"
+            if percentage <= 50:
+                return "yellow"
+            return "red"
+        
+        for row in wip_result:
+            team_name = row[0]
+            total_epics = int(row[1]) if row[1] else 0
+            in_progress_epics = int(row[2]) if row[2] else 0
+            in_progress_percentage = (in_progress_epics / total_epics * 100) if total_epics > 0 else 0.0
+            
+            wip_data_by_team.append({
+                "team_name": team_name,
+                "count_in_progress": in_progress_epics,
+                "count_in_progress_status": _wip_status(in_progress_epics, total_epics),
+                "total_epics": total_epics,
+                "in_progress_percentage": round(in_progress_percentage, 2),
+            })
+
+    # Build meta with appropriate fields
+    meta = {
+        "pi": pi_name,
+        "project": project,
+        "issue_type": issue_type,
+        "isGroup": is_group,
+        "available_teams": available_teams,
+        "available_issue_types": available_issue_types,
+        "available_pis": available_pis,
+    }
+    
+    # Add team/group information to meta
+    if team:
+        if is_group:
+            meta["group_name"] = team
+            meta["teams_in_group"] = team_names_list
+        else:
+            meta["team_name"] = team
+    else:
+        meta["team_name"] = None
+
+    return {
+        "data": {
+            "status_today_by_team": summary_data,
+            "wip_by_team": wip_data_by_team,
+        },
+        "meta": meta,
+    }
+
+
 _REPORT_DATA_FETCHERS: Dict[str, ReportDataFetcher] = {
     "team_sprint_burndown": _fetch_team_sprint_burndown,
     "team_current_sprint_progress": _fetch_team_current_sprint_progress,
@@ -1603,5 +1750,6 @@ _REPORT_DATA_FETCHERS: Dict[str, ReportDataFetcher] = {
     "issues_release_predictability": _fetch_release_predictability,
     "sprint_predictability": _fetch_sprint_predictability,
     "pi_metrics_summary": _fetch_pi_metrics_summary,
+    "pi_metrics_summary_by_team": _fetch_pi_metrics_summary_by_team,
 }
 

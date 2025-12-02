@@ -13,7 +13,7 @@ from datetime import date, datetime, timedelta
 import logging
 import re
 from database_connection import get_db_connection
-from database_pi import fetch_pi_predictability_data, fetch_pi_burndown_data, fetch_scope_changes_data, fetch_pi_summary_data
+from database_pi import fetch_pi_predictability_data, fetch_pi_burndown_data, fetch_scope_changes_data, fetch_pi_summary_data, fetch_pi_summary_data_by_team
 from database_team_metrics import resolve_team_names_from_filter
 import config
 
@@ -824,6 +824,159 @@ async def get_pi_status_for_today(
         raise HTTPException(
             status_code=500,
             detail=f"Failed to fetch PI status for today: {str(e)}"
+        )
+
+
+@pis_router.get("/pis/get-pi-status-for-today-by-team")
+async def get_pi_status_for_today_by_team(
+    pi: str = Query(None, description="PI name filter"),
+    project: str = Query(None, description="Project key filter"),
+    issue_type: str = Query(None, description="Issue type filter"),
+    team: str = Query(None, description="Team name filter (or group name if isGroup=true)"),
+    isGroup: bool = Query(False, description="If true, team is treated as a group name"),
+    plan_grace_period: int = Query(None, description="Planned grace period in days"),
+    conn: Connection = Depends(get_db_connection)
+):
+    """
+    Get PI status for today grouped by team using the get_pi_summary_data_by_team database function.
+    
+    Returns multiple rows, one per team_name, with all columns from the database function.
+    Each row includes team-specific metrics.
+    
+    Parameters:
+        pi: PI name filter (optional)
+        project: Project key filter (optional)
+        issue_type: Issue type filter (optional)
+        team: Team name filter (optional, or group name if isGroup=true)
+        isGroup: If true, team parameter is treated as a group name (default: false)
+        plan_grace_period: Planned grace period in days (optional)
+    
+    Returns:
+        JSON response with PI summary data by team (all columns from database function, one row per team)
+    """
+    try:
+        # Set default value of 5 for plan_grace_period if empty/None
+        if plan_grace_period is None:
+            plan_grace_period = 5
+        
+        # Set default value of "Epic" for issue_type if empty/None
+        if issue_type is None or issue_type == "":
+            issue_type = "Epic"
+        
+        # Resolve team names using shared helper function (handles single team, group, or None)
+        team_names_list = resolve_team_names_from_filter(team, isGroup, conn)
+        
+        logger.info(f"Fetching PI status for today by team")
+        logger.info(f"Parameters: pi={pi}, project={project}, issue_type={issue_type}, team={team}, isGroup={isGroup}, plan_grace_period={plan_grace_period}")
+        if team_names_list:
+            logger.info(f"Resolved team names: {team_names_list}")
+        
+        # Call database function with resolved team names list
+        summary_data = fetch_pi_summary_data_by_team(
+            target_pi_name=pi,
+            target_project_keys=project,
+            target_issue_type=issue_type,
+            target_team_names=team_names_list,
+            planned_grace_period_days=plan_grace_period,
+            conn=conn
+        )
+        
+        # Fetch per-team WIP data
+        wip_data_by_team = {}
+        if pi:  # Only fetch WIP if PI is provided
+            wip_where = [
+                "issue_type = 'Epic'",
+                "quarter_pi = :pi"
+            ]
+            wip_params = {"pi": pi}
+            
+            if team_names_list:
+                wip_where.append("team_name = ANY(:team_names)")
+                wip_params["team_names"] = team_names_list
+            
+            if project:
+                wip_where.append("project_key = :project")
+                wip_params["project"] = project
+            
+            where_clause = " AND ".join(wip_where)
+            
+            wip_query = text(f"""
+                SELECT 
+                    team_name,
+                    COUNT(*) AS total_epics,
+                    COUNT(CASE WHEN status_category = 'In Progress' THEN 1 END) AS in_progress_epics
+                FROM public.jira_issues
+                WHERE {where_clause}
+                GROUP BY team_name
+            """)
+            
+            logger.info(f"Executing per-team WIP query for PI: {pi}")
+            wip_result = conn.execute(wip_query, wip_params)
+            
+            for row in wip_result:
+                team_name = row[0]
+                total_epics = int(row[1]) if row[1] else 0
+                in_progress_epics = int(row[2]) if row[2] else 0
+                in_progress_percentage = (in_progress_epics / total_epics * 100) if total_epics > 0 else 0.0
+                
+                wip_data_by_team[team_name] = {
+                    'in_progress_epics': in_progress_epics,
+                    'in_progress_percentage': round(in_progress_percentage, 2),
+                    'count_in_progress_status': get_wip_count_status(in_progress_epics, total_epics),
+                    'total_epics': total_epics
+                }
+        
+        # Add progress_delta_pct_status and per-team WIP fields to each record
+        for record in summary_data:
+            progress_delta_pct = record.get('progress_delta_pct')
+            record['progress_delta_pct_status'] = get_progress_delta_pct_status(progress_delta_pct)
+            
+            # Add per-team WIP fields from query (if available)
+            team_name = record.get('team_name')
+            if team_name and team_name in wip_data_by_team:
+                wip_data = wip_data_by_team[team_name]
+                record['in_progress_issues'] = wip_data['in_progress_epics']
+                record['in_progress_percentage'] = wip_data['in_progress_percentage']
+                record['count_in_progress_status'] = wip_data['count_in_progress_status']
+            else:
+                # Fallback: try to get from database function response if available
+                in_progress_issues = record.get('in_progress_issues', 0) or 0
+                total_issues = record.get('total_issues', 0) or 0
+                record['in_progress_issues'] = in_progress_issues
+                in_progress_percentage = ((in_progress_issues / total_issues) * 100) if total_issues > 0 else 0.0
+                record['in_progress_percentage'] = round(in_progress_percentage, 2)
+                record['count_in_progress_status'] = get_wip_count_status(in_progress_issues, total_issues)
+        
+        # Build response metadata
+        response_data = {
+            "data": summary_data,
+            "count": len(summary_data)
+        }
+        
+        # Add team/group information to response
+        if team:
+            if isGroup:
+                response_data["group_name"] = team
+                response_data["teams_in_group"] = team_names_list
+            else:
+                response_data["team"] = team
+        else:
+            response_data["team"] = None
+        
+        return {
+            "success": True,
+            "data": response_data,
+            "message": f"Retrieved PI status data for {len(summary_data)} teams"
+        }
+    
+    except HTTPException:
+        # Re-raise HTTP exceptions
+        raise
+    except Exception as e:
+        logger.error(f"Error fetching PI status for today by team: {e}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to fetch PI status for today by team: {str(e)}"
         )
 
 

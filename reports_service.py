@@ -204,6 +204,7 @@ async def get_report_instance(
     - issues-release-predictability
     - sprint-predictability
     - pi-metrics-summary
+    - pi-metrics-summary-by-team
     """
     definition = get_report_definition_by_id(report_id, conn)
     if not definition:

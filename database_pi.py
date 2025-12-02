@@ -302,3 +302,105 @@ def fetch_pi_summary_data(
     except Exception as e:
         logger.error(f"Error fetching PI summary data: {e}")
         raise e
+
+
+def fetch_pi_summary_data_by_team(
+    target_pi_name: str = None,
+    target_project_keys: str = None,
+    target_issue_type: str = None,
+    target_team_names: Optional[List[str]] = None,
+    planned_grace_period_days: int = None,
+    conn: Connection = None
+) -> List[Dict[str, Any]]:
+    """
+    Fetch PI summary data grouped by team from the database function get_pi_summary_data_by_team.
+    
+    Returns multiple rows, one per team_name, with all columns from the SQL function.
+    
+    Args:
+        target_pi_name (str, optional): PI name filter
+        target_project_keys (str, optional): Project keys filter
+        target_issue_type (str, optional): Issue type filter
+        target_team_names (Optional[List[str]], optional): List of team names filter, or None for all teams
+        planned_grace_period_days (int, optional): Planned grace period in days
+        conn (Connection): Database connection from FastAPI dependency
+    
+    Returns:
+        list: List of dictionaries with PI summary data by team (all columns from SELECT *, including team_name)
+    """
+    try:
+        logger.info(f"Executing PI summary by team query")
+        logger.info(f"Filters: pi={target_pi_name}, project={target_project_keys}, issue_type={target_issue_type}, team={target_team_names}, grace_period={planned_grace_period_days}")
+        
+        # Build parameters for the function call
+        params = {
+            'target_pi_name_param': target_pi_name,
+            'target_issue_type_param': target_issue_type,
+            'target_project_keys_param': target_project_keys,
+            'planned_grace_period_days_param': planned_grace_period_days
+        }
+        
+        # Build query - pass team_names as array or NULL (following pattern from fetch_pi_summary_data)
+        if target_team_names:
+            # Pass array of team names to function
+            params['target_team_names_param'] = target_team_names
+            sql_query_text = text("""
+                SELECT * FROM public.get_pi_summary_data_by_team(
+                    :target_pi_name_param,
+                    :target_issue_type_param,
+                    :target_project_keys_param,
+                    CAST(:target_team_names_param AS text[]),
+                    :planned_grace_period_days_param
+                )
+            """)
+            
+            logger.info(f"Executing SQL for PI summary by team: {target_pi_name} with teams: {target_team_names}")
+        else:
+            # Pass NULL for all teams
+            sql_query_text = text("""
+                SELECT * FROM public.get_pi_summary_data_by_team(
+                    :target_pi_name_param,
+                    :target_issue_type_param,
+                    :target_project_keys_param,
+                    NULL,
+                    :planned_grace_period_days_param
+                )
+            """)
+            
+            logger.info(f"Executing SQL for PI summary by team: {target_pi_name} for all teams")
+        
+        # Execute query with parameters (SECURE: prevents SQL injection)
+        result = conn.execute(sql_query_text, params)
+        
+        # Convert rows to list of dictionaries - return all columns as-is
+        summary_data = []
+        for row in result:
+            row_dict = dict(row._mapping)
+            
+            # Format array/list columns if present (following same pattern as other functions)
+            for col in row_dict.keys():
+                if isinstance(row_dict[col], list):
+                    row_dict[col] = ', '.join(row_dict[col])
+            
+            # Filter out teams with all zeros in epic metrics
+            planned_epics = row_dict.get('planned_epics', 0) or 0
+            added_epics = row_dict.get('added_epics', 0) or 0
+            removed_epics = row_dict.get('removed_epics', 0) or 0
+            closed_epics = row_dict.get('closed_epics', 0) or 0
+            remaining_epics = row_dict.get('remaining_epics', 0) or 0
+            ideal_remaining = row_dict.get('ideal_remaining', 0) or 0
+            
+            # Skip teams with all zeros
+            if (planned_epics == 0 and added_epics == 0 and removed_epics == 0 and 
+                closed_epics == 0 and remaining_epics == 0 and ideal_remaining == 0):
+                continue
+            
+            summary_data.append(row_dict)
+        
+        logger.info(f"Retrieved {len(summary_data)} PI summary by team records (after filtering zeros)")
+        
+        return summary_data
+            
+    except Exception as e:
+        logger.error(f"Error fetching PI summary data by team: {e}")
+        raise e
