@@ -13,7 +13,7 @@ from datetime import date, datetime, timedelta
 import logging
 import re
 from database_connection import get_db_connection
-from database_pi import fetch_pi_predictability_data, fetch_pi_burndown_data, fetch_scope_changes_data, fetch_pi_summary_data, fetch_pi_summary_data_by_team
+from database_pi import fetch_pi_predictability_data, fetch_pi_burndown_data, fetch_scope_changes_data, fetch_pi_summary_data, fetch_pi_summary_data_by_team, get_pi_participating_teams_db
 from database_team_metrics import resolve_team_names_from_filter
 import config
 
@@ -1244,23 +1244,8 @@ async def get_pi_participating_teams(
         # Validate PI parameter
         validated_pi = validate_pi(pi)
         
-        # SECURE: Parameterized query prevents SQL injection
-        query = text("""
-            SELECT DISTINCT team_name 
-            FROM public.jira_issues 
-            WHERE quarter_pi_of_epic = :pi
-              AND team_name IS NOT NULL 
-              AND team_name != ''
-            ORDER BY team_name
-        """)
-        
-        logger.info(f"Executing query to get PI participating teams for PI: {validated_pi}")
-        
-        result = conn.execute(query, {"pi": validated_pi})
-        rows = result.fetchall()
-        
-        # Extract team names from rows
-        team_names = [row[0] for row in rows if row[0]]
+        # Use reusable database function
+        team_names = get_pi_participating_teams_db(validated_pi, conn)
         
         return {
             "success": True,

@@ -20,8 +20,12 @@ from database_team_metrics import (
     get_sprints_with_total_issues_db,
     get_sprint_burndown_data_db,
     get_closed_sprints_data_db,
-    get_issues_trend_data_db
+    get_issues_trend_data_db,
+    get_average_sprint_velocity_per_team,
+    resolve_team_names_from_filter
 )
+from database_pi import get_pi_participating_teams_db
+from pis_service import validate_pi
 import config
 
 logger = logging.getLogger(__name__)
@@ -954,4 +958,136 @@ async def get_issues_trend(
         raise HTTPException(
             status_code=500,
             detail=f"Failed to fetch issues trend data: {str(e)}"
+        )
+
+
+@team_metrics_router.get("/team-metrics/get-average-sprint-velocity-per-team")
+async def get_average_sprint_velocity_per_team_endpoint(
+    num_sprints: int = Query(5, description="Number of sprints to average (default: 5, max: 20)", ge=1, le=20),
+    team_name: Optional[str] = Query(None, description="Team name or group name (if isGroup=true)"),
+    isGroup: bool = Query(False, description="If true, team_name is treated as a group name"),
+    pi: Optional[str] = Query(None, description="Program Increment name - if provided, uses teams that participate in this PI"),
+    conn: Connection = Depends(get_db_connection)
+):
+    """
+    Get average sprint velocity per team using the get_average_sprint_velocity_per_team database function.
+    
+    Returns average velocity (completed issues per sprint) for each team over the last N sprints.
+    
+    Parameters:
+    - num_sprints: Number of recent sprints to average (default: 5, max: 20)
+    - team_name: Optional team name or group name (if isGroup=true)
+    - isGroup: If true, team_name is treated as a group name
+    - pi: Optional Program Increment name. If provided, uses all teams that participate in this PI.
+          If both pi and team_name are provided, gets PI teams and then filters by team_name/isGroup.
+    
+    Returns:
+        JSON response with velocity data per team
+    """
+    try:
+        # Validate num_sprints
+        validated_num_sprints = validate_sprint_count(num_sprints)
+        
+        # Resolve team names based on parameters
+        team_names_list = None
+        
+        if pi:
+            # Validate PI parameter
+            validated_pi = validate_pi(pi)
+            
+            # Get teams that participate in the PI (reuse function to avoid duplication)
+            pi_teams = get_pi_participating_teams_db(validated_pi, conn)
+            
+            if not pi_teams:
+                return {
+                    "success": True,
+                    "data": {
+                        "velocity_data": [],
+                        "num_sprints": validated_num_sprints,
+                        "count": 0,
+                        "pi": validated_pi
+                    },
+                    "message": f"No teams found participating in PI '{validated_pi}'"
+                }
+            
+            # If team_name is also provided, filter PI teams by team_name/isGroup
+            if team_name:
+                validated_name = None
+                if isGroup:
+                    validated_name = validate_group_name(team_name)
+                    # Resolve group to team names
+                    group_teams = resolve_team_names_from_filter(validated_name, True, conn)
+                    # Intersection: teams that are both in PI and in the group
+                    team_names_list = [t for t in pi_teams if t in group_teams]
+                else:
+                    validated_name = validate_team_name(team_name)
+                    # Check if the team is in the PI teams
+                    if validated_name in pi_teams:
+                        team_names_list = [validated_name]
+                    else:
+                        team_names_list = []
+            else:
+                # Use all PI teams
+                team_names_list = pi_teams
+        elif team_name:
+            # No PI provided, use team_name/isGroup resolution
+            validated_name = None
+            if isGroup:
+                validated_name = validate_group_name(team_name)
+            else:
+                validated_name = validate_team_name(team_name)
+            
+            # Resolve team names using shared helper function
+            team_names_list = resolve_team_names_from_filter(validated_name, isGroup, conn)
+        else:
+            # No filters - use all teams (pass None to database function)
+            team_names_list = None
+        
+        # Get velocity data from database function
+        velocity_data = get_average_sprint_velocity_per_team(validated_num_sprints, team_names_list, conn)
+        
+        # Build response data
+        response_data = {
+            "velocity_data": velocity_data,
+            "num_sprints": validated_num_sprints,
+            "count": len(velocity_data)
+        }
+        
+        # Add metadata based on what was filtered
+        if pi:
+            response_data["pi"] = pi
+        if team_name:
+            if isGroup:
+                response_data["group_name"] = team_name
+                if team_names_list:
+                    response_data["teams_in_group"] = team_names_list
+            else:
+                response_data["team_name"] = team_name
+        
+        # Build message
+        if pi and team_name:
+            message = f"Retrieved average sprint velocity for {len(velocity_data)} teams (PI: '{pi}', filter: '{team_name}')"
+        elif pi:
+            message = f"Retrieved average sprint velocity for {len(velocity_data)} teams participating in PI '{pi}'"
+        elif team_name:
+            if isGroup:
+                message = f"Retrieved average sprint velocity for {len(velocity_data)} teams in group '{team_name}'"
+            else:
+                message = f"Retrieved average sprint velocity for team '{team_name}'"
+        else:
+            message = f"Retrieved average sprint velocity for {len(velocity_data)} teams"
+        
+        return {
+            "success": True,
+            "data": response_data,
+            "message": message
+        }
+    
+    except HTTPException:
+        raise  # Re-raise FastAPI HTTPExceptions
+    except Exception as e:
+        logger.error(f"Error fetching average sprint velocity per team (num_sprints={num_sprints}, team_name={team_name}, isGroup={isGroup}, pi={pi}): {e}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to fetch average sprint velocity per team: {str(e)}"
         )

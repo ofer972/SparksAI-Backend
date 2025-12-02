@@ -659,3 +659,54 @@ def get_issues_trend_data_db(team_names: Optional[List[str]], months: int = 6, i
     except Exception as e:
         logger.error(f"Error fetching issues trend data for teams {team_names}: {e}")
         raise e
+
+
+def get_average_sprint_velocity_per_team(num_sprints: int = 5, team_names: Optional[List[str]] = None, conn: Connection = None) -> List[Dict[str, Any]]:
+    """
+    Get average sprint velocity per team using the get_average_sprint_velocity_per_team database function.
+    
+    Args:
+        num_sprints (int): Number of recent sprints to average (default: 5)
+        team_names (Optional[List[str]]): List of team names, or None for all teams
+        conn (Connection): Database connection from FastAPI dependency
+    
+    Returns:
+        list: List of dictionaries with team_name and avg_velocity
+    """
+    try:
+        # Build parameters
+        params = {"p_num_sprints": num_sprints}
+        
+        if team_names:
+            # Pass array of team names
+            sql_query = text("""
+                SELECT * 
+                FROM public.get_average_sprint_velocity_per_team(:p_num_sprints, CAST(:p_team_list AS text[]))
+            """)
+            params["p_team_list"] = team_names
+        else:
+            # Pass NULL for all teams
+            sql_query = text("""
+                SELECT * 
+                FROM public.get_average_sprint_velocity_per_team(:p_num_sprints, NULL)
+            """)
+        
+        logger.info(f"Executing query to get average sprint velocity per team")
+        logger.info(f"Parameters: num_sprints={num_sprints}, team_names={team_names}")
+        
+        result = conn.execute(sql_query, params)
+        rows = result.fetchall()
+        
+        # Convert rows to list of dictionaries
+        velocity_data = []
+        for row in rows:
+            velocity_data.append({
+                'team_name': row[0],
+                'avg_velocity': float(row[1]) if row[1] is not None else 0.0
+            })
+        
+        return velocity_data
+            
+    except Exception as e:
+        logger.error(f"Error fetching average sprint velocity per team: {e}")
+        raise e

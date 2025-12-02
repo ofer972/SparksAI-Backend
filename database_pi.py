@@ -404,3 +404,48 @@ def fetch_pi_summary_data_by_team(
     except Exception as e:
         logger.error(f"Error fetching PI summary data by team: {e}")
         raise e
+
+
+def get_pi_participating_teams_db(pi: str, conn: Connection = None) -> List[str]:
+    """
+    Get list of teams that have any issues in the jira_issues table for a specific PI.
+    
+    Returns distinct team names that have issues where quarter_pi_of_epic matches the provided PI.
+    This is a reusable database function to avoid code duplication.
+    
+    Args:
+        pi (str): Program Increment value (filters on quarter_pi_of_epic column)
+        conn (Connection): Database connection from FastAPI dependency
+    
+    Returns:
+        List[str]: List of team names that participate in the PI
+    
+    Raises:
+        Exception: If database query fails
+    """
+    try:
+        # SECURE: Parameterized query prevents SQL injection
+        query = text("""
+            SELECT DISTINCT team_name 
+            FROM public.jira_issues 
+            WHERE quarter_pi_of_epic = :pi
+              AND team_name IS NOT NULL 
+              AND team_name != ''
+            ORDER BY team_name
+        """)
+        
+        logger.info(f"Executing query to get PI participating teams for PI: {pi}")
+        
+        result = conn.execute(query, {"pi": pi})
+        rows = result.fetchall()
+        
+        # Extract team names from rows
+        team_names = [row[0] for row in rows if row[0]]
+        
+        logger.info(f"Retrieved {len(team_names)} participating teams for PI '{pi}'")
+        
+        return team_names
+            
+    except Exception as e:
+        logger.error(f"Error fetching PI participating teams for PI {pi}: {e}")
+        raise e
