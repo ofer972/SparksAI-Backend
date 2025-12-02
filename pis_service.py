@@ -9,7 +9,7 @@ from fastapi import APIRouter, HTTPException, Depends, Query
 from sqlalchemy import text
 from sqlalchemy.engine import Connection
 from typing import List, Dict, Any, Union, Optional
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 import logging
 from database_connection import get_db_connection
 from database_pi import fetch_pi_predictability_data, fetch_pi_burndown_data, fetch_scope_changes_data, fetch_pi_summary_data
@@ -353,6 +353,131 @@ async def get_pis(conn: Connection = Depends(get_db_connection)):
         raise HTTPException(
             status_code=500,
             detail=f"Failed to fetch PIs: {str(e)}"
+        )
+
+
+@pis_router.get("/pis/current-and-next")
+async def get_current_and_next_pis(
+    window_days: int = Query(5, description="Days after current PI end date to look for next PIs (default: 5)"),
+    conn: Connection = Depends(get_db_connection)
+):
+    """
+    Get current PIs (where today is between start_date and end_date) and next/future PIs.
+    
+    Logic:
+    - Current PIs: All PIs where start_date <= today <= end_date
+    - Next PIs: PIs where start_date is between current_end_date and current_end_date + window_days
+    - Future PIs: 
+      * If no current PIs: Next upcoming PI(s) (earliest start_date > today)
+      * If current PIs exist but no next PIs within window: Next upcoming PI(s) after the window
+    
+    Parameters:
+        window_days: Days after current PI end date to look for next PIs (optional, default: 5)
+    
+    Returns:
+        JSON response with current_pis, next_pis, and future_pis (only pi_name, start_date, end_date)
+    """
+    try:
+        today = date.today()
+        logger.info(f"Fetching current and next PIs for today={today} with window_days={window_days}")
+        
+        # SECURE: Parameterized query prevents SQL injection
+        query = text(f"""
+            SELECT pi_name, start_date, end_date
+            FROM {config.PIS_TABLE}
+            WHERE start_date IS NOT NULL AND end_date IS NOT NULL
+            ORDER BY start_date ASC
+        """)
+        
+        result = conn.execute(query)
+        rows = result.fetchall()
+        
+        # Convert rows to list of dictionaries
+        all_pis = []
+        for row in rows:
+            pi_name = row[0]
+            start_date = row[1]
+            end_date = row[2]
+            
+            # Convert datetime to date if needed
+            if isinstance(start_date, datetime):
+                start_date = start_date.date()
+            if isinstance(end_date, datetime):
+                end_date = end_date.date()
+            
+            all_pis.append({
+                "pi_name": pi_name,
+                "start_date": start_date,
+                "end_date": end_date
+            })
+        
+        # Find current PIs (start_date <= today <= end_date)
+        current_pis = []
+        current_pis_with_dates = []  # Keep date objects for calculations
+        for pi in all_pis:
+            if pi["start_date"] <= today <= pi["end_date"]:
+                current_pis.append({
+                    "pi_name": pi["pi_name"],
+                    "start_date": str(pi["start_date"]),
+                    "end_date": str(pi["end_date"])
+                })
+                current_pis_with_dates.append(pi)  # Keep original with date objects
+        
+        # Find next PIs (within window_days after current PI end dates)
+        next_pis = []
+        next_pi_names = set()  # Track to avoid duplicates
+        
+        if current_pis_with_dates:
+            # Get the latest end_date from current PIs (using date objects)
+            latest_end_date = max([pi["end_date"] for pi in current_pis_with_dates])
+            
+            # Calculate window end date
+            window_end_date = latest_end_date + timedelta(days=window_days)
+            
+            # Find PIs that start within the window
+            current_pi_names = {pi["pi_name"] for pi in current_pis_with_dates}
+            for pi in all_pis:
+                # Skip if this PI is already a current PI
+                if pi["pi_name"] in current_pi_names:
+                    continue
+                
+                pi_start = pi["start_date"]
+                if isinstance(pi_start, str):
+                    pi_start = date.fromisoformat(pi_start)
+                elif isinstance(pi_start, datetime):
+                    pi_start = pi_start.date()
+                
+                # Next PI: starts on or after current end_date, and within window
+                if latest_end_date <= pi_start <= window_end_date:
+                    if pi["pi_name"] not in next_pi_names:
+                        next_pis.append({
+                            "pi_name": pi["pi_name"],
+                            "start_date": str(pi["start_date"]),
+                            "end_date": str(pi["end_date"])
+                        })
+                        next_pi_names.add(pi["pi_name"])
+        
+        return {
+            "success": True,
+            "data": {
+                "current_pis": current_pis,
+                "next_pis": next_pis
+            },
+            "count": {
+                "current": len(current_pis),
+                "next": len(next_pis)
+            },
+            "message": f"Retrieved {len(current_pis)} current and {len(next_pis)} next PIs"
+        }
+    
+    except HTTPException:
+        # Re-raise HTTP exceptions
+        raise
+    except Exception as e:
+        logger.error(f"Error fetching current and next PIs: {e}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to fetch current and next PIs: {str(e)}"
         )
 
 
