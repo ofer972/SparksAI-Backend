@@ -77,15 +77,15 @@ def fetch_pi_predictability_data(pi_names, team_name=None, conn: Connection = No
         raise e
 
 
-def fetch_pi_burndown_data(pi_name: str, project_keys: str = None, issue_type: str = None, team_names: str = None, conn: Connection = None) -> List[Dict[str, Any]]:
+def fetch_pi_burndown_data(pi_name: str, project_keys: str = None, issue_type: str = None, team_names: Optional[List[str]] = None, conn: Connection = None) -> List[Dict[str, Any]]:
     """
     Fetch PI burndown data from the database function.
     
     Args:
         pi_name (str): PI name to fetch data for (mandatory)
         project_keys (str, optional): Project keys filter
-        issue_type (str, optional): Issue type filter (defaults to 'all' if not provided)
-        team_names (str, optional): Team names filter
+        issue_type (str, optional): Issue type filter (defaults to 'Epic' if not provided)
+        team_names (Optional[List[str]], optional): List of team names filter, or None for all teams
         conn (Connection): Database connection from FastAPI dependency
     
     Returns:
@@ -102,25 +102,42 @@ def fetch_pi_burndown_data(pi_name: str, project_keys: str = None, issue_type: s
         logger.info(f"Executing PI burndown query for PI: {pi_name}")
         logger.info(f"Filters: project_keys={project_keys}, issue_type={issue_type}, team_names={team_names}")
         
-        # SECURITY: Use parameterized query to prevent SQL injection
-        sql_query_text = text("""
-            SELECT * FROM public.get_pi_burndown_data(
-                :pi_name,
-                :project_keys,
-                :issue_type,
-                :team_names
-            )
-        """)
-        
-        logger.info(f"Executing SQL for PI burndown: {pi_name}")
-        
-        # Execute query with parameters (SECURE: prevents SQL injection)
-        result = conn.execute(sql_query_text, {
+        # Build parameters for the function call
+        params = {
             'pi_name': pi_name,
             'project_keys': project_keys,
-            'issue_type': issue_type,
-            'team_names': team_names
-        })
+            'issue_type': issue_type
+        }
+        
+        # Build query - pass team_names as array or NULL (following pattern from get_closed_sprints_data_db)
+        if team_names:
+            # Pass array of team names to function
+            params['team_names'] = team_names
+            sql_query_text = text("""
+                SELECT * FROM public.get_pi_burndown_data(
+                    :pi_name,
+                    :project_keys,
+                    :issue_type,
+                    CAST(:team_names AS text[])
+                )
+            """)
+            
+            logger.info(f"Executing SQL for PI burndown: {pi_name} with teams: {team_names}")
+        else:
+            # Pass NULL for all teams
+            sql_query_text = text("""
+                SELECT * FROM public.get_pi_burndown_data(
+                    :pi_name,
+                    :project_keys,
+                    :issue_type,
+                    NULL
+                )
+            """)
+            
+            logger.info(f"Executing SQL for PI burndown: {pi_name} for all teams")
+        
+        # Execute query with parameters (SECURE: prevents SQL injection)
+        result = conn.execute(sql_query_text, params)
         
         # Convert rows to list of dictionaries
         burndown_data = []

@@ -5,14 +5,16 @@ This service provides endpoints for managing and retrieving PI information.
 Uses FastAPI dependencies for clean connection management and SQL injection protection.
 """
 
-from fastapi import APIRouter, HTTPException, Depends, Query
+from fastapi import APIRouter, HTTPException, Depends, Query, Path
 from sqlalchemy import text
 from sqlalchemy.engine import Connection
 from typing import List, Dict, Any, Union, Optional
 from datetime import date, datetime, timedelta
 import logging
+import re
 from database_connection import get_db_connection
 from database_pi import fetch_pi_predictability_data, fetch_pi_burndown_data, fetch_scope_changes_data, fetch_pi_summary_data
+from database_team_metrics import resolve_team_names_from_filter
 import config
 
 logger = logging.getLogger(__name__)
@@ -192,6 +194,26 @@ def get_progress_delta_pct_status(progress_delta_pct: Optional[float]) -> str:
         return "yellow"
     else:  # progress_delta_pct < -40
         return "red"
+
+
+def validate_pi(pi: str) -> str:
+    """
+    Validate and sanitize PI parameter to prevent SQL injection.
+    Only allows alphanumeric characters, spaces, hyphens, underscores, and periods.
+    """
+    if not pi or not isinstance(pi, str):
+        raise HTTPException(status_code=400, detail="PI is required and must be a string")
+    
+    # Remove any potentially dangerous characters
+    sanitized = re.sub(r'[^a-zA-Z0-9\s\-_.]', '', pi.strip())
+    
+    if not sanitized:
+        raise HTTPException(status_code=400, detail="PI contains invalid characters")
+    
+    if len(sanitized) > 100:  # Reasonable length limit
+        raise HTTPException(status_code=400, detail="PI is too long (max 100 characters)")
+    
+    return sanitized
 
 
 def fetch_wip_data_from_db(
@@ -553,7 +575,8 @@ async def get_pi_burndown(
     pi: str = Query(..., description="PI name (mandatory)"),
     project: str = Query(None, description="Project key filter"),
     issue_type: str = Query(None, description="Issue type filter"),
-    team: str = Query(None, description="Team name filter"),
+    team: str = Query(None, description="Team name filter (or group name if isGroup=true)"),
+    isGroup: bool = Query(False, description="If true, team is treated as a group name"),
     conn: Connection = Depends(get_db_connection)
 ):
     """
@@ -563,7 +586,8 @@ async def get_pi_burndown(
         pi: PI name (mandatory)
         project: Project key filter (optional)
         issue_type: Issue type filter (optional, defaults to 'Epic')
-        team: Team name filter (optional)
+        team: Team name filter (optional, or group name if isGroup=true)
+        isGroup: If true, team parameter is treated as a group name (default: false)
     
     Returns:
         JSON response with PI burndown data
@@ -580,28 +604,46 @@ async def get_pi_burndown(
         if issue_type is None or issue_type == "":
             issue_type = "Epic"
         
-        logger.info(f"Fetching PI burndown data for PI: {pi}")
-        logger.info(f"Filters: project={project}, issue_type={issue_type}, team={team}")
+        # Resolve team names using shared helper function (handles single team, group, or None)
+        team_names_list = resolve_team_names_from_filter(team, isGroup, conn)
         
-        # Call database function (logic copied from old project)
+        logger.info(f"Fetching PI burndown data for PI: {pi}")
+        logger.info(f"Filters: project={project}, issue_type={issue_type}, team={team}, isGroup={isGroup}")
+        if team_names_list:
+            logger.info(f"Resolved team names: {team_names_list}")
+        
+        # Call database function with resolved team names list
         burndown_data = fetch_pi_burndown_data(
             pi_name=pi,
             project_keys=project,
             issue_type=issue_type,
-            team_names=team,
+            team_names=team_names_list,
             conn=conn
         )
         
+        # Build response metadata
+        response_data = {
+            "burndown_data": burndown_data,
+            "count": len(burndown_data),
+            "pi": pi,
+            "project": project,
+            "issue_type": issue_type,
+            "isGroup": isGroup
+        }
+        
+        # Add team/group information to response
+        if team:
+            if isGroup:
+                response_data["group_name"] = team
+                response_data["teams_in_group"] = team_names_list
+            else:
+                response_data["team"] = team
+        else:
+            response_data["team"] = None
+        
         return {
             "success": True,
-            "data": {
-                "burndown_data": burndown_data,
-                "count": len(burndown_data),
-                "pi": pi,
-                "project": project,
-                "issue_type": issue_type,
-                "team": team
-            },
+            "data": response_data,
             "message": f"Retrieved PI burndown data for {len(burndown_data)} records"
         }
     
@@ -1014,4 +1056,62 @@ async def get_pi_progress(
         raise HTTPException(
             status_code=500,
             detail=f"Failed to fetch PI progress: {str(e)}"
+        )
+
+
+@pis_router.get("/pis/{pi}/participating-teams")
+async def get_pi_participating_teams(
+    pi: str = Path(..., description="Program Increment (quarter_pi_of_epic) - mandatory"),
+    conn: Connection = Depends(get_db_connection)
+):
+    """
+    Get list of teams that have any issues in the jira_issues table for a specific PI.
+    
+    Returns distinct team names that have issues where quarter_pi_of_epic matches the provided PI.
+    
+    Args:
+        pi: Program Increment value (filters on quarter_pi_of_epic column) - mandatory path parameter
+    
+    Returns:
+        JSON response with list of participating team names
+    """
+    try:
+        # Validate PI parameter
+        validated_pi = validate_pi(pi)
+        
+        # SECURE: Parameterized query prevents SQL injection
+        query = text("""
+            SELECT DISTINCT team_name 
+            FROM public.jira_issues 
+            WHERE quarter_pi_of_epic = :pi
+              AND team_name IS NOT NULL 
+              AND team_name != ''
+            ORDER BY team_name
+        """)
+        
+        logger.info(f"Executing query to get PI participating teams for PI: {validated_pi}")
+        
+        result = conn.execute(query, {"pi": validated_pi})
+        rows = result.fetchall()
+        
+        # Extract team names from rows
+        team_names = [row[0] for row in rows if row[0]]
+        
+        return {
+            "success": True,
+            "data": {
+                "teams": team_names,
+                "count": len(team_names),
+                "pi": validated_pi
+            },
+            "message": f"Retrieved {len(team_names)} participating teams for PI '{validated_pi}'"
+        }
+    
+    except HTTPException:
+        raise  # Re-raise FastAPI HTTPExceptions
+    except Exception as e:
+        logger.error(f"Error fetching PI participating teams for PI {pi}: {e}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to fetch PI participating teams: {str(e)}"
         )

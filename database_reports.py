@@ -358,10 +358,13 @@ def _fetch_team_current_sprint_progress(filters: Dict[str, Any], conn: Connectio
 
 
 def _fetch_pi_burndown(filters: Dict[str, Any], conn: Connection) -> ReportDataResult:
+    from database_team_metrics import resolve_team_names_from_filter
+    
     pi_name = (filters.get("pi") or "").strip() or None
     issue_type = (filters.get("issue_type") or "Epic").strip() or "Epic"
     project = filters.get("project")
     team = filters.get("team")
+    is_group = filters.get("isGroup", False)
 
     # Fetch available PIs (always)
     pis_query = text(
@@ -375,6 +378,9 @@ def _fetch_pi_burndown(filters: Dict[str, Any], conn: Connection) -> ReportDataR
     pis_rows = conn.execute(pis_query).fetchall()
     available_pis = [row[0] for row in pis_rows if row[0]]
 
+    # Resolve team names using shared helper function (handles single team, group, or None)
+    team_names_list = resolve_team_names_from_filter(team, is_group, conn)
+
     # Only fetch burndown data if a PI is selected
     burndown_data = []
     if pi_name:
@@ -382,19 +388,32 @@ def _fetch_pi_burndown(filters: Dict[str, Any], conn: Connection) -> ReportDataR
             pi_name=pi_name,
             project_keys=project,
             issue_type=issue_type,
-            team_names=team,
+            team_names=team_names_list,
             conn=conn,
         )
 
+    # Build meta with appropriate fields
+    meta = {
+        "pi": pi_name,
+        "issue_type": issue_type,
+        "project": project,
+        "isGroup": is_group,
+        "available_pis": available_pis,
+    }
+    
+    # Add team/group information to meta
+    if team:
+        if is_group:
+            meta["group_name"] = team
+            meta["teams_in_group"] = team_names_list
+        else:
+            meta["team"] = team
+    else:
+        meta["team"] = None
+
     return {
         "data": burndown_data,
-        "meta": {
-            "pi": pi_name,
-            "issue_type": issue_type,
-            "project": project,
-            "team": team,
-            "available_pis": available_pis,
-        },
+        "meta": meta,
     }
 
 
