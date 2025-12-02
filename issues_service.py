@@ -1324,33 +1324,32 @@ async def get_epics_by_pi(
                 for i, key in enumerate(epics_with_dates):
                     params3[f"epic_key_{i}"] = key
                 
-                query3 = text(f"""
-                    SELECT 
-                        h.parent_key as epic_key,
-                        COUNT(DISTINCT h.issue_key) as story_count
-                    FROM jira_issue_history h
-                    INNER JOIN (
+                    query3 = text(f"""
                         SELECT 
-                            h1.issue_key,
-                            h1.snapshot_date as in_progress_date
-                        FROM (
+                            h.parent_key as epic_key,
+                            COUNT(DISTINCT h.issue_key) as story_count
+                        FROM jira_issue_history h
+                        INNER JOIN (
                             SELECT 
-                                issue_key,
-                                MIN(snapshot_date) as min_date
-                            FROM jira_issue_history
-                            WHERE issue_key IN ({placeholders3})
-                              AND status_category = 'In Progress'
-                            GROUP BY issue_key
-                        ) first_in_progress
-                        INNER JOIN jira_issue_history h1 
-                            ON h1.issue_key = first_in_progress.issue_key
-                            AND h1.snapshot_date = first_in_progress.min_date
-                            AND h1.status_category = 'In Progress'
-                    ) epic_dates ON h.parent_key = epic_dates.issue_key
-                        AND h.snapshot_date = epic_dates.in_progress_date
-                    WHERE h.issuetype = 'Story'
-                    GROUP BY h.parent_key
-                """)
+                                h1.issue_key,
+                                h1.snapshot_date as in_progress_date
+                            FROM (
+                                SELECT 
+                                    issue_key,
+                                    MIN(snapshot_date) as min_date
+                                FROM jira_issue_history
+                                WHERE issue_key IN ({placeholders3})
+                                  AND status_category = 'In Progress'
+                                GROUP BY issue_key
+                            ) first_in_progress
+                            INNER JOIN jira_issue_history h1 
+                                ON h1.issue_key = first_in_progress.issue_key
+                                AND h1.snapshot_date = first_in_progress.min_date
+                                AND h1.status_category = 'In Progress'
+                        ) epic_dates ON h.parent_key = epic_dates.issue_key
+                            AND h.snapshot_date = epic_dates.in_progress_date
+                        GROUP BY h.parent_key
+                    """)
                 
                 result3 = conn.execute(query3, params3)
                 baseline_rows = result3.fetchall()
@@ -1366,7 +1365,7 @@ async def get_epics_by_pi(
             for i, key in enumerate(epic_keys):
                 params4[f"epic_key_{i}"] = key
             
-            # Team breakdown
+            # Team breakdown (all issues, not just stories)
             query4a = text(f"""
                 SELECT 
                     parent_key as epic_key,
@@ -1375,7 +1374,6 @@ async def get_epics_by_pi(
                     COUNT(CASE WHEN status_category = 'Done' THEN 1 END) as done
                 FROM {config.WORK_ITEMS_TABLE}
                 WHERE parent_key IN ({placeholders4})
-                  AND issue_type = 'Story'
                 GROUP BY parent_key, team_name
                 ORDER BY parent_key, team_name
             """)
@@ -1383,7 +1381,7 @@ async def get_epics_by_pi(
             result4a = conn.execute(query4a, params4)
             team_breakdown_rows = result4a.fetchall()
             
-            # Total story counts
+            # Total issue counts (all issues, not just stories)
             query4b = text(f"""
                 SELECT 
                     parent_key as epic_key,
@@ -1391,7 +1389,6 @@ async def get_epics_by_pi(
                     COUNT(CASE WHEN status_category = 'Done' THEN 1 END) as stories_completed
                 FROM {config.WORK_ITEMS_TABLE}
                 WHERE parent_key IN ({placeholders4})
-                  AND issue_type = 'Story'
                 GROUP BY parent_key
             """)
             
@@ -1423,7 +1420,10 @@ async def get_epics_by_pi(
                     epic_data[epic_key]["current_story_count"] = int(row[1]) if row[1] else 0
                     epic_data[epic_key]["stories_completed"] = int(row[2]) if row[2] else 0
                     epic_data[epic_key]["stories_remaining"] = epic_data[epic_key]["current_story_count"] - epic_data[epic_key]["stories_completed"]
-                    epic_data[epic_key]["team_progress_breakdown"] = team_breakdown_by_epic.get(epic_key, [])
+            
+            # Set team_progress_breakdown for all epics (even if no stories)
+            for epic_key in epic_data.keys():
+                epic_data[epic_key]["team_progress_breakdown"] = team_breakdown_by_epic.get(epic_key, [])
             
             # Calculate stories_added and stories_removed
             for epic_key, data in epic_data.items():
