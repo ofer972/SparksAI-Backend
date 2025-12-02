@@ -1441,10 +1441,13 @@ def _fetch_sprint_predictability(filters: Dict[str, Any], conn: Connection) -> R
 
 
 def _fetch_pi_metrics_summary(filters: Dict[str, Any], conn: Connection) -> ReportDataResult:
+    from database_team_metrics import resolve_team_names_from_filter
+    
     pi_name = (filters.get("pi") or filters.get("pi_name") or "").strip() or None
     project = (filters.get("project") or "").strip() or None
     issue_type = (filters.get("issue_type") or "Epic").strip() or "Epic"
     team = (filters.get("team_name") or filters.get("team") or "").strip() or None
+    is_group = filters.get("isGroup", False)
     plan_grace_period = _parse_int(filters.get("plan_grace_period"), default=5)
 
     # Fetch available teams from cache
@@ -1483,15 +1486,14 @@ def _fetch_pi_metrics_summary(filters: Dict[str, Any], conn: Connection) -> Repo
     pis_rows = conn.execute(pis_query).fetchall()
     available_pis = [row[0] for row in pis_rows if row[0]]
 
-    # TODO: Remove this once we have a way to filter by team
-    if team:
-        team = None
+    # Resolve team names using shared helper function (handles single team, group, or None)
+    team_names_list = resolve_team_names_from_filter(team, is_group, conn)
 
     summary_data = fetch_pi_summary_data(
         target_pi_name=pi_name,
         target_project_keys=project,
         target_issue_type=issue_type,
-        target_team_names=team,
+        target_team_names=team_names_list,
         planned_grace_period_days=plan_grace_period,
         conn=conn,
     )
@@ -1505,7 +1507,12 @@ def _fetch_pi_metrics_summary(filters: Dict[str, Any], conn: Connection) -> Repo
         wip_where.append("quarter_pi = :pi")
         params["pi"] = pi_name
 
-    if team:
+    if team_names_list:
+        # Handle multiple teams using ANY() for array matching
+        wip_where.append("team_name = ANY(:team_names)")
+        params["team_names"] = team_names_list
+    elif team:
+        # Fallback for single team (shouldn't happen if resolve_team_names_from_filter works correctly)
         wip_where.append("team_name = :team_name")
         params["team_name"] = team
 
@@ -1550,20 +1557,33 @@ def _fetch_pi_metrics_summary(filters: Dict[str, Any], conn: Connection) -> Repo
         "project": project,
     }
 
+    # Build meta with appropriate fields
+    meta = {
+        "pi": pi_name,
+        "project": project,
+        "issue_type": issue_type,
+        "isGroup": is_group,
+        "available_teams": available_teams,
+        "available_issue_types": available_issue_types,
+        "available_pis": available_pis,
+    }
+    
+    # Add team/group information to meta
+    if team:
+        if is_group:
+            meta["group_name"] = team
+            meta["teams_in_group"] = team_names_list
+        else:
+            meta["team_name"] = team
+    else:
+        meta["team_name"] = None
+
     return {
         "data": {
             "status_today": summary_data,
             "wip": wip_data,
         },
-        "meta": {
-            "pi": pi_name,
-            "team_name": team,
-            "project": project,
-            "issue_type": issue_type,
-            "available_teams": available_teams,
-            "available_issue_types": available_issue_types,
-            "available_pis": available_pis,
-        },
+        "meta": meta,
     }
 
 

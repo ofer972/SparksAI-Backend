@@ -727,7 +727,8 @@ async def get_pi_status_for_today(
     pi: str = Query(None, description="PI name filter"),
     project: str = Query(None, description="Project key filter"),
     issue_type: str = Query(None, description="Issue type filter"),
-    team: str = Query(None, description="Team name filter"),
+    team: str = Query(None, description="Team name filter (or group name if isGroup=true)"),
+    isGroup: bool = Query(False, description="If true, team is treated as a group name"),
     plan_grace_period: int = Query(None, description="Planned grace period in days"),
     conn: Connection = Depends(get_db_connection)
 ):
@@ -740,13 +741,16 @@ async def get_pi_status_for_today(
         pi: PI name filter (optional)
         project: Project key filter (optional)
         issue_type: Issue type filter (optional)
-        team: Team name filter (optional)
+        team: Team name filter (optional, or group name if isGroup=true)
+        isGroup: If true, team parameter is treated as a group name (default: false)
         plan_grace_period: Planned grace period in days (optional)
     
     Returns:
         JSON response with PI summary data (all columns from database function)
     """
     try:
+        from database_team_metrics import resolve_team_names_from_filter
+        
         # Set default value of 5 for plan_grace_period if empty/None
         if plan_grace_period is None:
             plan_grace_period = 5
@@ -755,15 +759,20 @@ async def get_pi_status_for_today(
         if issue_type is None or issue_type == "":
             issue_type = "Epic"
         
-        logger.info(f"Fetching PI status for today")
-        logger.info(f"Parameters: pi={pi}, project={project}, issue_type={issue_type}, team={team}, plan_grace_period={plan_grace_period}")
+        # Resolve team names using shared helper function (handles single team, group, or None)
+        team_names_list = resolve_team_names_from_filter(team, isGroup, conn)
         
-        # Call database function
+        logger.info(f"Fetching PI status for today")
+        logger.info(f"Parameters: pi={pi}, project={project}, issue_type={issue_type}, team={team}, isGroup={isGroup}, plan_grace_period={plan_grace_period}")
+        if team_names_list:
+            logger.info(f"Resolved team names: {team_names_list}")
+        
+        # Call database function with resolved team names list
         summary_data = fetch_pi_summary_data(
             target_pi_name=pi,
             target_project_keys=project,
             target_issue_type=issue_type,
-            target_team_names=team,
+            target_team_names=team_names_list,
             planned_grace_period_days=plan_grace_period,
             conn=conn
         )
@@ -771,9 +780,12 @@ async def get_pi_status_for_today(
         # Fetch WIP data using the same logic as WIP endpoint
         wip_data = None
         if pi:  # Only fetch WIP if PI is provided
+            # For WIP, pass single team name (first from list) or None
+            # Note: fetch_wip_data_from_db accepts single team name, not list
+            wip_team = team_names_list[0] if team_names_list and len(team_names_list) == 1 else None
             wip_data = fetch_wip_data_from_db(
                 pi=pi,
-                team=team,
+                team=wip_team,
                 project=project,
                 conn=conn
             )

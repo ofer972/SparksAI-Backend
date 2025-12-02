@@ -221,7 +221,7 @@ def fetch_pi_summary_data(
     target_pi_name: str = None,
     target_project_keys: str = None,
     target_issue_type: str = None,
-    target_team_names: str = None,
+    target_team_names: Optional[List[str]] = None,
     planned_grace_period_days: int = None,
     conn: Connection = None
 ) -> List[Dict[str, Any]]:
@@ -232,7 +232,7 @@ def fetch_pi_summary_data(
         target_pi_name (str, optional): PI name filter
         target_project_keys (str, optional): Project keys filter
         target_issue_type (str, optional): Issue type filter
-        target_team_names (str, optional): Team names filter
+        target_team_names (Optional[List[str]], optional): List of team names filter, or None for all teams
         planned_grace_period_days (int, optional): Planned grace period in days
         conn (Connection): Database connection from FastAPI dependency
     
@@ -243,27 +243,45 @@ def fetch_pi_summary_data(
         logger.info(f"Executing PI summary query")
         logger.info(f"Filters: pi={target_pi_name}, project={target_project_keys}, issue_type={target_issue_type}, team={target_team_names}, grace_period={planned_grace_period_days}")
         
-        # SECURITY: Use parameterized query to prevent SQL injection
-        sql_query_text = text("""
-            SELECT * FROM public.get_pi_summary_data(
-                :target_pi_name_param,
-                :target_issue_type_param,
-                :target_project_keys_param,
-                :target_team_names_param,
-                :planned_grace_period_days_param
-            )
-        """)
-        
-        logger.info(f"Executing SQL for PI summary data")
-        
-        # Execute query with parameters (SECURE: prevents SQL injection)
-        result = conn.execute(sql_query_text, {
+        # Build parameters for the function call
+        params = {
             'target_pi_name_param': target_pi_name,
             'target_issue_type_param': target_issue_type,
             'target_project_keys_param': target_project_keys,
-            'target_team_names_param': target_team_names,
             'planned_grace_period_days_param': planned_grace_period_days
-        })
+        }
+        
+        # Build query - pass team_names as array or NULL (following pattern from fetch_pi_burndown_data)
+        if target_team_names:
+            # Pass array of team names to function
+            params['target_team_names_param'] = target_team_names
+            sql_query_text = text("""
+                SELECT * FROM public.get_pi_summary_data(
+                    :target_pi_name_param,
+                    :target_issue_type_param,
+                    :target_project_keys_param,
+                    CAST(:target_team_names_param AS text[]),
+                    :planned_grace_period_days_param
+                )
+            """)
+            
+            logger.info(f"Executing SQL for PI summary: {target_pi_name} with teams: {target_team_names}")
+        else:
+            # Pass NULL for all teams
+            sql_query_text = text("""
+                SELECT * FROM public.get_pi_summary_data(
+                    :target_pi_name_param,
+                    :target_issue_type_param,
+                    :target_project_keys_param,
+                    NULL,
+                    :planned_grace_period_days_param
+                )
+            """)
+            
+            logger.info(f"Executing SQL for PI summary: {target_pi_name} for all teams")
+        
+        # Execute query with parameters (SECURE: prevents SQL injection)
+        result = conn.execute(sql_query_text, params)
         
         # Convert rows to list of dictionaries - return all columns as-is
         summary_data = []
