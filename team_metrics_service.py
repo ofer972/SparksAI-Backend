@@ -22,7 +22,8 @@ from database_team_metrics import (
     get_closed_sprints_data_db,
     get_issues_trend_data_db,
     get_average_sprint_velocity_per_team,
-    resolve_team_names_from_filter
+    resolve_team_names_from_filter,
+    select_sprint_for_teams
 )
 from database_pi import get_pi_participating_teams_db
 from pis_service import validate_pi
@@ -616,81 +617,26 @@ async def get_sprint_burndown_data(
         JSON response with burndown data and metadata
     """
     try:
-        # Resolve team names using shared helper function
-        team_names_list = resolve_team_names_from_filter(team_name, isGroup, conn)
-        
         # Validate issue_type
         if not isinstance(issue_type, str):
             raise HTTPException(status_code=400, detail="Issue type must be a string")
         if issue_type.strip() == "":
             issue_type = "all"
         
-        # Sprint selection logic (API service decides)
-        selected_sprint_name = sprint_name
-        selected_sprint_id = None
+        # Use shared helper for sprint selection
+        sprint_selection = select_sprint_for_teams(team_name, isGroup, sprint_name, conn)
+        team_names_list = sprint_selection['team_names_list']
+        selected_sprint_name = sprint_selection['selected_sprint_name']
+        selected_sprint_id = sprint_selection['selected_sprint_id']
+        error_message = sprint_selection['error_message']
         
-        if not selected_sprint_name:
-            if isGroup:
-                # Get sprints for all teams in the group
-                all_sprints = []
-                sprint_info = []
-                for team in team_names_list:
-                    team_sprints = get_sprints_with_total_issues_db(team, "active", conn)
-                    for sprint in team_sprints:
-                        all_sprints.append(sprint)
-                        sprint_info.append({
-                            'sprint_id': sprint['sprint_id'],
-                            'sprint_name': sprint['name'],
-                            'team_name': team,
-                            'total_issues': sprint.get('total_issues', 0)
-                        })
-                
-                if not all_sprints:
-                    return {
-                        "success": False,
-                        "data": {},
-                        "message": "No active sprints found"
-                    }
-                
-                # Get unique sprint IDs
-                unique_sprint_ids = set()
-                for sprint in all_sprints:
-                    unique_sprint_ids.add(sprint['sprint_id'])
-                
-                # If more than one unique sprint found, return error
-                if len(unique_sprint_ids) > 1:
-                    sprint_ids = sorted(list(unique_sprint_ids))
-                    sprint_names = sorted(list(set(s['sprint_name'] for s in sprint_info)))
-                    logger.error(f"Sprint Burndown is not shown because the group does not have one sprint for the group. "
-                               f"Found {len(unique_sprint_ids)} unique sprints. Sprint IDs: {sprint_ids}, Sprint Names: {sprint_names}")
-                    logger.error(f"Detailed sprint information by team: {sprint_info}")
-                    return {
-                        "success": False,
-                        "data": {},
-                        "message": "Sprint Burndown is not shown because the group does not have one sprint for the group"
-                    }
-                
-                # Only one unique sprint - use it
-                selected_sprint = all_sprints[0]
-                selected_sprint_name = selected_sprint['name']
-                selected_sprint_id = selected_sprint['sprint_id']
-                logger.info(f"Auto-selected sprint '{selected_sprint_name}' (ID: {selected_sprint_id})")
-            else:
-                # Single team - select sprint with max total_issues
-                sprints = get_sprints_with_total_issues_db(team_names_list[0], "active", conn)
-                if sprints:
-                    selected_sprint = max(sprints, key=lambda x: x['total_issues'])
-                    selected_sprint_name = selected_sprint['name']
-                    selected_sprint_id = selected_sprint['sprint_id']
-                    logger.info(f"Auto-selected sprint '{selected_sprint_name}' (ID: {selected_sprint_id}) with {selected_sprint['total_issues']} total issues")
-                else:
-                    return {
-                        "success": False,
-                        "data": {},
-                        "message": "No active sprints found"
-                    }
-        else:
-            logger.info(f"Using provided sprint name: '{selected_sprint_name}'")
+        # If error occurred, return error response
+        if error_message:
+            return {
+                "success": False,
+                "data": {},
+                "message": error_message
+            }
         
         # Get burndown data for selected sprint
         burndown_data = get_sprint_burndown_data_db(team_names_list, selected_sprint_name, issue_type, conn)

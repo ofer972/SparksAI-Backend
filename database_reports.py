@@ -28,6 +28,7 @@ from database_team_metrics import (
     get_team_current_sprint_progress,
     get_closed_sprints_data_db,
     get_issues_trend_data_db,
+    select_sprint_for_teams,
 )
 
 logger = logging.getLogger(__name__)
@@ -169,6 +170,7 @@ def _fetch_team_sprint_burndown(filters: Dict[str, Any], conn: Connection) -> Re
     team_name = filters.get("team_name")
     issue_type = (filters.get("issue_type") or "all").strip() or "all"
     sprint_name = filters.get("sprint_name")
+    is_group = filters.get("isGroup", False)
 
     # Fetch available teams from cache
     from groups_teams_cache import get_cached_teams, set_cached_teams, load_team_names_from_db, load_all_teams_from_db
@@ -182,9 +184,6 @@ def _fetch_team_sprint_burndown(filters: Dict[str, Any], conn: Connection) -> Re
         # Also build full teams cache for future use
         all_teams = load_all_teams_from_db(conn)
         set_cached_teams({"teams": all_teams, "count": len(all_teams)})
-
-    selected_sprint_id: Optional[int] = None
-    auto_selected = False
 
     # Only fetch sprint data if team is selected
     if not team_name:
@@ -203,15 +202,33 @@ def _fetch_team_sprint_burndown(filters: Dict[str, Any], conn: Connection) -> Re
             },
         }
 
-    if not sprint_name:
-        sprints = get_sprints_with_total_issues_db(team_name, "active", conn)
-        if sprints:
-            selected_sprint = max(sprints, key=lambda s: s.get("total_issues", 0) or 0)
-            sprint_name = selected_sprint.get("name")
-            selected_sprint_id = selected_sprint.get("sprint_id")
-            auto_selected = True
+    # Use shared helper for sprint selection
+    sprint_selection = select_sprint_for_teams(team_name, is_group, sprint_name, conn)
+    team_names_list = sprint_selection['team_names_list']
+    selected_sprint_name = sprint_selection['selected_sprint_name']
+    selected_sprint_id = sprint_selection['selected_sprint_id']
+    error_message = sprint_selection['error_message']
+    auto_selected = sprint_name is None and selected_sprint_name is not None
 
-    if not sprint_name:
+    # If error occurred, return error in report format
+    if error_message:
+        return {
+            "data": [],
+            "meta": {
+                "team_name": team_name,
+                "issue_type": issue_type,
+                "sprint_name": None,
+                "sprint_id": None,
+                "auto_selected": False,
+                "total_issues_in_sprint": 0,
+                "start_date": None,
+                "end_date": None,
+                "available_teams": available_teams,
+                "error_message": error_message,
+            },
+        }
+
+    if not selected_sprint_name:
         return {
             "data": [],
             "meta": {
@@ -227,7 +244,7 @@ def _fetch_team_sprint_burndown(filters: Dict[str, Any], conn: Connection) -> Re
             },
         }
 
-    burndown_data = get_sprint_burndown_data_db([team_name], sprint_name, issue_type, conn)
+    burndown_data = get_sprint_burndown_data_db(team_names_list, selected_sprint_name, issue_type, conn)
 
     total_issues = 0
     start_date: Optional[str] = None

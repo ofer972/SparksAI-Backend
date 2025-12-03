@@ -321,6 +321,101 @@ def get_sprints_with_total_issues_db(team_name: str, sprint_status: str = None, 
         raise e
 
 
+def select_sprint_for_teams(
+    team_name: Optional[str],
+    is_group: bool,
+    sprint_name: Optional[str],
+    conn: Connection
+) -> Dict[str, Any]:
+    """
+    Shared helper function for sprint selection with isGroup support.
+    Handles team resolution, sprint selection, and multiple sprint validation.
+    
+    Args:
+        team_name: Team name or group name (if is_group=True)
+        is_group: If true, team_name is treated as a group name
+        sprint_name: Optional sprint name (if provided, will be used)
+        conn: Database connection
+    
+    Returns:
+        Dict with:
+            - 'team_names_list': List[str] - resolved team names
+            - 'selected_sprint_name': Optional[str] - selected sprint name
+            - 'selected_sprint_id': Optional[int] - selected sprint ID
+            - 'error_message': Optional[str] - error message if validation fails
+            - 'sprint_info': List[Dict] - detailed sprint information for logging
+    """
+    from fastapi import HTTPException
+    import logging
+    logger = logging.getLogger(__name__)
+    
+    # Resolve team names
+    team_names_list = resolve_team_names_from_filter(team_name, is_group, conn)
+    
+    selected_sprint_name = sprint_name
+    selected_sprint_id = None
+    error_message = None
+    sprint_info = []
+    
+    if not selected_sprint_name:
+        if is_group:
+            # Get sprints for all teams in the group
+            all_sprints = []
+            for team in team_names_list:
+                team_sprints = get_sprints_with_total_issues_db(team, "active", conn)
+                for sprint in team_sprints:
+                    all_sprints.append(sprint)
+                    sprint_info.append({
+                        'sprint_id': sprint['sprint_id'],
+                        'sprint_name': sprint['name'],
+                        'team_name': team,
+                        'total_issues': sprint.get('total_issues', 0)
+                    })
+            
+            if not all_sprints:
+                error_message = "No active sprints found"
+            else:
+                # Get unique sprint IDs
+                unique_sprint_ids = set()
+                for sprint in all_sprints:
+                    unique_sprint_ids.add(sprint['sprint_id'])
+                
+                # If more than one unique sprint found, return error
+                if len(unique_sprint_ids) > 1:
+                    sprint_ids = sorted(list(unique_sprint_ids))
+                    sprint_names = sorted(list(set(s['sprint_name'] for s in sprint_info)))
+                    logger.error(f"Sprint Burndown is not shown because the group does not have one sprint for the group. "
+                               f"Found {len(unique_sprint_ids)} unique sprints. Sprint IDs: {sprint_ids}, Sprint Names: {sprint_names}")
+                    logger.error(f"Detailed sprint information by team: {sprint_info}")
+                    error_message = "Sprint Burndown is not shown because the group does not have one sprint for the group"
+                else:
+                    # Only one unique sprint - use it
+                    selected_sprint = all_sprints[0]
+                    selected_sprint_name = selected_sprint['name']
+                    selected_sprint_id = selected_sprint['sprint_id']
+                    logger.info(f"Auto-selected sprint '{selected_sprint_name}' (ID: {selected_sprint_id})")
+        else:
+            # Single team - select sprint with max total_issues
+            sprints = get_sprints_with_total_issues_db(team_names_list[0], "active", conn)
+            if sprints:
+                selected_sprint = max(sprints, key=lambda x: x['total_issues'])
+                selected_sprint_name = selected_sprint['name']
+                selected_sprint_id = selected_sprint['sprint_id']
+                logger.info(f"Auto-selected sprint '{selected_sprint_name}' (ID: {selected_sprint_id}) with {selected_sprint['total_issues']} total issues")
+            else:
+                error_message = "No active sprints found"
+    else:
+        logger.info(f"Using provided sprint name: '{selected_sprint_name}'")
+    
+    return {
+        'team_names_list': team_names_list,
+        'selected_sprint_name': selected_sprint_name,
+        'selected_sprint_id': selected_sprint_id,
+        'error_message': error_message,
+        'sprint_info': sprint_info
+    }
+
+
 def resolve_team_names_from_filter(
     team_name: Optional[str], 
     is_group: bool, 
@@ -528,16 +623,23 @@ def get_sprint_burndown_data_db(team_names: List[str], sprint_name: str, issue_t
         for row in result:
             # Use row._mapping to access columns by name (safer than positional indexing)
             row_dict = dict(row._mapping)
+            
+            # Helper function to preserve None values
+            def safe_int(value):
+                if value is None:
+                    return None
+                return int(value) if value else 0
+            
             burndown_data.append({
                 'snapshot_date': row_dict.get('snapshot_date'),
                 'start_date': row_dict.get('start_date'),
                 'end_date': row_dict.get('end_date'),
-                'remaining_issues': int(row_dict.get('remaining_issues', 0)) if row_dict.get('remaining_issues') else 0,
-                'ideal_remaining': int(row_dict.get('ideal_remaining', 0)) if row_dict.get('ideal_remaining') else 0,
-                'total_issues': int(row_dict.get('total_issues', 0)) if row_dict.get('total_issues') else 0,
-                'issues_added_on_day': int(row_dict.get('issues_added_on_day', 0)) if row_dict.get('issues_added_on_day') else 0,
-                'issues_removed_on_day': int(row_dict.get('issues_removed_on_day', 0)) if row_dict.get('issues_removed_on_day') else 0,
-                'issues_completed_on_day': int(row_dict.get('issues_completed_on_day', 0)) if row_dict.get('issues_completed_on_day') else 0
+                'remaining_issues': safe_int(row_dict.get('remaining_issues')),
+                'ideal_remaining': safe_int(row_dict.get('ideal_remaining')),
+                'total_issues': safe_int(row_dict.get('total_issues')),
+                'issues_added_on_day': safe_int(row_dict.get('issues_added_on_day')),
+                'issues_removed_on_day': safe_int(row_dict.get('issues_removed_on_day')),
+                'issues_completed_on_day': safe_int(row_dict.get('issues_completed_on_day'))
             })
         
         return burndown_data
