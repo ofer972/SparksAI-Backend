@@ -1,0 +1,20 @@
+[33mafe0cb6[m Add endpoint for average sprint velocity per team with PI support
+[33m1d9e76d[m Add issues type filter to closed sprints
+[33md650f75[m Remove JiraDashboard-NEWUI references and add ETL settings get all endpoint
+[33mf8b12cd[m Return all fields from database function in Closed Sprint Report
+[33mfc2a1e5[m Return only complete_date (not end_date) in sprint reports and endpoints
+[33m6694f93[m Migrate groups/teams cache from in-memory to Redis
+[33mbbe8339[m Replace closed_sprint_summary view with get_closed_sprint_summary_fn function - Update get_closed_sprints_data_db() to use database function instead of view - Function accepts months_back (integer) and p_team_names (text[]) parameters - Maintains same return format and behavior - Removes manual date calculation (handled by function)
+[33m17f6887[m Add isGroup support to issues trend endpoint and remove fallback queries - Add isGroup parameter to /team-metrics/issues-trend endpoint - Update get_issues_trend_data_db() to accept team_names List[str] and use IN clause - Update _fetch_team_issues_trend() report function to support isGroup - Use resolve_team_names_from_filter helper (same pattern as closed sprints) - Remove fallback database queries, use cache only with simple error handling - Add group_name and teams_in_group to response when isGroup=true - Maintain backward compatibility for single team
+[33mc52b58f[m Update report endpoints to use groups/teams cache - Replace direct SQL queries with cache lookups in 6 report functions - Use get_team_names_from_cache() instead of querying jira_issues - Add fallback to database query if cache not loaded - Maintain backward compatibility
+[33m8331f86[m Update sprint metrics endpoint: Add isGroup support, trend data, and fix calculations - Add isGroup flag to get-avg-sprint-metrics endpoint - Use new get_sprint_metrics_trend_data_all_issues function - Calculate averages in endpoint (velocity, cycle_time, predictability) - Add trend_data array grouped by sprint_id for UI charts - Fix Decimal type conversion errors - Fix cycle time calculation (weighted average) - Fix predictability calculation (weighted by issue counts)
+[33mef434e4[m group and teams
+[33mc92d139[m Add support for group in closed sprint and sprint predictability
+[33m80597c4[m Update team metrics and database services - refactor database_team_metrics and team_metrics_service with improvements
+[33m9fa60da[m Add Vanna AI integration, consolidate transcript endpoints, and enhance sprint metrics
+[33mc552983[m Add days_left and status indicators to current-sprint-progress endpoint - Replace start_date/end_date with days_left text field (e.g., '5 days left', 'Last day') - Add percent_completed_status: green/yellow/red based on timeline vs actual completion (15% slack) - Add in_progress_issues_status: green/yellow/red based on WIP percentage (40-60% thresholds) - All calculations done in service layer following best practices - Database layer returns date objects for calculation, service layer handles business logic
+[33m3a835e6[m Rename current-sprint-completion to current-sprint-progress and update output - Renamed endpoint from /team-metrics/current-sprint-completion to /team-metrics/current-sprint-progress - Updated SQL query to return 5 fields: total_issues, completed_issues, in_progress_issues, todo_issues, percent_completed - Changed function name from get_team_current_sprint_completion to get_team_current_sprint_progress - Response now includes detailed breakdown instead of just completion_rate percentage - SQL calculates percent_completed directly using NULLIF to handle division by zero
+[33mfb46ea6[m Add sprint fields to get-sprints endpoint and update HTTP method colors
+[33mfd80482[m Remove manual SQL query logging statements
+[33mb4318ad[m Add issues-trend API endpoint
+[33m6a3fddf[m Add closed sprints endpoint with structured numeric months parameter

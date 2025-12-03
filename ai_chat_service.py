@@ -477,7 +477,7 @@ def build_team_dashboard_context(
                     
                     # Get burndown data
                     burndown_data = get_sprint_burndown_data_db(
-                        team_name, 
+                        [team_name], 
                         selected_sprint_name, 
                         issue_type="all", 
                         conn=conn
