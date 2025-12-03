@@ -227,7 +227,7 @@ def _fetch_team_sprint_burndown(filters: Dict[str, Any], conn: Connection) -> Re
             },
         }
 
-    burndown_data = get_sprint_burndown_data_db(team_name, sprint_name, issue_type, conn)
+    burndown_data = get_sprint_burndown_data_db([team_name], sprint_name, issue_type, conn)
 
     total_issues = 0
     start_date: Optional[str] = None

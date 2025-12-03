@@ -495,13 +495,13 @@ def get_closed_sprints_data_db(team_names: Optional[List[str]], months: int = 3,
         raise e
 
 
-def get_sprint_burndown_data_db(team_name: str, sprint_name: str, issue_type: str = "all", conn: Connection = None) -> List[Dict[str, Any]]:
+def get_sprint_burndown_data_db(team_names: List[str], sprint_name: str, issue_type: str = "all", conn: Connection = None) -> List[Dict[str, Any]]:
     """
     Get sprint burndown data for a specific team and sprint.
     Uses the get_sprint_burndown_data_for_team database function.
     
     Args:
-        team_name (str): Team name
+        team_names (List[str]): List of team names
         sprint_name (str): Sprint name
         issue_type (str): Issue type filter (default: "all")
         conn (Connection): Database connection from FastAPI dependency
@@ -512,86 +512,38 @@ def get_sprint_burndown_data_db(team_name: str, sprint_name: str, issue_type: st
     try:
         # SECURE: Parameterized query prevents SQL injection
         sql_query = """
-            SELECT * FROM get_sprint_burndown_data_for_team(:sprint_name, :issue_type, :team_name);
+            SELECT * FROM get_sprint_burndown_data_for_team(:sprint_name, :issue_type, CAST(:team_names AS text[]));
         """
         
-        logger.info(f"Executing query to get sprint burndown data for team: {team_name}, sprint: {sprint_name}")
-        logger.info(f"Parameters: sprint_name={sprint_name}, issue_type={issue_type}, team_name={team_name}")
+        logger.info(f"Executing query to get sprint burndown data for teams: {team_names}, sprint: {sprint_name}")
+        logger.info(f"Parameters: sprint_name={sprint_name}, issue_type={issue_type}, team_names={team_names}")
         
         result = conn.execute(text(sql_query), {
             "sprint_name": sprint_name,
             "issue_type": issue_type,
-            "team_name": team_name
+            "team_names": team_names
         })
         
         burndown_data = []
         for row in result:
+            # Use row._mapping to access columns by name (safer than positional indexing)
+            row_dict = dict(row._mapping)
             burndown_data.append({
-                'snapshot_date': row[0],
-                'start_date': row[1],
-                'end_date': row[2],
-                'remaining_issues': int(row[3]) if row[3] else 0,
-                'ideal_remaining': int(row[4]) if row[4] else 0,
-                'total_issues': int(row[5]) if row[5] else 0,
-                'issues_added_on_day': int(row[6]) if row[6] else 0,
-                'issues_removed_on_day': int(row[7]) if row[7] else 0,
-                'issues_completed_on_day': int(row[8]) if row[8] else 0
+                'snapshot_date': row_dict.get('snapshot_date'),
+                'start_date': row_dict.get('start_date'),
+                'end_date': row_dict.get('end_date'),
+                'remaining_issues': int(row_dict.get('remaining_issues', 0)) if row_dict.get('remaining_issues') else 0,
+                'ideal_remaining': int(row_dict.get('ideal_remaining', 0)) if row_dict.get('ideal_remaining') else 0,
+                'total_issues': int(row_dict.get('total_issues', 0)) if row_dict.get('total_issues') else 0,
+                'issues_added_on_day': int(row_dict.get('issues_added_on_day', 0)) if row_dict.get('issues_added_on_day') else 0,
+                'issues_removed_on_day': int(row_dict.get('issues_removed_on_day', 0)) if row_dict.get('issues_removed_on_day') else 0,
+                'issues_completed_on_day': int(row_dict.get('issues_completed_on_day', 0)) if row_dict.get('issues_completed_on_day') else 0
             })
         
         return burndown_data
             
     except Exception as e:
-        logger.error(f"Error fetching sprint burndown data for team {team_name}, sprint {sprint_name}: {e}")
-        raise e
-
-
-def get_sprint_burndown_data_db(team_name: str, sprint_name: str, issue_type: str = "all", conn: Connection = None) -> List[Dict[str, Any]]:
-    """
-    Get sprint burndown data for a specific team and sprint.
-    Uses the get_sprint_burndown_data_for_team database function.
-    
-    Args:
-        team_name (str): Team name
-        sprint_name (str): Sprint name
-        issue_type (str): Issue type filter (default: "all")
-        conn (Connection): Database connection from FastAPI dependency
-    
-    Returns:
-        list: List of dictionaries with burndown data
-    """
-    try:
-        # SECURE: Parameterized query prevents SQL injection
-        sql_query = """
-            SELECT * FROM public.get_sprint_burndown_data_for_team(:sprint_name, :issue_type, :team_name);
-        """
-        
-        logger.info(f"Executing query to get sprint burndown data for team: {team_name}, sprint: {sprint_name}")
-        logger.info(f"Parameters: sprint_name={sprint_name}, issue_type={issue_type}, team_name={team_name}")
-        
-        result = conn.execute(text(sql_query), {
-            'sprint_name': sprint_name,
-            'issue_type': issue_type,
-            'team_name': team_name
-        })
-        
-        burndown_data = []
-        for row in result:
-            burndown_data.append({
-                'snapshot_date': row.snapshot_date,
-                'start_date': row.sprint_start_date,
-                'end_date': row.sprint_end_date,
-                'remaining_issues': row.remaining_issues,
-                'ideal_remaining': row.ideal_remaining,
-                'total_issues': row.total_issues,
-                'issues_added_on_day': row.issues_added_on_day,
-                'issues_removed_on_day': row.issues_removed_on_day,
-                'issues_completed_on_day': row.issues_completed_on_day
-            })
-        
-        return burndown_data
-            
-    except Exception as e:
-        logger.error(f"Error fetching sprint burndown data for team {team_name}, sprint {sprint_name}: {e}")
+        logger.error(f"Error fetching sprint burndown data for teams {team_names}, sprint {sprint_name}: {e}")
         raise e
 
 
