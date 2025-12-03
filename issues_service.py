@@ -1263,18 +1263,16 @@ async def get_epics_by_pi(
                 "owning_team": row[2],
                 "planned_for_quarter": "Yes" if row[3] == pi else "No",
                 "epic_status": row[4],  # Use status_category directly
+                "epic_status_category": row[4],  # Add status_category as separate field
                 "in_progress_date": None,
-                "in_progress_sprint": None,
-                "stories_at_in_progress": 0,
-                "current_story_count": 0,
-                "stories_added": 0,
-                "stories_removed": 0,
-                "stories_completed": 0,
-                "stories_remaining": 0,
-                "team_progress_breakdown": [],
+                "count_of_child_issues_when_epic_moved_to_inprogress": 0,
+                "current_count_of_child_issues": 0,
+                "child_issues_completed": 0,
+                "child_issues_remaining": 0,
                 "number_of_relying_teams": 0,
                 "dependent_issues_total": 0,
-                "dependent_issues_done": 0
+                "dependent_issues_done": 0,
+                "team_progress_breakdown": []
             }
         
         # Step 2: Get in-progress dates for all epics (batch)
@@ -1287,8 +1285,7 @@ async def get_epics_by_pi(
             query2 = text(f"""
                 SELECT 
                     h1.issue_key,
-                    h1.snapshot_date as in_progress_date,
-                    h1.sprint_ids[1] as in_progress_sprint
+                    h1.snapshot_date as in_progress_date
                 FROM (
                     SELECT 
                         issue_key,
@@ -1313,7 +1310,6 @@ async def get_epics_by_pi(
                 epic_key = row[0]
                 if epic_key in epic_data:
                     epic_data[epic_key]["in_progress_date"] = row[1].strftime("%Y-%m-%d") if row[1] else None
-                    epic_data[epic_key]["in_progress_sprint"] = row[2] if row[2] else None
             
             # Step 3: Get baseline story count (batch query for epics with in_progress_date)
             epics_with_dates = [k for k, v in epic_data.items() if v["in_progress_date"]]
@@ -1357,7 +1353,7 @@ async def get_epics_by_pi(
                 for row in baseline_rows:
                     epic_key = row[0]
                     if epic_key in epic_data:
-                        epic_data[epic_key]["stories_at_in_progress"] = int(row[1]) if row[1] else 0
+                        epic_data[epic_key]["count_of_child_issues_when_epic_moved_to_inprogress"] = int(row[1]) if row[1] else 0
             
             # Step 4: Get current story metrics (batch for all epics)
             placeholders4 = ", ".join([f":epic_key_{i}" for i in range(len(epic_keys))])
@@ -1385,8 +1381,8 @@ async def get_epics_by_pi(
             query4b = text(f"""
                 SELECT 
                     parent_key as epic_key,
-                    COUNT(*) as current_story_count,
-                    COUNT(CASE WHEN status_category = 'Done' THEN 1 END) as stories_completed
+                    COUNT(*) as current_count_of_child_issues,
+                    COUNT(CASE WHEN status_category = 'Done' THEN 1 END) as child_issues_completed
                 FROM {config.WORK_ITEMS_TABLE}
                 WHERE parent_key IN ({placeholders4})
                 GROUP BY parent_key
@@ -1409,42 +1405,27 @@ async def get_epics_by_pi(
                 
                 team_breakdown_by_epic[epic_key].append({
                     "team_name": team_name,
-                    "done": done,
-                    "total": total
+                    "count_of_child_issues_done": done,
+                    "total_count_of_child_issues": total
                 })
             
             # Process story counts
             for row in story_count_rows:
                 epic_key = row[0]
                 if epic_key in epic_data:
-                    epic_data[epic_key]["current_story_count"] = int(row[1]) if row[1] else 0
-                    epic_data[epic_key]["stories_completed"] = int(row[2]) if row[2] else 0
-                    epic_data[epic_key]["stories_remaining"] = epic_data[epic_key]["current_story_count"] - epic_data[epic_key]["stories_completed"]
+                    epic_data[epic_key]["current_count_of_child_issues"] = int(row[1]) if row[1] else 0
+                    epic_data[epic_key]["child_issues_completed"] = int(row[2]) if row[2] else 0
+                    epic_data[epic_key]["child_issues_remaining"] = epic_data[epic_key]["current_count_of_child_issues"] - epic_data[epic_key]["child_issues_completed"]
             
             # Set team_progress_breakdown for all epics (even if no stories)
             for epic_key in epic_data.keys():
                 epic_data[epic_key]["team_progress_breakdown"] = team_breakdown_by_epic.get(epic_key, [])
             
-            # Calculate stories_added and stories_removed
+            # Set baseline count for epics that never entered "In Progress"
             for epic_key, data in epic_data.items():
-                baseline = data["stories_at_in_progress"]
-                current = data["current_story_count"]
-                
-                if baseline == 0 and data["in_progress_date"] is None:
+                if data["count_of_child_issues_when_epic_moved_to_inprogress"] == 0 and data["in_progress_date"] is None:
                     # Epic never entered "In Progress" - use current as baseline
-                    data["stories_at_in_progress"] = current
-                    data["stories_added"] = 0
-                    data["stories_removed"] = 0
-                else:
-                    if current > baseline:
-                        data["stories_added"] = current - baseline
-                        data["stories_removed"] = 0
-                    elif baseline > current:
-                        data["stories_added"] = 0
-                        data["stories_removed"] = baseline - current
-                    else:
-                        data["stories_added"] = 0
-                        data["stories_removed"] = 0
+                    data["count_of_child_issues_when_epic_moved_to_inprogress"] = data["current_count_of_child_issues"]
             
             # Step 5: Get dependency metrics (batch for all epics)
             # Number of relying teams and dependent issues (using dependency = true)
