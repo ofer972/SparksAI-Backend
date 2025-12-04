@@ -21,22 +21,20 @@ teams_router = APIRouter()
 
 def validate_team_name(team_name: str) -> str:
     """
-    Validate and sanitize team name to prevent SQL injection.
-    Only allows alphanumeric characters, spaces, hyphens, and underscores.
+    Validate team name (basic validation only).
     """
     if not team_name or not isinstance(team_name, str):
         raise HTTPException(status_code=400, detail="Team name is required and must be a string")
     
-    # Remove any potentially dangerous characters
-    sanitized = re.sub(r'[^a-zA-Z0-9\s\-_]', '', team_name.strip())
+    validated = team_name.strip()
     
-    if not sanitized:
-        raise HTTPException(status_code=400, detail="Team name contains invalid characters")
+    if not validated:
+        raise HTTPException(status_code=400, detail="Team name cannot be empty")
     
-    if len(sanitized) > 100:  # Reasonable length limit
+    if len(validated) > 100:  # Reasonable length limit
         raise HTTPException(status_code=400, detail="Team name is too long (max 100 characters)")
     
-    return sanitized
+    return validated
 
 def validate_id(id_value: int, field_name: str = "ID") -> int:
     """

@@ -11,7 +11,6 @@ from sqlalchemy.engine import Connection
 from typing import Dict, Any, Optional
 from datetime import date, datetime
 import logging
-import re
 from database_connection import get_db_connection
 from database_team_metrics import (
     get_team_avg_sprint_metrics,
@@ -36,41 +35,37 @@ team_metrics_router = APIRouter()
 
 def validate_team_name(team_name: str) -> str:
     """
-    Validate and sanitize team name to prevent SQL injection.
-    Only allows alphanumeric characters, spaces, hyphens, and underscores.
+    Validate team name (basic validation only).
     """
     if not team_name or not isinstance(team_name, str):
         raise HTTPException(status_code=400, detail="Team name is required and must be a string")
     
-    # Remove any potentially dangerous characters
-    sanitized = re.sub(r'[^a-zA-Z0-9\s\-_]', '', team_name.strip())
+    validated = team_name.strip()
     
-    if not sanitized:
-        raise HTTPException(status_code=400, detail="Team name contains invalid characters")
+    if not validated:
+        raise HTTPException(status_code=400, detail="Team name cannot be empty")
     
-    if len(sanitized) > 100:  # Reasonable length limit
+    if len(validated) > 100:  # Reasonable length limit
         raise HTTPException(status_code=400, detail="Team name is too long (max 100 characters)")
     
-    return sanitized
+    return validated
 
 def validate_group_name(group_name: str) -> str:
     """
-    Validate and sanitize group name to prevent SQL injection.
-    Only allows alphanumeric characters, spaces, hyphens, and underscores.
+    Validate group name (basic validation only).
     """
     if not group_name or not isinstance(group_name, str):
         raise HTTPException(status_code=400, detail="Group name is required and must be a string")
     
-    # Remove any potentially dangerous characters
-    sanitized = re.sub(r'[^a-zA-Z0-9\s\-_]', '', group_name.strip())
+    validated = group_name.strip()
     
-    if not sanitized:
-        raise HTTPException(status_code=400, detail="Group name contains invalid characters")
+    if not validated:
+        raise HTTPException(status_code=400, detail="Group name cannot be empty")
     
-    if len(sanitized) > 100:  # Reasonable length limit
+    if len(validated) > 100:  # Reasonable length limit
         raise HTTPException(status_code=400, detail="Group name is too long (max 100 characters)")
     
-    return sanitized
+    return validated
 
 
 def validate_sprint_count(sprint_count: int) -> int:

@@ -351,9 +351,8 @@ async def create_pi_ai_card(
         if payload.get("team_name") is None:
             payload["team_name"] = ""
         elif payload.get("team_name") is not None:
-            # Optional team_name can be sanitized using team rules if provided
-            # Reuse same rules as team validation
-            payload["team_name"] = re.sub(r'[^a-zA-Z0-9\s\-_]', '', payload["team_name"].strip())
+            # Basic validation: strip whitespace
+            payload["team_name"] = payload["team_name"].strip()
 
         created = create_ai_card(payload, conn)
         return {
@@ -383,7 +382,8 @@ async def update_pi_ai_card(
             if updates["team_name"] is None:
                 updates["team_name"] = ""
             elif updates["team_name"] is not None:
-                updates["team_name"] = re.sub(r'[^a-zA-Z0-9\s\-_]', '', updates["team_name"].strip())
+                # Basic validation: strip whitespace
+                updates["team_name"] = updates["team_name"].strip()
 
         updated = update_ai_card_by_id(id, updates, conn)
         if not updated:

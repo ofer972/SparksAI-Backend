@@ -441,7 +441,6 @@ def resolve_team_names_from_filter(
         get_cached_groups, get_cached_teams,
         group_exists_by_name_in_db, team_exists_by_name_in_db
     )
-    import re
     
     if not team_name:
         return None  # None means all teams
@@ -451,33 +450,36 @@ def resolve_team_names_from_filter(
         if not isinstance(team_name, str):
             raise HTTPException(status_code=400, detail="Group name is required and must be a string")
         
-        sanitized_group_name = re.sub(r'[^a-zA-Z0-9\s\-_]', '', team_name.strip())
+        validated_group_name = team_name.strip()
         
-        if not sanitized_group_name:
-            raise HTTPException(status_code=400, detail="Group name contains invalid characters")
+        if not validated_group_name:
+            raise HTTPException(status_code=400, detail="Group name cannot be empty")
+        
+        if len(validated_group_name) > 100:
+            raise HTTPException(status_code=400, detail="Group name is too long (max 100 characters)")
         
         # Check if group exists
         cached_groups = get_cached_groups()
         if cached_groups:
             groups = cached_groups.get("groups", [])
-            group_exists = any(g.get("name") == sanitized_group_name for g in groups)
+            group_exists = any(g.get("name") == validated_group_name for g in groups)
         else:
-            group_exists = group_exists_by_name_in_db(sanitized_group_name, conn)
+            group_exists = group_exists_by_name_in_db(validated_group_name, conn)
         
         if not group_exists:
             raise HTTPException(
                 status_code=404,
-                detail=f"Group '{sanitized_group_name}' not found or has no teams"
+                detail=f"Group '{validated_group_name}' not found or has no teams"
             )
         
         # Get teams - use cache with recursive support
         from groups_teams_cache import get_recursive_teams_for_group_from_cache
-        team_names_list = get_recursive_teams_for_group_from_cache(sanitized_group_name, conn, include_children=True)
+        team_names_list = get_recursive_teams_for_group_from_cache(validated_group_name, conn, include_children=True)
         
         if not team_names_list:
             raise HTTPException(
                 status_code=404,
-                detail=f"Group '{sanitized_group_name}' has no teams"
+                detail=f"Group '{validated_group_name}' has no teams"
             )
         
         return team_names_list
@@ -486,26 +488,29 @@ def resolve_team_names_from_filter(
         if not isinstance(team_name, str):
             raise HTTPException(status_code=400, detail="Team name is required and must be a string")
         
-        sanitized = re.sub(r'[^a-zA-Z0-9\s\-_]', '', team_name.strip())
+        validated = team_name.strip()
         
-        if not sanitized:
-            raise HTTPException(status_code=400, detail="Team name contains invalid characters")
+        if not validated:
+            raise HTTPException(status_code=400, detail="Team name cannot be empty")
+        
+        if len(validated) > 100:
+            raise HTTPException(status_code=400, detail="Team name is too long (max 100 characters)")
         
         # Verify team exists
         cached_teams = get_cached_teams()
         if cached_teams:
             teams = cached_teams.get("teams", [])
-            team_exists = any(t.get("team_name") == sanitized for t in teams)
+            team_exists = any(t.get("team_name") == validated for t in teams)
         else:
-            team_exists = team_exists_by_name_in_db(sanitized, conn)
+            team_exists = team_exists_by_name_in_db(validated, conn)
         
         if not team_exists:
             raise HTTPException(
                 status_code=404,
-                detail=f"Team '{sanitized}' not found"
+                detail=f"Team '{validated}' not found"
             )
         
-        return [sanitized]
+        return [validated]
 
 
 def get_closed_sprints_data_db(team_names: Optional[List[str]], months: int = 3, issue_type: Optional[str] = None, conn: Connection = None) -> List[Dict[str, Any]]:
