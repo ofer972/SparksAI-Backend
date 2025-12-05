@@ -279,15 +279,63 @@ async def get_team_ai_cards_with_recommendations(
 
 
 @team_ai_cards_router.get("/team-ai-cards")
-async def get_team_ai_cards_collection(conn: Connection = Depends(get_db_connection)):
+async def get_team_ai_cards_collection(
+    date: Optional[str] = Query(None, description="Filter by date in YYYY-MM-DD format (e.g., '2025-12-05')"),
+    card_name: Optional[str] = Query(None, description="Filter by exact card name"),
+    conn: Connection = Depends(get_db_connection)
+):
     """
-    Get the latest 100 team AI summary cards from team_ai_summary_cards table.
+    Get team AI summary cards from team_ai_summary_cards table.
+    Returns the latest 100 cards by default, or filtered results if date/card_name parameters are provided.
     Uses parameterized queries to prevent SQL injection.
+    
+    Args:
+        date: Optional date filter in YYYY-MM-DD format (e.g., '2025-12-05')
+        card_name: Optional card name filter (exact match)
     
     Returns:
         JSON response with list of team AI cards and count
     """
     try:
+        # Validate date format if provided
+        if date:
+            # Validate date format YYYY-MM-DD
+            date_pattern = re.compile(r'^\d{4}-\d{2}-\d{2}$')
+            if not date_pattern.match(date):
+                raise HTTPException(
+                    status_code=400,
+                    detail="Date must be in YYYY-MM-DD format (e.g., '2025-12-05')"
+                )
+            # Validate it's a valid date
+            try:
+                from datetime import datetime
+                datetime.strptime(date, '%Y-%m-%d')
+            except ValueError:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Invalid date: '{date}'. Date must be in YYYY-MM-DD format and be a valid date."
+                )
+        
+        # Build WHERE clause dynamically based on provided parameters
+        where_conditions = []
+        params = {}
+        
+        if date:
+            where_conditions.append("date = :date")
+            params["date"] = date
+        
+        if card_name:
+            where_conditions.append("card_name = :card_name")
+            params["card_name"] = card_name
+        
+        # Always exclude cards where both team_name and group_name are NULL
+        where_conditions.append("(team_name IS NOT NULL OR group_name IS NOT NULL)")
+        
+        # Build WHERE clause
+        where_clause = ""
+        if where_conditions:
+            where_clause = "WHERE " + " AND ".join(where_conditions)
+        
         # SECURE: Parameterized query prevents SQL injection
         # Only return selected fields for the collection endpoint
         query = text(f"""
@@ -301,14 +349,22 @@ async def get_team_ai_cards_collection(conn: Connection = Depends(get_db_connect
                 description,
                 source_job_id
             FROM {config.TEAM_AI_CARDS_TABLE}
+            {where_clause}
             ORDER BY id DESC 
             LIMIT 100
         """)
         
-        logger.info(f"Executing query to get latest 100 team AI cards from {config.TEAM_AI_CARDS_TABLE}")
+        filter_info = []
+        if date:
+            filter_info.append(f"date={date}")
+        if card_name:
+            filter_info.append(f"card_name={card_name}")
+        filter_str = f" with filters: {', '.join(filter_info)}" if filter_info else ""
+        
+        logger.info(f"Executing query to get team AI cards from {config.TEAM_AI_CARDS_TABLE}{filter_str}")
         
         # Execute query with connection from dependency
-        result = conn.execute(query)
+        result = conn.execute(query, params)
         rows = result.fetchall()
         
         # Convert rows to list of dictionaries
@@ -331,13 +387,22 @@ async def get_team_ai_cards_collection(conn: Connection = Depends(get_db_connect
             }
             cards.append(card_dict)
         
+        filter_message = ""
+        if date or card_name:
+            filter_parts = []
+            if date:
+                filter_parts.append(f"date={date}")
+            if card_name:
+                filter_parts.append(f"card_name='{card_name}'")
+            filter_message = f" (filtered by: {', '.join(filter_parts)})"
+        
         return {
             "success": True,
             "data": {
                 "cards": cards,
                 "count": len(cards)
             },
-            "message": f"Retrieved {len(cards)} team AI summary cards"
+            "message": f"Retrieved {len(cards)} team AI summary cards{filter_message}"
         }
     
     except Exception as e:
@@ -431,11 +496,11 @@ async def create_team_ai_card(
         # Validate that exactly one of team_name or group_name is provided
         validated = validate_team_or_group_name(request.team_name, request.group_name, conn)
         payload = request.model_dump()
-        payload["team_name"] = validated["team_name"] if validated["team_name"] else ""
-        payload["group_name"] = validated["group_name"]
-        # If pi not provided, default to empty string (pi is NOT NULL in DB)
-        if payload.get("pi") is None:
-            payload["pi"] = ""
+        payload["team_name"] = validated["team_name"]  # Will be None if not provided
+        payload["group_name"] = validated["group_name"]  # Will be None if not provided
+        # If pi not provided, set to None (pi is now nullable)
+        if payload.get("pi") is None or payload.get("pi") == "":
+            payload["pi"] = None
         created = create_ai_card(payload, conn)
         return {
             "success": True,

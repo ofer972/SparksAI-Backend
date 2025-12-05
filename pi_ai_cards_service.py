@@ -211,6 +211,7 @@ async def get_pi_ai_cards_collection(conn: Connection = Depends(get_db_connectio
     try:
         # SECURE: Parameterized query prevents SQL injection
         # Only return selected fields for the collection endpoint
+        # Only return cards where pi is NOT NULL
         query = text(f"""
             SELECT 
                 id,
@@ -224,6 +225,7 @@ async def get_pi_ai_cards_collection(conn: Connection = Depends(get_db_connectio
                 source_job_id,
                 pi
             FROM {config.PI_AI_CARDS_TABLE}
+            WHERE pi IS NOT NULL
             ORDER BY id DESC 
             LIMIT 100
         """)
@@ -354,12 +356,16 @@ async def create_pi_ai_card(
         validated_pi = validate_pi_name(request.pi)
         payload = request.model_dump()
         payload["pi"] = validated_pi
-        # Normalize team_name: None -> empty string for consistency with UNIQUE constraint
-        if payload.get("team_name") is None:
-            payload["team_name"] = ""
-        elif payload.get("team_name") is not None:
-            # Basic validation: strip whitespace
-            payload["team_name"] = payload["team_name"].strip()
+        # Normalize team_name and group_name: empty string -> None, strip if provided
+        if payload.get("team_name") is None or payload.get("team_name") == "":
+            payload["team_name"] = None
+        else:
+            payload["team_name"] = payload["team_name"].strip() if payload["team_name"] else None
+        
+        if payload.get("group_name") is None or payload.get("group_name") == "":
+            payload["group_name"] = None
+        else:
+            payload["group_name"] = payload["group_name"].strip() if payload["group_name"] else None
 
         created = create_ai_card(payload, conn)
         return {
@@ -384,13 +390,19 @@ async def update_pi_ai_card(
         updates = request.model_dump(exclude_unset=True)
         if "pi" in updates and updates["pi"] is not None:
             updates["pi"] = validate_pi_name(updates["pi"])
-        # Normalize team_name: None -> empty string for consistency with UNIQUE constraint
+        # Normalize team_name: empty string -> None, strip if provided
         if "team_name" in updates:
-            if updates["team_name"] is None:
-                updates["team_name"] = ""
-            elif updates["team_name"] is not None:
-                # Basic validation: strip whitespace
+            if updates["team_name"] is None or updates["team_name"] == "":
+                updates["team_name"] = None
+            else:
                 updates["team_name"] = updates["team_name"].strip()
+        
+        # Normalize group_name: empty string -> None, strip if provided
+        if "group_name" in updates:
+            if updates["group_name"] is None or updates["group_name"] == "":
+                updates["group_name"] = None
+            else:
+                updates["group_name"] = updates["group_name"].strip()
 
         updated = update_ai_card_by_id(id, updates, conn)
         if not updated:

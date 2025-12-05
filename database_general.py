@@ -153,6 +153,16 @@ def get_top_ai_cards_filtered(filter_column: str, filter_value: str, limit: int 
     try:
         import json
         
+        # Build additional WHERE condition based on filter_column
+        # Team/Group cards: exclude cards where both team_name and group_name are NULL
+        # PI cards: only return cards where pi is NOT NULL
+        if filter_column in ('team_name', 'group_name'):
+            additional_filter = "AND (team_name IS NOT NULL OR group_name IS NOT NULL)"
+        elif filter_column == 'pi':
+            additional_filter = "AND pi IS NOT NULL"
+        else:
+            additional_filter = ""
+        
         # If categories provided, get insight types for those categories
         insight_types_list = []
         if categories:
@@ -183,6 +193,7 @@ def get_top_ai_cards_filtered(filter_column: str, filter_value: str, limit: int 
                     FROM public.ai_summary
                     WHERE {filter_column} = :filter_value
                       AND card_type = ANY(:card_types)
+                      {additional_filter}
                 )
                 SELECT *
                 FROM ranked_cards
@@ -221,6 +232,7 @@ def get_top_ai_cards_filtered(filter_column: str, filter_value: str, limit: int 
                         ) as rn
                     FROM public.ai_summary
                     WHERE {filter_column} = :filter_value
+                      {additional_filter}
                 )
                 SELECT *
                 FROM ranked_cards
@@ -765,23 +777,23 @@ def create_ai_card(data: Dict[str, Any], conn: Connection = None) -> Dict[str, A
             "source_job_id", "description", "full_information", "information_json", "pi"
         }
 
+        # Filter to only allowed columns, but keep None values (they represent NULL in database)
         filtered = {k: v for k, v in data.items() if k in allowed_columns}
         if not filtered:
             raise ValueError("No valid fields provided for ai_summary insert")
+        
+        # Convert empty strings to None for nullable columns
+        nullable_columns = {"team_name", "group_name", "pi"}
+        for col in nullable_columns:
+            if col in filtered and filtered[col] == "":
+                filtered[col] = None
 
         columns_sql = ", ".join(filtered.keys())
         values_sql = ", ".join([f":{k}" for k in filtered.keys()])
-        
-        # Build UPDATE clause for ON CONFLICT - update all fields except created_at
-        update_fields = [k for k in filtered.keys() if k != "created_at"]
-        set_clauses = ", ".join([f"{k} = EXCLUDED.{k}" for k in update_fields])
-        set_clauses += ", updated_at = CURRENT_TIMESTAMP"
 
         query = text(f"""
             INSERT INTO {config.AI_SUMMARY_TABLE} ({columns_sql})
             VALUES ({values_sql})
-            ON CONFLICT (date, team_name, card_name, pi)
-            DO UPDATE SET {set_clauses}
             RETURNING *
         """)
 
@@ -807,6 +819,12 @@ def update_ai_card_by_id(card_id: int, updates: Dict[str, Any], conn: Connection
         filtered = {k: v for k, v in updates.items() if k in allowed_columns}
         if not filtered:
             raise ValueError("No valid fields provided for ai_summary update")
+        
+        # Convert empty strings to None for nullable columns
+        nullable_columns = {"team_name", "group_name", "pi"}
+        for col in nullable_columns:
+            if col in filtered and filtered[col] == "":
+                filtered[col] = None
 
         set_clauses = ", ".join([f"{k} = :{k}" for k in filtered.keys()])
         params = dict(filtered)
