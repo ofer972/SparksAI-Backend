@@ -8,7 +8,6 @@ with the LLM service using pre-prepared prompts.
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field
 from typing import Optional, Dict, Any
-from enum import Enum
 import logging
 import httpx
 import config
@@ -17,28 +16,14 @@ logger = logging.getLogger(__name__)
 
 agent_llm_router = APIRouter()
 
-# Job type enum for validation
-class JobType(str, Enum):
-    """Enumeration of job type options"""
-    DAILY_AGENT = "Daily Progress"
-    SPRINT_GOAL = "Sprint Goal"
-    PI_SYNC = "PI Sync"
-    TEAM_PI_INSIGHT = "Team PI Insight"
-    TEAM_RETRO_TOPICS = "Team Retro Topics"
-    PI_DEPENDENCIES = "PI Dependencies"
-    PI_PLANNING_GAPS = "PI Planning Gaps"
-
 
 class AgentLLMProcessRequest(BaseModel):
     """Request model for agent LLM process endpoint"""
     prompt: str = Field(..., description="Complete formatted prompt prepared by agent")
-    job_type: JobType = Field(..., description="Type of job: Daily Progress, Sprint Goal, PI Sync, Team PI Insight, Team Retro Topics, PI Dependencies, or PI Planning Gaps")
+    job_type: str = Field(..., description="Type of job (any string value)")
     system_prompt: Optional[str] = Field(None, description="System prompt for AI behavior/context")
     job_id: Optional[int] = Field(None, description="Job ID for logging/tracking")
     metadata: Optional[Dict[str, Any]] = Field(None, description="Additional context for logging")
-
-    class Config:
-        use_enum_values = True
 
 
 async def call_llm_service_process_single(
@@ -171,12 +156,9 @@ async def agent_llm_process(request: AgentLLMProcessRequest):
             )
         
         # Prepare metadata for LLM service
-        # Handle job_type - it might be an enum or already a string
-        job_type_value = request.job_type.value if hasattr(request.job_type, 'value') else str(request.job_type)
-        
         llm_metadata = {
             **(request.metadata or {}),
-            "job_type": job_type_value,
+            "job_type": request.job_type,
         }
         if request.job_id is not None:
             llm_metadata["job_id"] = request.job_id
