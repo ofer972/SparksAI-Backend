@@ -25,6 +25,7 @@ DEFAULT_INSIGHT_TYPES = [
         "active": True,
         "requires_pi": True,
         "requires_team": False,
+        "requires_group": False,
         "cron_config": {"day_of_week": "sun,tue,thu", "hour": 6, "minute": 0}
     },
     {
@@ -34,6 +35,7 @@ DEFAULT_INSIGHT_TYPES = [
         "active": True,
         "requires_pi": True,
         "requires_team": False,
+        "requires_group": False,
         "cron_config": {"hour": 5, "minute": 40}
     },
     {
@@ -43,6 +45,7 @@ DEFAULT_INSIGHT_TYPES = [
         "active": True,
         "requires_pi": True,
         "requires_team": False,
+        "requires_group": False,
         "cron_config": {"hour": 5, "minute": 40}
     },
     {
@@ -52,6 +55,7 @@ DEFAULT_INSIGHT_TYPES = [
         "active": True,
         "requires_pi": False,
         "requires_team": True,
+        "requires_group": False,
         "cron_config": {"hour": 5, "minute": 30}
     },
     {
@@ -61,6 +65,7 @@ DEFAULT_INSIGHT_TYPES = [
         "active": True,
         "requires_pi": False,
         "requires_team": True,
+        "requires_group": False,
         "cron_config": {"hour": 5, "minute": 30}
     },
     {
@@ -70,6 +75,7 @@ DEFAULT_INSIGHT_TYPES = [
         "active": True,
         "requires_pi": False,
         "requires_team": True,
+        "requires_group": False,
         "cron_config": {"hour": 5, "minute": 30}
     },
     {
@@ -79,25 +85,28 @@ DEFAULT_INSIGHT_TYPES = [
         "active": True,
         "requires_pi": True,
         "requires_team": True,
+        "requires_group": False,
         "cron_config": {"hour": 5, "minute": 30}
     },
     {
-        "insight_type": "Conversation Analysis",
-        "insight_description": "Analyzes team discussions for themes",
+        "insight_type": "Group Sprint Flow",
+        "insight_description": "Analyzes GROUP progress in the active sprint",
         "insight_categories": ["Daily", "Retrospective"],
-        "active": False,
+        "active": True,
         "requires_pi": False,
-        "requires_team": True,
-        "cron_config": {"hour": 5, "minute": 30}
+        "requires_team": False,
+        "requires_group": True,
+        "cron_config": {"hour": 5, "minute": 45}
     },
     {
-        "insight_type": "Team Blockers' Last Days",
-        "insight_description": "Lists recent blockers",
-        "insight_categories": ["Daily"],
-        "active": False,
+        "insight_type": "Group Sprint Predictability",
+        "insight_description": "Evaluates GROUP forecast stability",
+        "insight_categories": ["Daily", "Retrospective"],
+        "active": True,
         "requires_pi": False,
-        "requires_team": True,
-        "cron_config": {"hour": 5, "minute": 30}
+        "requires_team": False,
+        "requires_group": True,
+        "cron_config": {"hour": 5, "minute": 45}
     },
     {
         "insight_type": "WIP Level",
@@ -106,7 +115,8 @@ DEFAULT_INSIGHT_TYPES = [
         "active": False,
         "requires_pi": False,
         "requires_team": True,
-        "cron_config": {"hour": 5, "minute": 30}
+        "requires_group": False,
+        "cron_config": {"hour": 5, "minute": 50}
     },
 
 #    {
@@ -136,15 +146,16 @@ DEFAULT_INSIGHT_TYPES = [
 #        "requires_team": True,
 #        "cron_config": {"hour": 5, "minute": 30}
 #    },
-    {
-        "insight_type": "DORA Lite",
-        "insight_description": "Displays core DORA metrics for the sprint",
-        "insight_categories": ["Retrospective"],
-        "active": False,
-        "requires_pi": False,
-        "requires_team": True,
-        "cron_config": {"hour": 5, "minute": 30}
-    },
+#    {
+#        "insight_type": "DORA Lite",
+#        "insight_description": "Displays core DORA metrics for the sprint",
+#        "insight_categories": ["Retrospective"],
+#        "active": False,
+#        "requires_pi": False,
+#        "requires_team": True,
+#        "requires_group": False,
+#        "cron_config": {"hour": 5, "minute": 30}
+#    },
  #   {
  #       "insight_type": "Sprint Summary",
  #       "insight_description": "Provides overall sprint summary and outcomes",
@@ -215,6 +226,7 @@ DEFAULT_INSIGHT_TYPES = [
         "active": False,
         "requires_pi": False,
         "requires_team": True,
+        "requires_group": False,
         "cron_config": {"day_of_week": "sun,tue,thu", "hour": 6, "minute": 0}
     }
 
@@ -1596,6 +1608,7 @@ def create_insight_types_table_if_not_exists(engine=None) -> bool:
                     active BOOLEAN DEFAULT TRUE NOT NULL,
                     requires_pi BOOLEAN DEFAULT FALSE NOT NULL,
                     requires_team BOOLEAN DEFAULT TRUE NOT NULL,
+                    requires_group BOOLEAN DEFAULT FALSE NOT NULL,
                     cron_config JSONB DEFAULT NULL,
                     created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP NOT NULL,
                     updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP NOT NULL
@@ -1607,11 +1620,12 @@ def create_insight_types_table_if_not_exists(engine=None) -> bool:
                 conn.execute(text(create_table_sql))
                 conn.commit()
                 print("Insight types table created successfully")
-                
-                # Insert default insight types data
-                insert_default_insight_types(engine)
             else:
                 print("Insight types table already exists")
+            
+            # Always insert missing insight types (even if table already exists)
+            # This ensures new insight types are added without updating existing ones
+            insert_default_insight_types(engine)
             
             return True
             
@@ -1843,6 +1857,7 @@ def insert_default_insight_types(engine=None):
                     active = insight_type_data.get("active", True)
                     requires_pi = insight_type_data.get("requires_pi", False)
                     requires_team = insight_type_data.get("requires_team", True)
+                    requires_group = insight_type_data.get("requires_group", False)
                     cron_config = insight_type_data.get("cron_config")
                     
                     # Validate categories is a list
@@ -1865,8 +1880,8 @@ def insert_default_insight_types(engine=None):
                         # Convert list to JSON string for JSONB column
                         insert_sql = """
                         INSERT INTO public.insight_types 
-                        (insight_type, insight_description, insight_categories, active, requires_pi, requires_team, cron_config) 
-                        VALUES (:insight_type, :insight_description, CAST(:insight_categories AS jsonb), :active, :requires_pi, :requires_team, CAST(:cron_config AS jsonb))
+                        (insight_type, insight_description, insight_categories, active, requires_pi, requires_team, requires_group, cron_config) 
+                        VALUES (:insight_type, :insight_description, CAST(:insight_categories AS jsonb), :active, :requires_pi, :requires_team, :requires_group, CAST(:cron_config AS jsonb))
                         """
                         conn.execute(text(insert_sql), {
                             "insight_type": insight_type,
@@ -1875,6 +1890,7 @@ def insert_default_insight_types(engine=None):
                             "active": active,
                             "requires_pi": requires_pi,
                             "requires_team": requires_team,
+                            "requires_group": requires_group,
                             "cron_config": json.dumps(cron_config) if cron_config else None
                         })
                         inserted_count += 1

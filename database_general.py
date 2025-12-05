@@ -1319,7 +1319,6 @@ def get_insight_types(
     active: Optional[bool] = None,
     search: Optional[str] = None,
     limit: int = 100,
-    offset: int = 0,
     conn: Connection = None
 ) -> List[Dict[str, Any]]:
     """
@@ -1331,7 +1330,6 @@ def get_insight_types(
         active (Optional[bool]): Filter by active status
         search (Optional[str]): Search term for insight_type (ILIKE search)
         limit (int): Maximum number of results
-        offset (int): Number of results to skip
         conn (Connection): Database connection from FastAPI dependency
     
     Returns:
@@ -1370,11 +1368,10 @@ def get_insight_types(
             FROM {config.INSIGHT_TYPES_TABLE}
             {where_clause}
             ORDER BY updated_at DESC
-            LIMIT :limit OFFSET :offset
+            LIMIT :limit
         """)
         
         params["limit"] = limit
-        params["offset"] = offset
         
         logger.info(f"Executing query to get insight types from {config.INSIGHT_TYPES_TABLE}")
         
@@ -1420,7 +1417,7 @@ def create_insight_type(data: Dict[str, Any], conn: Connection = None) -> Dict[s
     try:
         import json
         allowed_columns = {
-            "insight_type", "insight_description", "insight_categories", "active", "cron_config"
+            "insight_type", "insight_description", "insight_categories", "active", "requires_pi", "requires_team", "requires_group", "cron_config"
         }
         
         filtered = {k: v for k, v in data.items() if k in allowed_columns}
@@ -1500,7 +1497,7 @@ def update_insight_type_by_id(insight_type_id: int, updates: Dict[str, Any], con
     try:
         import json
         allowed_columns = {
-            "insight_type", "insight_description", "insight_categories", "active", "cron_config"
+            "insight_type", "insight_description", "insight_categories", "active", "requires_pi", "requires_team", "requires_group", "cron_config"
         }
         filtered = {k: v for k, v in updates.items() if k in allowed_columns}
         if not filtered:

@@ -126,7 +126,6 @@ async def get_insight_types_endpoint(
     active: Optional[bool] = Query(None, description="Filter by active status"),
     search: Optional[str] = Query(None, description="Search in insight types"),
     limit: int = Query(100, ge=1, le=1000, description="Maximum number of insight types to return"),
-    offset: int = Query(0, ge=0, description="Number of insight types to skip"),
     conn: Connection = Depends(get_db_connection)
 ):
     """
@@ -138,7 +137,6 @@ async def get_insight_types_endpoint(
         active: Filter by active status
         search: Search term for insight types
         limit: Maximum number of results (1-1000)
-        offset: Number of results to skip
     
     Returns:
         JSON response with list of insight types and count
@@ -168,7 +166,6 @@ async def get_insight_types_endpoint(
             active=active,
             search=search,
             limit=limit,
-            offset=offset,
             conn=conn
         )
         
@@ -249,6 +246,9 @@ class InsightTypeCreateRequest(BaseModel):
     insight_description: Optional[str] = None
     insight_categories: List[str]  # Now a list instead of single string
     active: bool = True
+    requires_pi: bool = False
+    requires_team: bool = True
+    requires_group: bool = False
     cron_config: Optional[CronConfig] = None
 
 
@@ -257,6 +257,9 @@ class InsightTypeUpdateRequest(BaseModel):
     insight_description: Optional[str] = None
     insight_categories: Optional[List[str]] = None  # Now a list instead of single string
     active: Optional[bool] = None
+    requires_pi: Optional[bool] = None
+    requires_team: Optional[bool] = None
+    requires_group: Optional[bool] = None
     cron_config: Optional[CronConfig] = None
 
 
@@ -286,7 +289,10 @@ async def create_insight_type_endpoint(
         data = {
             "insight_type": validated_insight_type,
             "insight_categories": validated_categories,
-            "active": request.active
+            "active": request.active,
+            "requires_pi": request.requires_pi,
+            "requires_team": request.requires_team,
+            "requires_group": request.requires_group
         }
         
         if request.insight_description is not None:
@@ -345,7 +351,10 @@ async def update_insight_type_full(
         updates = {
             "insight_type": validated_insight_type,
             "insight_categories": validated_categories,
-            "active": request.active
+            "active": request.active,
+            "requires_pi": request.requires_pi,
+            "requires_team": request.requires_team,
+            "requires_group": request.requires_group
         }
         
         if request.insight_description is not None:
