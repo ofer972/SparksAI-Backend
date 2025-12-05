@@ -207,6 +207,8 @@ def _fetch_team_sprint_burndown(filters: Dict[str, Any], conn: Connection) -> Re
     team_names_list = sprint_selection['team_names_list']
     selected_sprint_name = sprint_selection['selected_sprint_name']
     selected_sprint_id = sprint_selection['selected_sprint_id']
+    selected_sprint_start_date = sprint_selection.get('selected_sprint_start_date')
+    selected_sprint_end_date = sprint_selection.get('selected_sprint_end_date')
     error_message = sprint_selection['error_message']
     auto_selected = sprint_name is None and selected_sprint_name is not None
 
@@ -247,14 +249,18 @@ def _fetch_team_sprint_burndown(filters: Dict[str, Any], conn: Connection) -> Re
     burndown_data = get_sprint_burndown_data_db(team_names_list, selected_sprint_name, issue_type, conn)
 
     total_issues = 0
-    start_date: Optional[str] = None
-    end_date: Optional[str] = None
+    # Use dates from sprint selection first, fall back to burndown_data if needed
+    start_date: Optional[str] = _date_to_iso(selected_sprint_start_date) if selected_sprint_start_date else None
+    end_date: Optional[str] = _date_to_iso(selected_sprint_end_date) if selected_sprint_end_date else None
 
     if burndown_data:
         first_entry = burndown_data[0]
         total_issues = first_entry.get("total_issues", 0) or 0
-        start_date = _date_to_iso(first_entry.get("start_date"))
-        end_date = _date_to_iso(first_entry.get("end_date"))
+        # Only use burndown_data dates if sprint selection didn't provide them
+        if not start_date:
+            start_date = _date_to_iso(first_entry.get("start_date"))
+        if not end_date:
+            end_date = _date_to_iso(first_entry.get("end_date"))
 
     return {
         "data": burndown_data,

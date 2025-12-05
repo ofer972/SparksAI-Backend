@@ -148,6 +148,79 @@ async def get_teams_in_group(
         )
 
 
+@groups_router.get("/groups/by-name/{groupName}/teams")
+async def get_teams_in_group_by_name(
+    groupName: str,
+    conn: Connection = Depends(get_db_connection)
+):
+    """
+    Get all teams in a specific group by group name.
+    Uses groups/teams cache for fast retrieval.
+    
+    Args:
+        groupName: The name of the group
+    
+    Returns:
+        JSON response with list of teams in the group
+    """
+    try:
+        from groups_teams_cache import (
+            get_cached_teams,
+            load_teams_in_group_from_db
+        )
+        
+        # Translate group name to ID (direct DB call)
+        query = text("SELECT group_key FROM public.groups WHERE group_name = :group_name")
+        result = conn.execute(query, {"group_name": groupName})
+        row = result.fetchone()
+        
+        if not row:
+            raise HTTPException(
+                status_code=404,
+                detail=f"Group with name '{groupName}' not found"
+            )
+        
+        validated_group_id = row[0]
+        
+        # Get teams - try cache first
+        cached_teams = get_cached_teams()
+        if cached_teams:
+            all_teams = cached_teams.get("teams", [])
+            # Filter teams for this group (direct only)
+            teams = [
+                {
+                    "team_key": t["team_key"],
+                    "team_name": t["team_name"],
+                    "number_of_team_members": t["number_of_team_members"],
+                    "group_key": validated_group_id
+                }
+                for t in all_teams
+                if validated_group_id in t.get("group_keys", [])
+            ]
+        else:
+            # Cache miss - load from DB
+            teams = load_teams_in_group_from_db(validated_group_id, conn, include_children=False)
+        
+        return {
+            "success": True,
+            "data": {
+                "teams": teams,
+                "count": len(teams),
+                "group_key": validated_group_id
+            },
+            "message": f"Retrieved {len(teams)} teams for group '{groupName}'"
+        }
+    
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error fetching teams for group '{groupName}': {e}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to fetch teams for group: {str(e)}"
+        )
+
+
 # Pydantic models for request bodies
 class GroupCreateRequest(BaseModel):
     group_name: str

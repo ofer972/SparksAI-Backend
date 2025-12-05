@@ -623,6 +623,8 @@ async def get_sprint_burndown_data(
         team_names_list = sprint_selection['team_names_list']
         selected_sprint_name = sprint_selection['selected_sprint_name']
         selected_sprint_id = sprint_selection['selected_sprint_id']
+        selected_sprint_start_date = sprint_selection.get('selected_sprint_start_date')
+        selected_sprint_end_date = sprint_selection.get('selected_sprint_end_date')
         error_message = sprint_selection['error_message']
         
         # If error occurred, return error response
@@ -636,15 +638,19 @@ async def get_sprint_burndown_data(
         # Get burndown data for selected sprint
         burndown_data = get_sprint_burndown_data_db(team_names_list, selected_sprint_name, issue_type, conn)
         
-        # Calculate total issues in sprint and extract start/end dates from burndown data
+        # Calculate total issues in sprint and get start/end dates
+        # Use dates from sprint selection first, fall back to burndown_data if needed
         total_issues_in_sprint = 0
-        start_date = None
-        end_date = None
+        start_date = selected_sprint_start_date
+        end_date = selected_sprint_end_date
         
         if burndown_data:
             total_issues_in_sprint = burndown_data[0].get('total_issues', 0)
-            start_date = burndown_data[0].get('start_date')
-            end_date = burndown_data[0].get('end_date')
+            # Only use burndown_data dates if sprint selection didn't provide them
+            if not start_date:
+                start_date = burndown_data[0].get('start_date')
+            if not end_date:
+                end_date = burndown_data[0].get('end_date')
         
         # Build response data
         response_data = {

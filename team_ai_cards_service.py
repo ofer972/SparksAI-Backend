@@ -13,6 +13,7 @@ import re
 from database_connection import get_db_connection
 from database_general import (
     get_top_ai_cards,
+    get_top_ai_cards_filtered,
     get_team_ai_card_by_id,
     create_ai_card,
     update_ai_card_by_id,
@@ -43,6 +44,79 @@ def validate_team_name(team_name: str) -> str:
     
     return validated
 
+
+def validate_group_name(group_name: str, conn: Connection) -> str:
+    """
+    Validate group name and check if it exists in the database.
+    """
+    if not group_name or not isinstance(group_name, str):
+        raise HTTPException(status_code=400, detail="Group name is required and must be a string")
+    
+    validated = group_name.strip()
+    
+    if not validated:
+        raise HTTPException(status_code=400, detail="Group name cannot be empty")
+    
+    if len(validated) > 100:  # Reasonable length limit
+        raise HTTPException(status_code=400, detail="Group name is too long (max 100 characters)")
+    
+    # Check if group exists
+    from groups_teams_cache import group_exists_by_name_in_db
+    if not group_exists_by_name_in_db(validated, conn):
+        raise HTTPException(status_code=404, detail=f"Group '{validated}' not found")
+    
+    return validated
+
+
+def validate_team_name_or_group_name(name: str, is_group: bool, conn: Connection) -> str:
+    """
+    Validate team name or group name based on is_group flag.
+    
+    Args:
+        name: Team name or group name
+        is_group: If True, validate as group name; if False, validate as team name
+        conn: Database connection
+    
+    Returns:
+        Validated name
+    """
+    if is_group:
+        return validate_group_name(name, conn)
+    else:
+        return validate_team_name(name)
+
+
+def validate_team_or_group_name(team_name: Optional[str], group_name: Optional[str], conn: Connection) -> Dict[str, Optional[str]]:
+    """
+    Validate that exactly one of team_name or group_name is provided and validate it.
+    
+    Args:
+        team_name: Optional team name
+        group_name: Optional group name
+        conn: Database connection
+    
+    Returns:
+        Dict with validated 'team_name' and 'group_name' (one will be None)
+    """
+    # Check that exactly one is provided
+    has_team = team_name is not None and isinstance(team_name, str) and team_name.strip() != ""
+    has_group = group_name is not None and isinstance(group_name, str) and group_name.strip() != ""
+    
+    if not has_team and not has_group:
+        raise HTTPException(status_code=400, detail="Either team_name or group_name must be provided")
+    
+    if has_team and has_group:
+        raise HTTPException(status_code=400, detail="Cannot provide both team_name and group_name. Provide exactly one.")
+    
+    result: Dict[str, Optional[str]] = {"team_name": None, "group_name": None}
+    
+    if has_team:
+        result["team_name"] = validate_team_name(team_name)
+    else:
+        result["group_name"] = validate_group_name(group_name, conn)
+    
+    return result
+
 def validate_limit(limit: int) -> int:
     """
     Validate limit parameter to prevent abuse.
@@ -57,12 +131,13 @@ def validate_limit(limit: int) -> int:
 
 @team_ai_cards_router.get("/team-ai-cards/getTopCards")
 async def get_team_ai_cards(
-    team_name: str = Query(..., description="Team name to get AI cards for"),
+    team_name: str = Query(..., description="Team name or group name (if isGroup=true) to get AI cards for"),
     limit: int = Query(4, description="Number of AI cards to return (default: 4, max: 50)"),
+    isGroup: bool = Query(False, description="If true, team_name is treated as a group name"),
     conn: Connection = Depends(get_db_connection)
 ):
     """
-    Get team AI summary cards for a specific team.
+    Get team AI summary cards for a specific team or group.
     
     Returns the most recent + highest priority card for each type (max 1 per type).
     Cards are ordered by:
@@ -70,19 +145,24 @@ async def get_team_ai_cards(
     2. Date (newest first)
     
     Args:
-        team_name: Name of the team
+        team_name: Name of the team or group (if isGroup=true)
         limit: Number of AI cards to return (default: 4)
+        isGroup: If true, team_name is treated as a group name
     
     Returns:
         JSON response with AI cards list and metadata
     """
     try:
         # Validate inputs
-        validated_team_name = validate_team_name(team_name)
+        validated_team_name = validate_team_name_or_group_name(team_name, isGroup, conn)
         validated_limit = validate_limit(limit)
         
         # Get AI cards from database function
-        ai_cards = get_top_ai_cards(validated_team_name, validated_limit, conn)
+        # Use 'group_name' filter column if isGroup=True, otherwise 'team_name'
+        if isGroup:
+            ai_cards = get_top_ai_cards_filtered('group_name', validated_team_name, validated_limit, categories=None, conn=conn)
+        else:
+            ai_cards = get_top_ai_cards(validated_team_name, validated_limit, conn)
         
         return {
             "success": True,
@@ -108,7 +188,7 @@ async def get_team_ai_cards(
 
 @team_ai_cards_router.get("/team-ai-cards/getTopCardsWithRecommendations")
 async def get_team_ai_cards_with_recommendations(
-    team_name: str = Query(..., description="Team name to get AI cards for"),
+    team_name: str = Query(..., description="Team name or group name (if isGroup=true) to get AI cards for"),
     limit: int = Query(4, description="Number of AI cards to return (default: 4, max: 50)"),
     recommendations_limit: int = Query(5, description="Max recommendations per card (default: 5)"),
     category: Optional[List[str]] = Query(None, description="Filter by insight category/categories (e.g., 'Daily', 'Planning'). Can specify multiple: ?category=Daily&category=Planning"),
@@ -116,7 +196,7 @@ async def get_team_ai_cards_with_recommendations(
     conn: Connection = Depends(get_db_connection)
 ):
     """
-    Get team AI summary cards for a specific team with their recommendations.
+    Get team AI summary cards for a specific team or group with their recommendations.
     
     Returns the most recent + highest priority card for each type (max 1 per type),
     with recommendations linked via source_ai_summary_id.
@@ -125,11 +205,12 @@ async def get_team_ai_cards_with_recommendations(
     2. Date (newest first)
     
     Args:
-        team_name: Name of the team
+        team_name: Name of the team or group (if isGroup=true)
         limit: Number of AI cards to return (default: 4)
         recommendations_limit: Maximum recommendations per card (default: 5)
         category: Optional category filter(s) - only return cards with card_type matching insight types for any of these categories.
                  Can specify multiple: ?category=Daily&category=Planning
+        isGroup: If true, team_name is treated as a group name
     
     Returns:
         JSON response with AI cards list (each with recommendations) and metadata
@@ -140,7 +221,7 @@ async def get_team_ai_cards_with_recommendations(
             logger.info(f"isGroup parameter received: isGroup={isGroup}, team_name={team_name}")
         
         # Validate inputs
-        validated_team_name = validate_team_name(team_name)
+        validated_team_name = validate_team_name_or_group_name(team_name, isGroup, conn)
         validated_limit = validate_limit(limit)
         validated_recommendations_limit = validate_limit(recommendations_limit)
         
@@ -164,8 +245,10 @@ async def get_team_ai_cards_with_recommendations(
             validated_categories = validated_categories if validated_categories else None
         
         # Get AI cards with recommendations using shared generic function
+        # Use 'group_name' filter column if isGroup=True, otherwise 'team_name'
+        filter_column = 'group_name' if isGroup else 'team_name'
         ai_cards = get_top_ai_cards_with_recommendations_filtered(
-            'team_name',
+            filter_column,
             validated_team_name,
             validated_limit,
             validated_recommendations_limit,
@@ -212,6 +295,7 @@ async def get_team_ai_cards_collection(conn: Connection = Depends(get_db_connect
                 id,
                 date,
                 team_name,
+                group_name,
                 card_name,
                 priority,
                 description,
@@ -231,7 +315,7 @@ async def get_team_ai_cards_collection(conn: Connection = Depends(get_db_connect
         cards = []
         for row in rows:
             # Truncate description to first 200 characters with ellipsis when longer
-            description_text = row[5]
+            description_text = row[6]
             if isinstance(description_text, str) and len(description_text) > 200:
                 description_text = description_text[:200] + "..."
 
@@ -239,10 +323,11 @@ async def get_team_ai_cards_collection(conn: Connection = Depends(get_db_connect
                 "id": row[0],
                 "date": row[1],
                 "team_name": row[2],
-                "card_name": row[3],
-                "priority": row[4],
+                "group_name": row[3],
+                "card_name": row[4],
+                "priority": row[5],
                 "description": description_text,
-                "source_job_id": row[6]
+                "source_job_id": row[7]
             }
             cards.append(card_dict)
         
@@ -308,7 +393,7 @@ async def get_team_ai_card(id: int, conn: Connection = Depends(get_db_connection
 # -----------------------
 
 class TeamAICardCreateRequest(BaseModel):
-    team_name: str
+    team_name: Optional[str] = None
     card_name: str
     card_type: str
     description: str
@@ -343,9 +428,11 @@ async def create_team_ai_card(
     conn: Connection = Depends(get_db_connection)
 ):
     try:
-        validated_team_name = validate_team_name(request.team_name)
+        # Validate that exactly one of team_name or group_name is provided
+        validated = validate_team_or_group_name(request.team_name, request.group_name, conn)
         payload = request.model_dump()
-        payload["team_name"] = validated_team_name
+        payload["team_name"] = validated["team_name"] if validated["team_name"] else ""
+        payload["group_name"] = validated["group_name"]
         # If pi not provided, default to empty string (pi is NOT NULL in DB)
         if payload.get("pi") is None:
             payload["pi"] = ""
@@ -370,8 +457,23 @@ async def update_team_ai_card(
 ):
     try:
         updates = request.model_dump(exclude_unset=True)
+        
+        # Validate team_name if provided
         if "team_name" in updates and updates["team_name"] is not None:
             updates["team_name"] = validate_team_name(updates["team_name"])
+        
+        # Validate group_name if provided
+        if "group_name" in updates and updates["group_name"] is not None:
+            updates["group_name"] = validate_group_name(updates["group_name"], conn)
+        
+        # Ensure at least one of team_name or group_name is provided if updating name-related fields
+        # (This check is optional - we allow updating other fields without name)
+        if "team_name" in updates and "group_name" in updates:
+            if updates["team_name"] is not None and updates["group_name"] is not None:
+                raise HTTPException(
+                    status_code=400,
+                    detail="Cannot set both team_name and group_name. Provide exactly one."
+                )
 
         updated = update_ai_card_by_id(id, updates, conn)
         if not updated:

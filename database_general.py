@@ -136,7 +136,7 @@ def get_top_ai_cards_filtered(filter_column: str, filter_value: str, limit: int 
     2. Created_at (newest first)
     
     Args:
-        filter_column (str): Column to filter by (must be 'team_name' or 'pi' for security)
+        filter_column (str): Column to filter by (must be 'team_name', 'pi', or 'group_name' for security)
         filter_value (str): Value to filter by
         limit (int): Number of AI cards to return (default: 4)
         categories (Optional[List[str]]): Optional category filter - only return cards with card_type matching insight types for any of these categories
@@ -146,7 +146,7 @@ def get_top_ai_cards_filtered(filter_column: str, filter_value: str, limit: int 
         list: List of AI card dictionaries with all columns
     """
     # Security: Only allow specific columns to prevent SQL injection
-    allowed_columns = {'team_name', 'pi'}
+    allowed_columns = {'team_name', 'pi', 'group_name'}
     if filter_column not in allowed_columns:
         raise ValueError(f"filter_column must be one of {allowed_columns}, got: {filter_column}")
     
@@ -353,7 +353,7 @@ def get_top_ai_cards_with_recommendations_filtered(
     with recommendations linked via source_ai_summary_id.
     
     Args:
-        filter_column (str): Column to filter by ('team_name' or 'pi')
+        filter_column (str): Column to filter by ('team_name', 'pi', or 'group_name')
         filter_value (str): Value to filter by
         limit (int): Number of AI cards to return (default: 4)
         recommendations_limit (int): Maximum recommendations per card (default: 5)

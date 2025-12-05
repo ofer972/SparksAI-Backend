@@ -342,6 +342,8 @@ def select_sprint_for_teams(
             - 'team_names_list': List[str] - resolved team names
             - 'selected_sprint_name': Optional[str] - selected sprint name
             - 'selected_sprint_id': Optional[int] - selected sprint ID
+            - 'selected_sprint_start_date': Optional[str] - selected sprint start date
+            - 'selected_sprint_end_date': Optional[str] - selected sprint end date
             - 'error_message': Optional[str] - error message if validation fails
             - 'sprint_info': List[Dict] - detailed sprint information for logging
     """
@@ -354,6 +356,8 @@ def select_sprint_for_teams(
     
     selected_sprint_name = sprint_name
     selected_sprint_id = None
+    selected_sprint_start_date = None
+    selected_sprint_end_date = None
     error_message = None
     sprint_info = []
     
@@ -393,6 +397,8 @@ def select_sprint_for_teams(
                     selected_sprint = all_sprints[0]
                     selected_sprint_name = selected_sprint['name']
                     selected_sprint_id = selected_sprint['sprint_id']
+                    selected_sprint_start_date = selected_sprint.get('start_date')
+                    selected_sprint_end_date = selected_sprint.get('end_date')
                     logger.info(f"Auto-selected sprint '{selected_sprint_name}' (ID: {selected_sprint_id})")
         else:
             # Single team - select sprint with max total_issues
@@ -401,16 +407,30 @@ def select_sprint_for_teams(
                 selected_sprint = max(sprints, key=lambda x: x['total_issues'])
                 selected_sprint_name = selected_sprint['name']
                 selected_sprint_id = selected_sprint['sprint_id']
+                selected_sprint_start_date = selected_sprint.get('start_date')
+                selected_sprint_end_date = selected_sprint.get('end_date')
                 logger.info(f"Auto-selected sprint '{selected_sprint_name}' (ID: {selected_sprint_id}) with {selected_sprint['total_issues']} total issues")
             else:
                 error_message = "No active sprints found"
     else:
+        # Sprint name provided - need to look it up to get dates
         logger.info(f"Using provided sprint name: '{selected_sprint_name}'")
+        # Look up sprint by name to get dates (try first team in list)
+        if team_names_list:
+            sprints = get_sprints_with_total_issues_db(team_names_list[0], None, conn)  # Get all sprints (no status filter)
+            matching_sprint = next((s for s in sprints if s['name'] == selected_sprint_name), None)
+            if matching_sprint:
+                selected_sprint_id = matching_sprint['sprint_id']
+                selected_sprint_start_date = matching_sprint.get('start_date')
+                selected_sprint_end_date = matching_sprint.get('end_date')
+                logger.info(f"Found sprint '{selected_sprint_name}' (ID: {selected_sprint_id}) with dates")
     
     return {
         'team_names_list': team_names_list,
         'selected_sprint_name': selected_sprint_name,
         'selected_sprint_id': selected_sprint_id,
+        'selected_sprint_start_date': selected_sprint_start_date,
+        'selected_sprint_end_date': selected_sprint_end_date,
         'error_message': error_message,
         'sprint_info': sprint_info
     }
