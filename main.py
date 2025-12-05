@@ -141,7 +141,13 @@ async def timing_middleware(request: Request, call_next):
     try:
         # Skip START logging for specific paths
         if request_path not in _SKIP_LOG_PATHS:
-            logger.info(f"{color}{emoji} REQUEST: {request.method} {request_path} - START{Colors.RESET}")
+            # Add query parameters for GET requests
+            query_params_str = ""
+            if request.method == "GET" and request.query_params:
+                params_dict = dict(request.query_params)
+                query_params_str = f" - Params: {params_dict}"
+            
+            logger.info(f"{color}{emoji} REQUEST: {request.method} {request_path}{query_params_str} - START{Colors.RESET}")
         
         response = await call_next(request)
         
