@@ -970,6 +970,7 @@ def create_agent_jobs_table_if_not_exists(engine=None) -> bool:
                     completed_at TIMESTAMP WITH TIME ZONE,
                     updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
                     team_name VARCHAR(255),
+                    group_name VARCHAR(255),
                     input_sent TEXT,
                     pi VARCHAR(50)
                 );
@@ -1160,6 +1161,7 @@ def create_ai_summary_table_if_not_exists(engine=None) -> bool:
                     id SERIAL PRIMARY KEY,
                     date DATE NOT NULL,
                     team_name VARCHAR(255) NOT NULL,
+                    group_name VARCHAR(255),
                     card_name VARCHAR(255) NOT NULL,
                     card_type VARCHAR(100) NOT NULL,
                     priority VARCHAR(50) NOT NULL,

@@ -34,6 +34,12 @@ class PIJobForTeamCreateRequest(BaseModel):
     job_type: str
     pi: str
     team_name: str
+    group_name: Optional[str] = None
+
+
+class GroupJobCreateRequest(BaseModel):
+    job_type: str
+    group_name: str
 
 
 class ClaimNextJobRequest(BaseModel):
@@ -123,6 +129,32 @@ def validate_pi_job_for_team_request(job_type: str, pi: str, team_name: str, con
     # Validate team exists in database
     validate_team_exists(team_name, conn)
 
+
+def validate_group_exists(group_name: str, conn: Connection):
+    """Validate that the group exists in the database by checking groups table"""
+    try:
+        from groups_teams_cache import group_exists_by_name_in_db
+        
+        if not group_exists_by_name_in_db(group_name, conn):
+            raise HTTPException(status_code=404, detail=f"Group '{group_name}' not found")
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error validating group existence: {e}")
+        raise HTTPException(status_code=500, detail="Error validating group")
+
+
+def validate_group_job_request(job_type: str, group_name: str, conn: Connection):
+    """Validate group job creation request"""
+    if not job_type or not job_type.strip():
+        raise HTTPException(status_code=400, detail="job_type is required")
+    
+    if not group_name or not group_name.strip():
+        raise HTTPException(status_code=400, detail="group_name is required")
+    
+    # Validate group exists in database
+    validate_group_exists(group_name, conn)
+
 @agent_jobs_router.get("/agent-jobs")
 async def get_agent_jobs(conn: Connection = Depends(get_db_connection)):
     """
@@ -140,6 +172,7 @@ async def get_agent_jobs(conn: Connection = Depends(get_db_connection)):
                 job_id,
                 job_type,
                 team_name,
+                group_name,
                 pi,
                 status,
                 claimed_by,
@@ -169,12 +202,13 @@ async def get_agent_jobs(conn: Connection = Depends(get_db_connection)):
                 "job_id": row[0],
                 "job_type": row[1],
                 "team_name": row[2],
-                "pi": row[3],
-                "status": row[4],
-                "claimed_by": row[5],
-                "claimed_at": row[6],
+                "group_name": row[3],
+                "pi": row[4],
+                "status": row[5],
+                "claimed_by": row[6],
+                "claimed_at": row[7],
                 "result": result_text,
-                "error": row[8]
+                "error": row[9]
             }
             jobs.append(job_dict)
         
@@ -342,9 +376,9 @@ async def create_team_job(
         # Create the job
         insert_query = text(f"""
             INSERT INTO {config.AGENT_JOBS_TABLE} 
-            (job_type, team_name, pi, status, created_at, updated_at)
-            VALUES (:job_type, :team_name, NULL, 'Pending', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
-            RETURNING job_id, job_type, team_name, pi, status, created_at
+            (job_type, team_name, group_name, pi, status, created_at, updated_at)
+            VALUES (:job_type, :team_name, NULL, NULL, 'Pending', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+            RETURNING job_id, job_type, team_name, group_name, pi, status, created_at
         """)
         
         logger.info(f"Creating team job: {job_type} for team: {request.team_name}")
@@ -470,9 +504,9 @@ async def create_pi_job_for_team(
         # Create the job
         insert_query = text(f"""
             INSERT INTO {config.AGENT_JOBS_TABLE} 
-            (job_type, team_name, pi, status, created_at, updated_at)
-            VALUES (:job_type, :team_name, :pi, 'Pending', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
-            RETURNING job_id, job_type, team_name, pi, status, created_at
+            (job_type, team_name, group_name, pi, status, created_at, updated_at)
+            VALUES (:job_type, :team_name, :group_name, :pi, 'Pending', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+            RETURNING job_id, job_type, team_name, group_name, pi, status, created_at
         """)
         
         logger.info(f"Creating PI job: {job_type} for PI: {request.pi} and team: {request.team_name}")
@@ -480,6 +514,7 @@ async def create_pi_job_for_team(
         result = conn.execute(insert_query, {
             "job_type": job_type,
             "team_name": request.team_name,
+            "group_name": request.group_name,
             "pi": request.pi
         })
         
@@ -508,6 +543,70 @@ async def create_pi_job_for_team(
         )
 
 
+@agent_jobs_router.post("/agent-jobs/create-group-job")
+async def create_group_job(
+    request: GroupJobCreateRequest,
+    conn: Connection = Depends(get_db_connection)
+):
+    """
+    Create a new group-based agent job.
+    
+    Args:
+        request: GroupJobCreateRequest containing job_type and group_name
+        conn: Database connection from FastAPI dependency
+    
+    Returns:
+        JSON response with created job information
+    """
+    try:
+        # Normalize job_type: convert "Daily Agent" to "Daily Progress"
+        job_type = request.job_type
+        if job_type == "Daily Agent":
+            job_type = "Daily Progress"
+        
+        # Validate request
+        validate_group_job_request(job_type, request.group_name, conn)
+        
+        # Create the job
+        insert_query = text(f"""
+            INSERT INTO {config.AGENT_JOBS_TABLE} 
+            (job_type, team_name, group_name, pi, status, created_at, updated_at)
+            VALUES (:job_type, NULL, :group_name, NULL, 'Pending', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+            RETURNING job_id, job_type, team_name, group_name, pi, status, created_at
+        """)
+        
+        logger.info(f"Creating group job: {job_type} for group: {request.group_name}")
+        
+        result = conn.execute(insert_query, {
+            "job_type": job_type,
+            "group_name": request.group_name
+        })
+        
+        row = result.fetchone()
+        conn.commit()
+        
+        # Convert row to dictionary
+        job = dict(row._mapping)
+        
+        return {
+            "success": True,
+            "data": {
+                "job": job
+            },
+            "message": "Group job created successfully"
+        }
+    
+    except HTTPException:
+        # Re-raise HTTP exceptions (validation errors)
+        raise
+    except Exception as e:
+        logger.error(f"Error creating group job: {e}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to create group job: {str(e)}"
+        )
+
+
 @agent_jobs_router.post("/agent-jobs/{job_id}/cancel")
 async def cancel_agent_job(
     job_id: int,
@@ -529,7 +628,7 @@ async def cancel_agent_job(
             UPDATE {config.AGENT_JOBS_TABLE} 
             SET status = 'cancelled', updated_at = CURRENT_TIMESTAMP
             WHERE job_id = :job_id
-            RETURNING job_id, job_type, team_name, pi, status, created_at, updated_at
+            RETURNING job_id, job_type, team_name, group_name, pi, status, created_at, updated_at
         """)
         
         logger.info(f"Cancelling job {job_id}")
@@ -610,7 +709,7 @@ async def update_agent_job(
                 SET {set_clauses}, updated_at = CURRENT_TIMESTAMP
                 WHERE job_id = :job_id
                 AND status IN ('pending','Pending')
-                RETURNING job_id, job_type, team_name, pi, status, claimed_by, claimed_at, job_data, input_sent, result, error, created_at, updated_at
+                RETURNING job_id, job_type, team_name, group_name, pi, status, claimed_by, claimed_at, job_data, input_sent, result, error, created_at, updated_at
             """)
             result = conn.execute(claimed_update_query, params)
             row = result.fetchone()
@@ -630,7 +729,7 @@ async def update_agent_job(
                 UPDATE {config.AGENT_JOBS_TABLE}
                 SET {set_clauses}, updated_at = CURRENT_TIMESTAMP
                 WHERE job_id = :job_id
-                RETURNING job_id, job_type, team_name, pi, status, claimed_by, claimed_at, job_data, input_sent, result, error, created_at, updated_at
+                RETURNING job_id, job_type, team_name, group_name, pi, status, claimed_by, claimed_at, job_data, input_sent, result, error, created_at, updated_at
             """)
             result = conn.execute(update_query, params)
             row = result.fetchone()

@@ -116,6 +116,7 @@ async def get_pi_ai_cards_with_recommendations(
     limit: int = Query(4, description="Number of PI AI cards to return (default: 4, max: 50)"),
     recommendations_limit: int = Query(5, description="Max recommendations per card (default: 5)"),
     category: Optional[List[str]] = Query(None, description="Filter by insight category/categories (e.g., 'Daily', 'Planning'). Can specify multiple: ?category=Daily&category=Planning"),
+    isGroup: bool = Query(False, description="If true, team_name is treated as a group name"),
     conn: Connection = Depends(get_db_connection)
 ):
     """
@@ -138,6 +139,10 @@ async def get_pi_ai_cards_with_recommendations(
         JSON response with PI AI cards list (each with recommendations) and metadata
     """
     try:
+        # Log isGroup parameter if received
+        if isGroup:
+            logger.info(f"isGroup parameter received: isGroup={isGroup}, pi={pi}")
+        
         # Validate inputs
         validated_pi_name = validate_pi_name(pi)
         validated_limit = validate_limit(limit)
@@ -322,6 +327,7 @@ class PIAICardCreateRequest(BaseModel):
     source_job_id: Optional[int] = None
     full_information: Optional[str] = None
     information_json: Optional[str] = None
+    group_name: Optional[str] = None
 
 
 class PIAICardUpdateRequest(BaseModel):
@@ -336,6 +342,7 @@ class PIAICardUpdateRequest(BaseModel):
     source_job_id: Optional[int] = None
     full_information: Optional[str] = None
     information_json: Optional[str] = None
+    group_name: Optional[str] = None
 
 
 @pi_ai_cards_router.post("/pi-ai-cards")

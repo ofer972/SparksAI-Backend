@@ -112,6 +112,7 @@ async def get_team_ai_cards_with_recommendations(
     limit: int = Query(4, description="Number of AI cards to return (default: 4, max: 50)"),
     recommendations_limit: int = Query(5, description="Max recommendations per card (default: 5)"),
     category: Optional[List[str]] = Query(None, description="Filter by insight category/categories (e.g., 'Daily', 'Planning'). Can specify multiple: ?category=Daily&category=Planning"),
+    isGroup: bool = Query(False, description="If true, team_name is treated as a group name"),
     conn: Connection = Depends(get_db_connection)
 ):
     """
@@ -134,6 +135,10 @@ async def get_team_ai_cards_with_recommendations(
         JSON response with AI cards list (each with recommendations) and metadata
     """
     try:
+        # Log isGroup parameter if received
+        if isGroup:
+            logger.info(f"isGroup parameter received: isGroup={isGroup}, team_name={team_name}")
+        
         # Validate inputs
         validated_team_name = validate_team_name(team_name)
         validated_limit = validate_limit(limit)
@@ -314,6 +319,7 @@ class TeamAICardCreateRequest(BaseModel):
     full_information: Optional[str] = None
     information_json: Optional[str] = None
     pi: Optional[str] = None
+    group_name: Optional[str] = None
 
 
 class TeamAICardUpdateRequest(BaseModel):
@@ -328,6 +334,7 @@ class TeamAICardUpdateRequest(BaseModel):
     source_job_id: Optional[int] = None
     full_information: Optional[str] = None
     information_json: Optional[str] = None
+    group_name: Optional[str] = None
 
 
 @team_ai_cards_router.post("/team-ai-cards")
