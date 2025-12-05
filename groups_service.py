@@ -152,11 +152,13 @@ async def get_teams_in_group(
 class GroupCreateRequest(BaseModel):
     group_name: str
     parent_group_key: Optional[int] = None
+    ai_insight: Optional[bool] = None
 
 
 class GroupUpdateRequest(BaseModel):
     group_name: Optional[str] = None
     parent_group_key: Optional[int] = None
+    ai_insight: Optional[bool] = None
 
 
 @groups_router.post("/groups")
@@ -195,16 +197,17 @@ async def create_group(
                 )
         
         query = text("""
-            INSERT INTO public.groups (group_name, parent_group_key)
-            VALUES (:group_name, :parent_group_key)
-            RETURNING group_key, group_name, parent_group_key
+            INSERT INTO public.groups (group_name, parent_group_key, ai_insight)
+            VALUES (:group_name, :parent_group_key, :ai_insight)
+            RETURNING group_key, group_name, parent_group_key, ai_insight
         """)
         
         logger.info(f"Creating group: {request.group_name}, parent: {parent_key}")
         
         result = conn.execute(query, {
             "group_name": request.group_name,
-            "parent_group_key": parent_key
+            "parent_group_key": parent_key,
+            "ai_insight": request.ai_insight if request.ai_insight is not None else False
         })
         row = result.fetchone()
         conn.commit()
@@ -217,7 +220,8 @@ async def create_group(
         group = {
             "group_key": row[0],
             "group_name": row[1],
-            "parent_group_key": row[2]
+            "parent_group_key": row[2],
+            "ai_insight": row[3]
         }
         
         return {
@@ -309,6 +313,10 @@ async def update_group(
             updates.append("parent_group_key = :parent_group_key")
             params["parent_group_key"] = parent_key
         
+        if request.ai_insight is not None:
+            updates.append("ai_insight = :ai_insight")
+            params["ai_insight"] = request.ai_insight
+        
         if not updates:
             raise HTTPException(
                 status_code=400,
@@ -320,7 +328,7 @@ async def update_group(
             UPDATE public.groups
             SET {set_clause}
             WHERE group_key = :group_key
-            RETURNING group_key, group_name, parent_group_key
+            RETURNING group_key, group_name, parent_group_key, ai_insight
         """)
         
         logger.info(f"Updating group {validated_group_id}")
@@ -343,7 +351,8 @@ async def update_group(
         group = {
             "group_key": row[0],
             "group_name": row[1],
-            "parent_group_key": row[2]
+            "parent_group_key": row[2],
+            "ai_insight": row[3]
         }
         
         return {

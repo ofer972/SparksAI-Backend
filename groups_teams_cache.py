@@ -176,10 +176,10 @@ def load_all_groups_from_db(conn: Connection) -> List[Dict[str, Any]]:
     Helper function for services to use when cache misses.
     
     Returns:
-        List of groups with id, name, parent_id
+        List of groups with id, name, parent_id, ai_insight
     """
     query = text("""
-        SELECT group_key, group_name, parent_group_key
+        SELECT group_key, group_name, parent_group_key, ai_insight
         FROM public.groups
         ORDER BY group_name
     """)
@@ -189,7 +189,8 @@ def load_all_groups_from_db(conn: Connection) -> List[Dict[str, Any]]:
         groups.append({
             "id": row[0],
             "name": row[1],
-            "parent_id": row[2]
+            "parent_id": row[2],
+            "ai_insight": row[3]
         })
     return groups
 
