@@ -1160,7 +1160,7 @@ def create_ai_summary_table_if_not_exists(engine=None) -> bool:
                 CREATE TABLE public.ai_summary (
                     id SERIAL PRIMARY KEY,
                     date DATE NOT NULL,
-                    team_name VARCHAR(255) NOT NULL,
+                    team_name VARCHAR(255),
                     group_name VARCHAR(255),
                     card_name VARCHAR(255) NOT NULL,
                     card_type VARCHAR(100) NOT NULL,
@@ -1170,15 +1170,43 @@ def create_ai_summary_table_if_not_exists(engine=None) -> bool:
                     description TEXT NOT NULL,
                     full_information TEXT,
                     information_json TEXT,
-                    pi VARCHAR(255) NOT NULL,
+                    pi VARCHAR(255),
                     created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
-                    updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
-                    UNIQUE (date, team_name, card_name, pi)
+                    updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
                 );
                 
-                CREATE INDEX idx_ai_summary_team_date ON public.ai_summary(team_name, date DESC);
+                -- Partial unique indexes for different card types
+                -- Team cards without PI
+                CREATE UNIQUE INDEX idx_ai_summary_unique_team_no_pi 
+                ON public.ai_summary(date, team_name, card_name) 
+                WHERE team_name IS NOT NULL AND pi IS NULL;
+                
+                -- Team cards with PI
+                CREATE UNIQUE INDEX idx_ai_summary_unique_team_with_pi 
+                ON public.ai_summary(date, team_name, card_name, pi) 
+                WHERE team_name IS NOT NULL AND pi IS NOT NULL;
+                
+                -- Group cards without PI
+                CREATE UNIQUE INDEX idx_ai_summary_unique_group_no_pi 
+                ON public.ai_summary(date, group_name, card_name) 
+                WHERE group_name IS NOT NULL AND pi IS NULL;
+                
+                -- Group cards with PI
+                CREATE UNIQUE INDEX idx_ai_summary_unique_group_with_pi 
+                ON public.ai_summary(date, group_name, card_name, pi) 
+                WHERE group_name IS NOT NULL AND pi IS NOT NULL;
+                
+                -- PI-only cards
+                CREATE UNIQUE INDEX idx_ai_summary_unique_pi_only 
+                ON public.ai_summary(date, card_name, pi) 
+                WHERE team_name IS NULL AND group_name IS NULL AND pi IS NOT NULL;
+                
+                -- Performance indexes
+                CREATE INDEX idx_ai_summary_team_date ON public.ai_summary(team_name, date DESC) WHERE team_name IS NOT NULL;
+                CREATE INDEX idx_ai_summary_group_date ON public.ai_summary(group_name, date DESC) WHERE group_name IS NOT NULL;
                 CREATE INDEX idx_ai_summary_priority ON public.ai_summary(priority);
-                CREATE INDEX idx_ai_summary_pi ON public.ai_summary(pi);
+                CREATE INDEX idx_ai_summary_pi ON public.ai_summary(pi) WHERE pi IS NOT NULL;
+                CREATE INDEX idx_ai_summary_pi_date ON public.ai_summary(pi, date DESC) WHERE pi IS NOT NULL;
                 """
                 conn.execute(text(create_table_sql))
                 conn.commit()
