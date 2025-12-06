@@ -21,6 +21,8 @@ from database_pi import (
     fetch_scope_changes_data,
     fetch_pi_summary_data,
     fetch_pi_summary_data_by_team,
+    fetch_epic_inbound_dependency_data,
+    fetch_epic_outbound_dependency_data,
 )
 from database_team_metrics import (
     get_sprint_burndown_data_db,
@@ -1269,9 +1271,16 @@ def _fetch_epics_hierarchy(filters: Dict[str, Any], conn: Connection) -> ReportD
 
 
 def _fetch_epic_dependencies(filters: Dict[str, Any], conn: Connection) -> ReportDataResult:
+    from database_team_metrics import resolve_team_names_from_filter
+    
     pi_names = _parse_list(filters.get("pi") or filters.get("pi_names") or filters.get("pi_name"))
-    inbound_params: Dict[str, Any] = {}
-    outbound_params: Dict[str, Any] = {}
+    
+    # Extract team filter parameters
+    team = (filters.get("team_name") or filters.get("team") or "").strip() or None
+    is_group = filters.get("isGroup", False)
+    
+    # Resolve team names using shared helper function
+    team_names_list = resolve_team_names_from_filter(team, is_group, conn)
 
     # Fetch available PIs from both dependency tables (always)
     pis_query = text(
@@ -1289,60 +1298,47 @@ def _fetch_epic_dependencies(filters: Dict[str, Any], conn: Connection) -> Repor
     pis_rows = conn.execute(pis_query).fetchall()
     available_pis = [row[0] for row in pis_rows if row[0]]
 
-    inbound_where = "1=1"
-    outbound_where = "1=1"
-
+    # Fetch data using shared functions
+    # If multiple PIs, fetch for each and combine
+    inbound_data = []
+    outbound_data = []
+    
     if pi_names:
-        inbound_placeholders = ", ".join([f":inbound_pi_{i}" for i in range(len(pi_names))])
-        outbound_placeholders = ", ".join([f":outbound_pi_{i}" for i in range(len(pi_names))])
-        inbound_where = f"quarter_pi_of_epic IN ({inbound_placeholders})"
-        outbound_where = f"quarter_pi_of_epic IN ({outbound_placeholders})"
-        for i, pi in enumerate(pi_names):
-            inbound_params[f"inbound_pi_{i}"] = pi
-            outbound_params[f"outbound_pi_{i}"] = pi
+        # Fetch for each PI and combine results
+        for pi_name in pi_names:
+            inbound_records = fetch_epic_inbound_dependency_data(pi_name, team_names_list, conn)
+            outbound_records = fetch_epic_outbound_dependency_data(pi_name, team_names_list, conn)
+            inbound_data.extend(inbound_records)
+            outbound_data.extend(outbound_records)
+    else:
+        # No PI filter - fetch all data
+        inbound_data = fetch_epic_inbound_dependency_data(None, team_names_list, conn)
+        outbound_data = fetch_epic_outbound_dependency_data(None, team_names_list, conn)
 
-    inbound_query = text(
-        f"""
-        SELECT *
-        FROM public.epic_inbound_dependency_load_by_quarter
-        WHERE {inbound_where}
-        """
-    )
-    outbound_query = text(
-        f"""
-        SELECT *
-        FROM public.epic_outbound_dependency_metrics_by_quarter
-        WHERE {outbound_where}
-        """
-    )
-
-    inbound_rows = conn.execute(inbound_query, inbound_params).fetchall()
-    outbound_rows = conn.execute(outbound_query, outbound_params).fetchall()
-
-    def _format_rows(rows: List[Any]) -> List[Dict[str, Any]]:
-        formatted: List[Dict[str, Any]] = []
-        for row in rows:
-            row_dict = dict(row._mapping)
-            for key, value in list(row_dict.items()):
-                if value is not None and hasattr(value, "strftime"):
-                    row_dict[key] = value.strftime("%Y-%m-%d %H:%M:%S")
-            formatted.append(row_dict)
-        return formatted
-
-    inbound_data = _format_rows(inbound_rows)
-    outbound_data = _format_rows(outbound_rows)
+    # Build meta with team/group information
+    meta = {
+        "pi_names": pi_names,
+        "inbound_count": len(inbound_data),
+        "outbound_count": len(outbound_data),
+        "available_pis": available_pis,
+    }
+    
+    # Add team/group information to meta
+    if team:
+        if is_group:
+            meta["group_name"] = team
+            meta["teams_in_group"] = team_names_list
+        else:
+            meta["team_name"] = team
+    else:
+        meta["team_name"] = None
 
     return {
         "data": {
             "inbound": inbound_data,
             "outbound": outbound_data,
         },
-        "meta": {
-            "pi_names": pi_names,
-            "inbound_count": len(inbound_data),
-            "outbound_count": len(outbound_data),
-            "available_pis": available_pis,
-        },
+        "meta": meta,
     }
 
 

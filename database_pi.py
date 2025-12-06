@@ -449,3 +449,157 @@ def get_pi_participating_teams_db(pi: str, conn: Connection = None) -> List[str]
     except Exception as e:
         logger.error(f"Error fetching PI participating teams for PI {pi}: {e}")
         raise e
+
+
+def fetch_epic_inbound_dependency_data(
+    pi: Optional[str] = None,
+    team_names: Optional[List[str]] = None,
+    conn: Connection = None
+) -> List[Dict[str, Any]]:
+    """
+    Fetch epic inbound dependency load data from epic_inbound_dependency_load_by_quarter view.
+    
+    Args:
+        pi: Optional PI name filter (filters on quarter_pi_of_epic column)
+        team_names: Optional list of team names to filter by (filters on assignee_team column)
+        conn: Database connection from FastAPI dependency
+    
+    Returns:
+        List of dictionaries with all columns from view
+    """
+    try:
+        # Build WHERE clause conditions
+        where_conditions = []
+        params = {}
+        
+        if pi:
+            where_conditions.append("quarter_pi_of_epic = :pi")
+            params["pi"] = pi
+        
+        if team_names:
+            # Build parameterized IN clause
+            placeholders = ", ".join([f":team_name_{i}" for i in range(len(team_names))])
+            where_conditions.append(f"assignee_team IN ({placeholders})")
+            for i, name in enumerate(team_names):
+                params[f"team_name_{i}"] = name
+        
+        # Build SQL query
+        if where_conditions:
+            where_clause = " AND ".join(where_conditions)
+            query = text(f"""
+                SELECT *
+                FROM public.epic_inbound_dependency_load_by_quarter
+                WHERE {where_clause}
+            """)
+        else:
+            query = text("""
+                SELECT *
+                FROM public.epic_inbound_dependency_load_by_quarter
+            """)
+        
+        logger.info(f"Executing query to get epic inbound dependency load: pi={pi}, team_names={team_names}")
+        
+        result = conn.execute(query, params)
+        rows = result.fetchall()
+        
+        # Convert rows to list of dictionaries
+        records = []
+        for row in rows:
+            row_dict = dict(row._mapping)
+            
+            # Format date/datetime fields if they exist
+            for key, value in row_dict.items():
+                if value is not None:
+                    if hasattr(value, 'strftime'):
+                        if 'date' in key.lower() or 'time' in key.lower():
+                            row_dict[key] = value.strftime('%Y-%m-%d %H:%M:%S')
+                        else:
+                            row_dict[key] = value.strftime('%Y-%m-%d')
+                    elif hasattr(value, 'isoformat'):
+                        row_dict[key] = value.isoformat()
+            
+            records.append(row_dict)
+        
+        logger.info(f"Retrieved {len(records)} epic inbound dependency load records")
+        return records
+        
+    except Exception as e:
+        logger.error(f"Error fetching epic inbound dependency data: {e}")
+        raise e
+
+
+def fetch_epic_outbound_dependency_data(
+    pi: Optional[str] = None,
+    team_names: Optional[List[str]] = None,
+    conn: Connection = None
+) -> List[Dict[str, Any]]:
+    """
+    Fetch epic outbound dependency metrics data from epic_outbound_dependency_metrics_by_quarter view.
+    
+    Args:
+        pi: Optional PI name filter (filters on quarter_pi_of_epic column)
+        team_names: Optional list of team names to filter by (filters on owned_team column)
+        conn: Database connection from FastAPI dependency
+    
+    Returns:
+        List of dictionaries with all columns from view
+    """
+    try:
+        # Build WHERE clause conditions
+        where_conditions = []
+        params = {}
+        
+        if pi:
+            where_conditions.append("quarter_pi_of_epic = :pi")
+            params["pi"] = pi
+        
+        if team_names:
+            # Build parameterized IN clause
+            placeholders = ", ".join([f":team_name_{i}" for i in range(len(team_names))])
+            where_conditions.append(f"owned_team IN ({placeholders})")
+            for i, name in enumerate(team_names):
+                params[f"team_name_{i}"] = name
+        
+        # Build SQL query
+        if where_conditions:
+            where_clause = " AND ".join(where_conditions)
+            query = text(f"""
+                SELECT *
+                FROM public.epic_outbound_dependency_metrics_by_quarter
+                WHERE {where_clause}
+            """)
+        else:
+            query = text("""
+                SELECT *
+                FROM public.epic_outbound_dependency_metrics_by_quarter
+            """)
+        
+        logger.info(f"Executing query to get epic outbound dependency metrics: pi={pi}, team_names={team_names}")
+        
+        result = conn.execute(query, params)
+        rows = result.fetchall()
+        
+        # Convert rows to list of dictionaries
+        records = []
+        for row in rows:
+            row_dict = dict(row._mapping)
+            
+            # Format date/datetime fields if they exist
+            for key, value in row_dict.items():
+                if value is not None:
+                    if hasattr(value, 'strftime'):
+                        if 'date' in key.lower() or 'time' in key.lower():
+                            row_dict[key] = value.strftime('%Y-%m-%d %H:%M:%S')
+                        else:
+                            row_dict[key] = value.strftime('%Y-%m-%d')
+                    elif hasattr(value, 'isoformat'):
+                        row_dict[key] = value.isoformat()
+            
+            records.append(row_dict)
+        
+        logger.info(f"Retrieved {len(records)} epic outbound dependency metrics records")
+        return records
+        
+    except Exception as e:
+        logger.error(f"Error fetching epic outbound dependency data: {e}")
+        raise e

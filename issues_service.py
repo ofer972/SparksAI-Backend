@@ -1018,70 +1018,50 @@ async def get_issues_grouped_by_team(
 @issues_router.get("/issues/epic-inbound-dependency-load-by-quarter")
 async def get_epic_inbound_dependency_load_by_quarter(
     pi: Optional[str] = Query(None, description="Filter by PI (quarter_pi_of_epic)"),
+    team_name: Optional[str] = Query(None, description="Filter by team name or group name (if isGroup=true)"),
+    isGroup: bool = Query(False, description="If true, team_name is treated as a group name"),
     conn: Connection = Depends(get_db_connection)
 ):
     """
     Get epic inbound dependency load data from epic_inbound_dependency_load_by_quarter view.
     
-    Returns all columns from the view with optional filtering by PI.
+    Returns all columns from the view with optional filtering by PI and/or team name.
     
     Args:
         pi: Optional filter by PI (filters on quarter_pi_of_epic column)
+        team_name: Optional filter by team name or group name (if isGroup=true)
+        isGroup: If true, team_name is treated as a group name
     
     Returns:
         JSON response with epic inbound dependency load data (all columns from view)
     """
     try:
-        # Build WHERE clause conditions based on provided filters
-        where_conditions = []
-        params = {}
+        from database_team_metrics import resolve_team_names_from_filter
+        from database_pi import fetch_epic_inbound_dependency_data
         
-        if pi:
-            where_conditions.append("quarter_pi_of_epic = :pi")
-            params["pi"] = pi
+        # Resolve team names FIRST (before building WHERE clause)
+        team_names_list = resolve_team_names_from_filter(team_name, isGroup, conn)
         
-        # Build SQL query
-        if where_conditions:
-            where_clause = " AND ".join(where_conditions)
-            query = text(f"""
-                SELECT *
-                FROM public.epic_inbound_dependency_load_by_quarter
-                WHERE {where_clause}
-            """)
-        else:
-            query = text("""
-                SELECT *
-                FROM public.epic_inbound_dependency_load_by_quarter
-            """)
+        # Call shared function to fetch data
+        records = fetch_epic_inbound_dependency_data(pi, team_names_list, conn)
         
-        logger.info(f"Executing query to get epic inbound dependency load by quarter: pi={pi}")
+        # Build response data
+        response_data = {
+            "data": records,
+            "count": len(records)
+        }
         
-        result = conn.execute(query, params)
-        rows = result.fetchall()
-        
-        # Convert rows to list of dictionaries - return all columns from view
-        records = []
-        for row in rows:
-            row_dict = dict(row._mapping)
-            
-            # Format date/datetime fields if they exist
-            for key, value in row_dict.items():
-                if value is not None:
-                    if hasattr(value, 'strftime'):
-                        # Date or timestamp field
-                        if 'date' in key.lower() or 'time' in key.lower():
-                            row_dict[key] = value.strftime('%Y-%m-%d %H:%M:%S') if hasattr(value, 'strftime') else str(value)
-                        else:
-                            row_dict[key] = value.strftime('%Y-%m-%d')
-                    elif hasattr(value, 'isoformat'):
-                        # Datetime field
-                        row_dict[key] = value.isoformat()
-            
-            records.append(row_dict)
+        # Add metadata based on what was filtered
+        if team_name:
+            if isGroup:
+                response_data["group_name"] = team_name
+                response_data["teams_in_group"] = team_names_list
+            else:
+                response_data["team_name"] = team_name
         
         return {
             "success": True,
-            "data": records,
+            "data": response_data,
             "count": len(records),
             "message": f"Retrieved {len(records)} epic inbound dependency load records"
         }
@@ -1100,70 +1080,50 @@ async def get_epic_inbound_dependency_load_by_quarter(
 @issues_router.get("/issues/epic-outbound-dependency-metrics-by-quarter")
 async def get_epic_outbound_dependency_metrics_by_quarter(
     pi: Optional[str] = Query(None, description="Filter by PI (quarter_pi_of_epic)"),
+    team_name: Optional[str] = Query(None, description="Filter by team name or group name (if isGroup=true)"),
+    isGroup: bool = Query(False, description="If true, team_name is treated as a group name"),
     conn: Connection = Depends(get_db_connection)
 ):
     """
     Get epic outbound dependency metrics data from epic_outbound_dependency_metrics_by_quarter view.
     
-    Returns all columns from the view with optional filtering by PI.
+    Returns all columns from the view with optional filtering by PI and/or team name.
     
     Args:
         pi: Optional filter by PI (filters on quarter_pi_of_epic column)
+        team_name: Optional filter by team name or group name (if isGroup=true)
+        isGroup: If true, team_name is treated as a group name
     
     Returns:
         JSON response with epic outbound dependency metrics data (all columns from view)
     """
     try:
-        # Build WHERE clause conditions based on provided filters
-        where_conditions = []
-        params = {}
+        from database_team_metrics import resolve_team_names_from_filter
+        from database_pi import fetch_epic_outbound_dependency_data
         
-        if pi:
-            where_conditions.append("quarter_pi_of_epic = :pi")
-            params["pi"] = pi
+        # Resolve team names FIRST (before building WHERE clause)
+        team_names_list = resolve_team_names_from_filter(team_name, isGroup, conn)
         
-        # Build SQL query
-        if where_conditions:
-            where_clause = " AND ".join(where_conditions)
-            query = text(f"""
-                SELECT *
-                FROM public.epic_outbound_dependency_metrics_by_quarter
-                WHERE {where_clause}
-            """)
-        else:
-            query = text("""
-                SELECT *
-                FROM public.epic_outbound_dependency_metrics_by_quarter
-            """)
+        # Call shared function to fetch data
+        records = fetch_epic_outbound_dependency_data(pi, team_names_list, conn)
         
-        logger.info(f"Executing query to get epic outbound dependency metrics by quarter: pi={pi}")
+        # Build response data
+        response_data = {
+            "data": records,
+            "count": len(records)
+        }
         
-        result = conn.execute(query, params)
-        rows = result.fetchall()
-        
-        # Convert rows to list of dictionaries - return all columns from view
-        records = []
-        for row in rows:
-            row_dict = dict(row._mapping)
-            
-            # Format date/datetime fields if they exist
-            for key, value in row_dict.items():
-                if value is not None:
-                    if hasattr(value, 'strftime'):
-                        # Date or timestamp field
-                        if 'date' in key.lower() or 'time' in key.lower():
-                            row_dict[key] = value.strftime('%Y-%m-%d %H:%M:%S') if hasattr(value, 'strftime') else str(value)
-                        else:
-                            row_dict[key] = value.strftime('%Y-%m-%d')
-                    elif hasattr(value, 'isoformat'):
-                        # Datetime field
-                        row_dict[key] = value.isoformat()
-            
-            records.append(row_dict)
+        # Add metadata based on what was filtered
+        if team_name:
+            if isGroup:
+                response_data["group_name"] = team_name
+                response_data["teams_in_group"] = team_names_list
+            else:
+                response_data["team_name"] = team_name
         
         return {
             "success": True,
-            "data": records,
+            "data": response_data,
             "count": len(records),
             "message": f"Retrieved {len(records)} epic outbound dependency metrics records"
         }
