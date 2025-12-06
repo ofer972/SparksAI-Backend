@@ -1045,26 +1045,23 @@ async def get_epic_inbound_dependency_load_by_quarter(
         # Call shared function to fetch data
         records = fetch_epic_inbound_dependency_data(pi, team_names_list, conn)
         
-        # Build response data
-        response_data = {
+        # Build response
+        response = {
+            "success": True,
             "data": records,
-            "count": len(records)
+            "count": len(records),
+            "message": f"Retrieved {len(records)} epic inbound dependency load records"
         }
         
         # Add metadata based on what was filtered
         if team_name:
             if isGroup:
-                response_data["group_name"] = team_name
-                response_data["teams_in_group"] = team_names_list
+                response["group_name"] = team_name
+                response["teams_in_group"] = team_names_list
             else:
-                response_data["team_name"] = team_name
+                response["team_name"] = team_name
         
-        return {
-            "success": True,
-            "data": response_data,
-            "count": len(records),
-            "message": f"Retrieved {len(records)} epic inbound dependency load records"
-        }
+        return response
     
     except HTTPException:
         # Re-raise HTTP exceptions (validation errors)
@@ -1107,26 +1104,23 @@ async def get_epic_outbound_dependency_metrics_by_quarter(
         # Call shared function to fetch data
         records = fetch_epic_outbound_dependency_data(pi, team_names_list, conn)
         
-        # Build response data
-        response_data = {
+        # Build response
+        response = {
+            "success": True,
             "data": records,
-            "count": len(records)
+            "count": len(records),
+            "message": f"Retrieved {len(records)} epic outbound dependency metrics records"
         }
         
         # Add metadata based on what was filtered
         if team_name:
             if isGroup:
-                response_data["group_name"] = team_name
-                response_data["teams_in_group"] = team_names_list
+                response["group_name"] = team_name
+                response["teams_in_group"] = team_names_list
             else:
-                response_data["team_name"] = team_name
+                response["team_name"] = team_name
         
-        return {
-            "success": True,
-            "data": response_data,
-            "count": len(records),
-            "message": f"Retrieved {len(records)} epic outbound dependency metrics records"
-        }
+        return response
     
     except HTTPException:
         # Re-raise HTTP exceptions (validation errors)
