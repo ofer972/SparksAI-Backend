@@ -5,6 +5,7 @@ Reports Service - REST API endpoints for report metadata and resolved datasets.
 from __future__ import annotations
 
 from typing import Any, Dict, Optional, List
+import logging
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Query
 from sqlalchemy.engine import Connection
@@ -218,11 +219,15 @@ async def get_report_instance(
         override_filters["isGroup"] = isGroup
 
     # Gather all values for each query parameter
+    # FastAPI automatically decodes URL-encoded values from query strings
+    # Values like "AutoDesign%20Dev%2BTest" are automatically decoded to "AutoDesign Dev+Test"
     raw_params: Dict[str, List[str]] = {}
     for key, value in request.query_params.multi_items():
         # Skip isGroup as it's already handled above
         if key.lower() == "isgroup":
             continue
+        # FastAPI's request.query_params already decodes URL-encoded values
+        # Special characters like + (encoded as %2B) are properly decoded
         raw_params.setdefault(key, []).append(value)
 
     # Normalize multi-value parameters and aliases
@@ -275,10 +280,17 @@ async def get_report_instance(
         ) from err
     except ValueError as err:
         raise HTTPException(status_code=400, detail=str(err)) from err
+    except HTTPException:
+        # Re-raise HTTP exceptions as-is (they already have proper status codes)
+        raise
     except Exception as err:
+        # Log the full error for debugging, especially for URL encoding issues
+        logger = logging.getLogger(__name__)
+        logger.error(f"Failed to resolve report '{report_id}': {type(err).__name__}: {err}", exc_info=True)
+        logger.error(f"Filters used: {merged_filters}")
         raise HTTPException(
             status_code=500,
-            detail=f"Failed to resolve report '{report_id}': {err}",
+            detail=f"Failed to resolve report '{report_id}': {type(err).__name__}: {str(err)}",
         ) from err
 
     response_payload = {
