@@ -7,6 +7,7 @@ import json
 import redis
 from typing import Any, Optional
 import logging
+import time
 import config
 
 logger = logging.getLogger(__name__)
@@ -14,15 +15,37 @@ logger = logging.getLogger(__name__)
 # Initialize Redis client (singleton pattern)
 _redis_client = None
 
+# Failure state cache - track when Redis failed to avoid repeated connection attempts
+_redis_failed_until = None  # Timestamp when we can retry again (None = no failure recorded)
+_redis_cooldown_logged = False  # Track if we've already logged the cooldown message for this period
+REDIS_FAILURE_COOLDOWN_SECONDS = 1800  # 30 minutes cooldown period
+
 
 def get_redis_client():
     """
     Get or create the Redis client instance.
-    Returns None if Redis is disabled.
+    Returns None if Redis is disabled or if we're in a failure cooldown period.
     """
-    global _redis_client
+    global _redis_client, _redis_failed_until, _redis_cooldown_logged
     if not config.REDIS_ENABLED:
         return None
+    
+    # Check if we're in failure cooldown period
+    current_time = time.time()
+    if _redis_failed_until is not None and current_time < _redis_failed_until:
+        # Still in cooldown - skip connection attempt
+        # Only log once per cooldown period
+        if not _redis_cooldown_logged:
+            cooldown_minutes = REDIS_FAILURE_COOLDOWN_SECONDS // 60
+            logger.info(f"⏸️  Redis connection will not be attempted in the next {cooldown_minutes} minutes")
+            _redis_cooldown_logged = True
+        return None
+    
+    # Reset failure state if cooldown expired
+    if _redis_failed_until is not None and current_time >= _redis_failed_until:
+        _redis_failed_until = None
+        _redis_cooldown_logged = False  # Reset log flag for new cooldown period
+        logger.info("🔄 Redis failure cooldown expired, attempting reconnection...")
     
     if _redis_client is None:
         try:
@@ -32,15 +55,23 @@ def get_redis_client():
                 db=config.REDIS_DB,
                 password=config.REDIS_PASSWORD,
                 decode_responses=True,
-                socket_connect_timeout=5,
-                socket_timeout=5
+                socket_connect_timeout=2,
+                socket_timeout=2,
+                socket_keepalive=True,
+                socket_keepalive_options={}
             )
-            # Test connection
+            # Test connection with explicit timeout
             _redis_client.ping()
             logger.info(f"✅ Redis client connected to {config.REDIS_HOST}:{config.REDIS_PORT}")
+            # Reset failure state on successful connection
+            _redis_failed_until = None
+            _redis_cooldown_logged = False
         except Exception as e:
-            logger.warning(f"⚠️  Redis connection failed: {e}. Caching disabled.")
+            logger.warning(f"⚠️  Redis connection failed: {e}. Caching disabled for {REDIS_FAILURE_COOLDOWN_SECONDS}s.")
             _redis_client = None
+            # Set failure cooldown period (10 minutes from now)
+            _redis_failed_until = current_time + REDIS_FAILURE_COOLDOWN_SECONDS
+            _redis_cooldown_logged = False  # Reset log flag so we log on next cooldown period
             return None
     
     return _redis_client
