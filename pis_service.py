@@ -13,7 +13,7 @@ from datetime import date, datetime, timedelta
 import logging
 import re
 from database_connection import get_db_connection
-from database_pi import fetch_pi_predictability_data, fetch_pi_burndown_data, fetch_scope_changes_data, fetch_pi_summary_data, fetch_pi_summary_data_by_team, get_pi_participating_teams_db
+from database_pi import fetch_pi_predictability_data, fetch_pi_burndown_data, fetch_scope_changes_data, fetch_pi_summary_data, fetch_pi_summary_data_by_team, get_pi_participating_teams_db, fetch_epic_inbound_dependency_data, fetch_epic_outbound_dependency_data
 from database_team_metrics import resolve_team_names_from_filter
 import config
 
@@ -193,6 +193,30 @@ def get_progress_delta_pct_status(progress_delta_pct: Optional[float]) -> str:
     elif progress_delta_pct >= -40 and progress_delta_pct <= -20:
         return "yellow"
     else:  # progress_delta_pct < -40
+        return "red"
+
+
+def get_epic_cycle_time_status(cycle_time: Optional[float]) -> str:
+    """
+    Determine epic cycle time status based on value.
+    
+    Args:
+        cycle_time: Average cycle time in days (float or None)
+    
+    Returns:
+        "green" if cycle_time <= 50
+        "yellow" if 50 < cycle_time <= 75
+        "red" if cycle_time > 75
+        "gray" if cycle_time is None (no data)
+    """
+    if cycle_time is None:
+        return "gray"  # No data available
+    
+    if cycle_time <= 50:
+        return "green"
+    elif cycle_time <= 75:
+        return "yellow"
+    else:  # cycle_time > 75
         return "red"
 
 
@@ -1221,6 +1245,222 @@ async def get_pi_progress(
         raise HTTPException(
             status_code=500,
             detail=f"Failed to fetch PI progress: {str(e)}"
+        )
+
+
+@pis_router.get("/pis/top-dependencies-summary")
+async def get_top_dependencies_summary(
+    pi: str = Query(..., description="PI name (quarter_pi_of_epic) - required"),
+    team_name: Optional[str] = Query(None, description="Filter by team name or group name (if isGroup=true)"),
+    isGroup: bool = Query(False, description="If true, team_name is treated as a group name"),
+    conn: Connection = Depends(get_db_connection)
+):
+    """
+    Get top 3 teams with most uncompleted dependencies (inbound and outbound) for a PI.
+    
+    Fetches all rows from dependency views, calculates uncompleted issues in Python,
+    then returns top 3 teams by uncompleted count.
+    
+    Args:
+        pi: PI name (required) - filters on quarter_pi_of_epic
+        team_name: Optional team name or group name (if isGroup=true)
+        isGroup: If true, team_name is treated as a group name
+    
+    Returns:
+        JSON response with top 3 inbound and outbound dependencies by team
+    """
+    try:
+        # Resolve team names FIRST
+        team_names_list = resolve_team_names_from_filter(team_name, isGroup, conn)
+        
+        # Fetch ALL rows (each row is already per team - no aggregation needed)
+        inbound_rows = fetch_epic_inbound_dependency_data(pi, team_names_list, conn)
+        outbound_rows = fetch_epic_outbound_dependency_data(pi, team_names_list, conn)
+        
+        # Process inbound dependencies: calculate uncompleted for each row
+        inbound_with_uncompleted = []
+        for row in inbound_rows:
+            volume = int(row.get('volume_of_work_relied_upon', 0) or 0)
+            completed = int(row.get('completed_issues_dependent_count', 0) or 0)
+            uncompleted = volume - completed
+            
+            # Only include rows with uncompleted issues > 0
+            if uncompleted > 0:
+                team_data = {
+                    'assignee_team': row.get('assignee_team'),
+                    'volume_of_work_relied_upon': volume,
+                    'completed_issues_dependent_count': completed,
+                    'uncompleted_issues': uncompleted
+                }
+                inbound_with_uncompleted.append(team_data)
+        
+        # Sort by uncompleted DESC and take top 3
+        inbound_with_uncompleted.sort(key=lambda x: x['uncompleted_issues'], reverse=True)
+        top_inbound = inbound_with_uncompleted[:3]
+        
+        # Process outbound dependencies: calculate uncompleted for each row
+        outbound_with_uncompleted = []
+        for row in outbound_rows:
+            dependent_issues = int(row.get('number_of_dependent_issues', 0) or 0)
+            completed = int(row.get('completed_dependent_issues_count', 0) or 0)
+            uncompleted = dependent_issues - completed
+            
+            # Only include rows with uncompleted issues > 0
+            if uncompleted > 0:
+                team_data = {
+                    'owned_team': row.get('owned_team'),
+                    'number_of_epics_owned': int(row.get('number_of_epics_owned', 0) or 0),
+                    'number_of_dependent_issues': dependent_issues,
+                    'completed_dependent_issues_count': completed,
+                    'uncompleted_issues': uncompleted
+                }
+                outbound_with_uncompleted.append(team_data)
+        
+        # Sort by uncompleted DESC and take top 3
+        outbound_with_uncompleted.sort(key=lambda x: x['uncompleted_issues'], reverse=True)
+        top_outbound = outbound_with_uncompleted[:3]
+        
+        # Build response data
+        response_data = {
+            "top_inbound_dependencies": top_inbound,
+            "top_outbound_dependencies": top_outbound,
+            "pi": pi,
+            "count": {
+                "inbound": len(top_inbound),
+                "outbound": len(top_outbound)
+            }
+        }
+        
+        # Add team/group metadata (same pattern as other endpoints)
+        if team_name:
+            if isGroup:
+                response_data["group_name"] = team_name
+                response_data["teams_in_group"] = team_names_list
+            else:
+                response_data["team_name"] = team_name
+        
+        return {
+            "success": True,
+            "data": response_data,
+            "message": f"Retrieved top {len(top_inbound)} inbound and top {len(top_outbound)} outbound dependencies"
+        }
+    
+    except HTTPException:
+        # Re-raise HTTP exceptions (validation errors)
+        raise
+    except Exception as e:
+        logger.error(f"Error fetching top dependencies summary: {e}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to fetch top dependencies summary: {str(e)}"
+        )
+
+
+@pis_router.get("/pis/average-epic-cycle-time")
+async def get_average_epic_cycle_time(
+    months: int = Query(3, description="Number of months to look back (default: 3)", ge=1, le=12),
+    team_name: Optional[str] = Query(None, description="Filter by team name or group name (if isGroup=true)"),
+    isGroup: bool = Query(False, description="If true, team_name is treated as a group name"),
+    conn: Connection = Depends(get_db_connection)
+):
+    """
+    Get average cycle time (in days) for completed epics over the last N months.
+    
+    Args:
+        months: Number of months to look back (default: 3, range: 1-12)
+        team_name: Optional team name or group name (if isGroup=true)
+        isGroup: If true, team_name is treated as a group name
+    
+    Returns:
+        JSON response with average epic cycle time, status indicator, and epic count
+    """
+    try:
+        # Calculate start date (months * 30 days)
+        start_date = datetime.now().date() - timedelta(days=months * 30)
+        
+        # Resolve team names using shared helper function
+        team_names_list = resolve_team_names_from_filter(team_name, isGroup, conn)
+        
+        # Build WHERE clause conditions
+        where_conditions = [
+            "issue_type = 'Epic'",
+            "status_category = 'Done'",
+            "cycle_time_days IS NOT NULL",
+            "resolved_at >= :start_date",
+            "resolved_at IS NOT NULL"
+        ]
+        
+        params = {
+            "start_date": start_date
+        }
+        
+        # Add team filter if provided
+        if team_names_list:
+            placeholders = ", ".join([f":team_name_{i}" for i in range(len(team_names_list))])
+            where_conditions.append(f"team_name IN ({placeholders})")
+            for i, name in enumerate(team_names_list):
+                params[f"team_name_{i}"] = name
+        
+        # Build SQL query
+        where_clause = " AND ".join(where_conditions)
+        query = text(f"""
+            SELECT 
+                AVG(cycle_time_days) AS average_epic_cycle_time,
+                COUNT(*) AS epic_count
+            FROM public.jira_issues
+            WHERE {where_clause}
+        """)
+        
+        logger.info(f"Executing query to get average epic cycle time: months={months}, team_name={team_name}, isGroup={isGroup}")
+        
+        result = conn.execute(query, params)
+        row = result.fetchone()
+        
+        # Extract results
+        if row and row[0] is not None:
+            avg_cycle_time = float(row[0])
+            epic_count = int(row[1]) if row[1] else 0
+        else:
+            avg_cycle_time = None
+            epic_count = 0
+        
+        # Calculate status indicator
+        cycle_time_status = get_epic_cycle_time_status(avg_cycle_time)
+        
+        # Round average to 2 decimal places if not None
+        if avg_cycle_time is not None:
+            avg_cycle_time = round(avg_cycle_time, 2)
+        
+        # Build response data
+        response_data = {
+            "average_epic_cycle_time": avg_cycle_time,
+            "average_epic_cycle_time_status": cycle_time_status,
+            "epic_count": epic_count,
+            "months": months
+        }
+        
+        # Add team/group metadata (same pattern as other endpoints)
+        if team_name:
+            if isGroup:
+                response_data["group_name"] = team_name
+                response_data["teams_in_group"] = team_names_list
+            else:
+                response_data["team_name"] = team_name
+        
+        return {
+            "success": True,
+            "data": response_data,
+            "message": f"Retrieved average epic cycle time: {avg_cycle_time} days ({epic_count} epics)" if avg_cycle_time is not None else f"No epics found in the last {months} months"
+        }
+    
+    except HTTPException:
+        # Re-raise HTTP exceptions (validation errors)
+        raise
+    except Exception as e:
+        logger.error(f"Error fetching average epic cycle time: {e}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to fetch average epic cycle time: {str(e)}"
         )
 
 
