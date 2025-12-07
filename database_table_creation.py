@@ -109,6 +109,16 @@ DEFAULT_INSIGHT_TYPES = [
         "cron_config": {"hour": 5, "minute": 45}
     },
     {
+        "insight_type": "Group Dependencies",
+        "insight_description": "Analysis of Epic dependencies for the GROUP (inward and outward)",
+        "insight_categories": ["Daily", "Retrospective"],
+        "active": True,
+        "requires_pi": False,
+        "requires_team": False,
+        "requires_group": True,
+        "cron_config": {"hour": 5, "minute": 45}
+    },
+    {
         "insight_type": "WIP Level",
         "insight_description": "Monitors active work items",
         "insight_categories": ["Daily"],
