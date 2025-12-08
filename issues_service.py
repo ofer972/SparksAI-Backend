@@ -1427,6 +1427,209 @@ async def get_epics_by_pi(
         )
 
 
+@issues_router.get("/issues/active-sprint-epic-dependencies")
+async def get_active_epic_dependencies(
+    team_name: Optional[str] = Query(None, description="Team name or group name (if isGroup=true)"),
+    isGroup: bool = Query(False, description="If true, team_name is treated as a group name"),
+    conn: Connection = Depends(get_db_connection)
+):
+    """
+    Get active epic dependencies for a team or group.
+    
+    Calls the database function get_active_epic_dependencies() which retrieves
+    dependency metrics for all non-Done Epics that currently have one or more
+    dependency stories in active sprints.
+    
+    Args:
+        team_name: Optional team name or group name (if isGroup=true)
+        isGroup: If true, team_name is treated as a group name
+    
+    Returns:
+        JSON response with list of active epic dependencies and their details
+    """
+    try:
+        from database_team_metrics import resolve_team_names_from_filter
+        
+        # Resolve team names (handles group to teams translation)
+        team_names_list = resolve_team_names_from_filter(team_name, isGroup, conn)
+        
+        logger.info(f"Fetching active epic dependencies")
+        logger.info(f"Parameters: team_name={team_name}, isGroup={isGroup}")
+        if team_names_list:
+            logger.info(f"Resolved team names: {team_names_list}")
+        
+        # Build parameters for the function call
+        params = {}
+        
+        # Build query - pass team_names as array or NULL
+        if team_names_list:
+            # Pass array of team names to function
+            params['team_names_param'] = team_names_list
+            sql_query_text = text("""
+                SELECT * FROM public.get_active_epic_dependencies(
+                    CAST(:team_names_param AS text[])
+                )
+            """)
+            
+            logger.info(f"Executing SQL for active epic dependencies with teams: {team_names_list}")
+        else:
+            # Pass NULL for all teams
+            sql_query_text = text("""
+                SELECT * FROM public.get_active_epic_dependencies(
+                    NULL
+                )
+            """)
+            
+            logger.info("Executing SQL for active epic dependencies for all teams")
+        
+        # Execute query with parameters (SECURE: prevents SQL injection)
+        result = conn.execute(sql_query_text, params)
+        
+        # Convert rows to list of dictionaries - return all columns as-is
+        dependencies = []
+        for row in result:
+            row_dict = dict(row._mapping)
+            dependencies.append(row_dict)
+        
+        # Build response metadata
+        response_data = {
+            "dependencies": dependencies,
+            "count": len(dependencies),
+            "isGroup": isGroup
+        }
+        
+        # Add team/group information to response (following pattern from pis_service.py)
+        # This ensures the original parameter value is always included in the response
+        if team_name:
+            if isGroup:
+                # When isGroup=true, include the original group name AND the list of teams
+                response_data["group_name"] = team_name  # Original group name passed
+                response_data["teams_in_group"] = team_names_list  # List of teams in the group
+            else:
+                # When isGroup=false, include the original team name
+                response_data["team_name"] = team_name  # Original team name passed
+        else:
+            # No filter was provided
+            response_data["team_name"] = None
+        
+        return {
+            "success": True,
+            "data": response_data,
+            "message": f"Retrieved {len(dependencies)} active epic dependencies"
+        }
+    
+    except HTTPException:
+        # Re-raise HTTP exceptions (like validation errors from resolve_team_names_from_filter)
+        raise
+    except Exception as e:
+        logger.error(f"Error fetching active epic dependencies: {e}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to fetch active epic dependencies: {str(e)}"
+        )
+
+
+@issues_router.get("/issues/active-sprint-stories-by-epic")
+async def get_active_sprint_stories_by_epic(
+    team_name: Optional[str] = Query(None, description="Team name or group name (if isGroup=true)"),
+    isGroup: bool = Query(False, description="If true, team_name is treated as a group name"),
+    conn: Connection = Depends(get_db_connection)
+):
+    """
+    Get active sprint stories by epic for a team or group.
+    
+    Calls the database function get_active_sprint_stories_by_epic() which retrieves
+    active sprint stories grouped by epic.
+    
+    Args:
+        team_name: Optional team name or group name (if isGroup=true)
+        isGroup: If true, team_name is treated as a group name
+    
+    Returns:
+        JSON response with list of active sprint stories by epic and their details
+    """
+    try:
+        from database_team_metrics import resolve_team_names_from_filter
+        
+        # Resolve team names (handles group to teams translation)
+        team_names_list = resolve_team_names_from_filter(team_name, isGroup, conn)
+        
+        logger.info(f"Fetching active sprint stories by epic")
+        logger.info(f"Parameters: team_name={team_name}, isGroup={isGroup}")
+        if team_names_list:
+            logger.info(f"Resolved team names: {team_names_list}")
+        
+        # Build parameters for the function call
+        params = {}
+        
+        # Build query - pass team_names as array or NULL
+        if team_names_list:
+            # Pass array of team names to function
+            params['team_names_param'] = team_names_list
+            sql_query_text = text("""
+                SELECT * FROM public.get_active_sprint_stories_by_epic(
+                    CAST(:team_names_param AS text[])
+                )
+            """)
+            
+            logger.info(f"Executing SQL for active sprint stories by epic with teams: {team_names_list}")
+        else:
+            # Pass NULL for all teams
+            sql_query_text = text("""
+                SELECT * FROM public.get_active_sprint_stories_by_epic(
+                    NULL
+                )
+            """)
+            
+            logger.info("Executing SQL for active sprint stories by epic for all teams")
+        
+        # Execute query with parameters (SECURE: prevents SQL injection)
+        result = conn.execute(sql_query_text, params)
+        
+        # Convert rows to list of dictionaries - return all columns as-is
+        stories = []
+        for row in result:
+            row_dict = dict(row._mapping)
+            stories.append(row_dict)
+        
+        # Build response - stories array goes directly in data
+        # Metadata (count, team/group info) goes at top level
+        response = {
+            "success": True,
+            "data": stories,  # Direct array of story objects, NOT wrapped in a key
+            "count": len(stories),
+            "isGroup": isGroup
+        }
+        
+        # Add team/group information to response
+        # This ensures the original parameter value is always included in the response
+        if team_name:
+            if isGroup:
+                # When isGroup=true, include the original group name AND the list of teams
+                response["group_name"] = team_name  # Original group name passed
+                response["teams_in_group"] = team_names_list  # List of teams in the group
+            else:
+                # When isGroup=false, include the original team name
+                response["team_name"] = team_name  # Original team name passed
+        else:
+            # No filter was provided
+            response["team_name"] = None
+        
+        response["message"] = f"Retrieved {len(stories)} active sprint stories by epic"
+        
+        return response
+    
+    except HTTPException:
+        # Re-raise HTTP exceptions (like validation errors from resolve_team_names_from_filter)
+        raise
+    except Exception as e:
+        logger.error(f"Error fetching active sprint stories by epic: {e}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to fetch active sprint stories by epic: {str(e)}"
+        )
+
+
 @issues_router.get("/issues/{issue_id}")
 async def get_issue(
     issue_id: str,
