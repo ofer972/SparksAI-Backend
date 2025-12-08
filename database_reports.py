@@ -389,7 +389,8 @@ def _fetch_pi_burndown(filters: Dict[str, Any], conn: Connection) -> ReportDataR
     pi_name = (filters.get("pi") or "").strip() or None
     issue_type = (filters.get("issue_type") or "Epic").strip() or "Epic"
     project = filters.get("project")
-    team = filters.get("team")
+    # Standardize on team_name: check team_name first, then fall back to team for backward compatibility
+    team = (filters.get("team_name") or filters.get("team") or "").strip() or None
     is_group = filters.get("isGroup", False)
 
     # Fetch available PIs (always)
@@ -427,14 +428,16 @@ def _fetch_pi_burndown(filters: Dict[str, Any], conn: Connection) -> ReportDataR
         "available_pis": available_pis,
     }
     
-    # Add team/group information to meta
+    # Add team/group information to meta (standardize on team_name)
     if team:
         if is_group:
             meta["group_name"] = team
             meta["teams_in_group"] = team_names_list
         else:
-            meta["team"] = team
+            meta["team_name"] = team
+            meta["team"] = team  # Keep for backward compatibility
     else:
+        meta["team_name"] = None
         meta["team"] = None
 
     return {

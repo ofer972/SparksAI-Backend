@@ -599,8 +599,9 @@ async def get_pi_burndown(
     pi: str = Query(..., description="PI name (mandatory)"),
     project: str = Query(None, description="Project key filter"),
     issue_type: str = Query(None, description="Issue type filter"),
-    team: str = Query(None, description="Team name filter (or group name if isGroup=true)"),
-    isGroup: bool = Query(False, description="If true, team is treated as a group name"),
+    team_name: str = Query(None, description="Team name filter (or group name if isGroup=true)"),
+    team: str = Query(None, description="Team name filter (deprecated, use team_name instead)"),
+    isGroup: bool = Query(False, description="If true, team_name is treated as a group name"),
     conn: Connection = Depends(get_db_connection)
 ):
     """
@@ -610,12 +611,13 @@ async def get_pi_burndown(
         pi: PI name (mandatory)
         project: Project key filter (optional)
         issue_type: Issue type filter (optional, defaults to 'Epic')
-        team: Team name filter (optional, or group name if isGroup=true)
-        isGroup: If true, team parameter is treated as a group name (default: false)
+        team_name: Team name filter (optional, or group name if isGroup=true) - preferred parameter
+        team: Team name filter (optional, deprecated - use team_name instead)
+        isGroup: If true, team_name parameter is treated as a group name (default: false)
     
     Returns:
         JSON response with PI burndown data
-    """
+"""
     try:
         # Validate pi parameter (mandatory)
         if not pi:
@@ -628,11 +630,14 @@ async def get_pi_burndown(
         if issue_type is None or issue_type == "":
             issue_type = "Epic"
         
+        # Use team_name if provided, otherwise fall back to team (for backward compatibility)
+        team_filter = team_name if team_name is not None else team
+        
         # Resolve team names using shared helper function (handles single team, group, or None)
-        team_names_list = resolve_team_names_from_filter(team, isGroup, conn)
+        team_names_list = resolve_team_names_from_filter(team_filter, isGroup, conn)
         
         logger.info(f"Fetching PI burndown data for PI: {pi}")
-        logger.info(f"Filters: project={project}, issue_type={issue_type}, team={team}, isGroup={isGroup}")
+        logger.info(f"Filters: project={project}, issue_type={issue_type}, team_name={team_name}, team={team}, team_filter={team_filter}, isGroup={isGroup}")
         if team_names_list:
             logger.info(f"Resolved team names: {team_names_list}")
         
@@ -656,13 +661,15 @@ async def get_pi_burndown(
         }
         
         # Add team/group information to response
-        if team:
+        if team_filter:
             if isGroup:
-                response_data["group_name"] = team
+                response_data["group_name"] = team_filter
                 response_data["teams_in_group"] = team_names_list
             else:
-                response_data["team"] = team
+                response_data["team_name"] = team_filter
+                response_data["team"] = team_filter  # Keep for backward compatibility
         else:
+            response_data["team_name"] = None
             response_data["team"] = None
         
         return {
