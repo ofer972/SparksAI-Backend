@@ -533,7 +533,7 @@ def resolve_team_names_from_filter(
         return [validated]
 
 
-def get_closed_sprints_data_db(team_names: Optional[List[str]], months: int = 3, issue_type: Optional[str] = None, conn: Connection = None) -> List[Dict[str, Any]]:
+def get_closed_sprints_data_db(team_names: Optional[List[str]], months: int = 3, issue_type: Optional[str] = None, sort_by: str = "default", conn: Connection = None) -> List[Dict[str, Any]]:
     """
     Get closed sprints data for specific team(s) or all teams with detailed metrics.
     Uses the get_closed_sprint_summary_fn database function to get comprehensive sprint completion data.
@@ -542,6 +542,7 @@ def get_closed_sprints_data_db(team_names: Optional[List[str]], months: int = 3,
         team_names (Optional[List[str]]): List of team names to filter by, or None for all teams
         months (int): Number of months to look back (1, 2, 3, 4, 6, 9)
         issue_type (Optional[str]): Issue type filter (optional, e.g., "Story", "Bug", "Task")
+        sort_by (str): Sort order - "default" (team_name, end_date DESC) or "advanced" (start_date ASC, team_name ASC)
         conn (Connection): Database connection from FastAPI dependency
     
     Returns:
@@ -557,30 +558,36 @@ def get_closed_sprints_data_db(team_names: Optional[List[str]], months: int = 3,
         else:
             params["p_issue_type"] = None
         
+        # Determine sort order
+        if sort_by == "advanced":
+            order_by_clause = "ORDER BY start_date ASC, team_name ASC"
+        else:
+            order_by_clause = "ORDER BY team_name, end_date DESC"
+        
         # Build query - pass team_names as array or NULL
         if team_names:
             # Pass array of team names to function
             params["p_team_names"] = team_names
-            query = text("""
+            query = text(f"""
                 SELECT *
                 FROM public.get_closed_sprint_summary_fn(:months_back, CAST(:p_team_names AS text[]), :p_issue_type)
-                ORDER BY team_name, end_date DESC
+                {order_by_clause}
             """)
             
             logger.info(f"Executing query to get closed sprints data for teams: {team_names}")
-            logger.info(f"Parameters: team_names={team_names}, months={months}, issue_type={issue_type}")
+            logger.info(f"Parameters: team_names={team_names}, months={months}, issue_type={issue_type}, sort_by={sort_by}")
             
             result = conn.execute(query, params)
         else:
             # Pass NULL for all teams
-            query = text("""
+            query = text(f"""
                 SELECT *
                 FROM public.get_closed_sprint_summary_fn(:months_back, NULL, :p_issue_type)
-                ORDER BY team_name, end_date DESC
+                {order_by_clause}
             """)
             
             logger.info(f"Executing query to get closed sprints data for all teams")
-            logger.info(f"Parameters: months={months}, issue_type={issue_type}")
+            logger.info(f"Parameters: months={months}, issue_type={issue_type}, sort_by={sort_by}")
             
             result = conn.execute(query, params)
         

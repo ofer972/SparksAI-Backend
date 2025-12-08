@@ -466,7 +466,18 @@ def _parse_list(value: Any) -> List[str]:
     return [str(value).strip()]
 
 
-def _fetch_team_closed_sprints(filters: Dict[str, Any], conn: Connection) -> ReportDataResult:
+def _fetch_closed_sprints_flat_report(filters: Dict[str, Any], conn: Connection, sort_by: str = "default") -> ReportDataResult:
+    """
+    Shared helper function to fetch closed sprints in flat structure for reports.
+    
+    Args:
+        filters: Dictionary with team_name, isGroup, months, issue_type
+        conn: Database connection
+        sort_by: Sort order - "default" or "advanced"
+    
+    Returns:
+        ReportDataResult with flat array of sprints and metadata
+    """
     from database_team_metrics import resolve_team_names_from_filter
     
     team_name = filters.get("team_name")
@@ -510,8 +521,8 @@ def _fetch_team_closed_sprints(filters: Dict[str, Any], conn: Connection) -> Rep
     # Resolve team names using shared helper function
     team_names_list = resolve_team_names_from_filter(team_name, is_group, conn)
 
-    # Fetch closed sprints (supports None for all teams, or list of team names)
-    closed_sprints = get_closed_sprints_data_db(team_names_list, months, issue_type, conn)
+    # Fetch closed sprints with specified sort order
+    closed_sprints = get_closed_sprints_data_db(team_names_list, months, issue_type, sort_by=sort_by, conn=conn)
 
     # Calculate average velocity: sum of issues_done across all sprints / number of sprints
     sprint_count = len(closed_sprints)
@@ -531,6 +542,16 @@ def _fetch_team_closed_sprints(filters: Dict[str, Any], conn: Connection) -> Rep
             "available_issue_types": available_issue_types,
         },
     }
+
+
+def _fetch_team_closed_sprints(filters: Dict[str, Any], conn: Connection) -> ReportDataResult:
+    """Fetch team closed sprints report (uses default sorting)."""
+    return _fetch_closed_sprints_flat_report(filters, conn, sort_by="default")
+
+
+def _fetch_team_sprint_velocity_advanced(filters: Dict[str, Any], conn: Connection) -> ReportDataResult:
+    """Fetch team sprint velocity advanced report (sorted by start_date ASC, team_name ASC)."""
+    return _fetch_closed_sprints_flat_report(filters, conn, sort_by="advanced")
 
 
 def _fetch_team_issues_trend(filters: Dict[str, Any], conn: Connection) -> ReportDataResult:
@@ -1765,6 +1786,7 @@ _REPORT_DATA_FETCHERS: Dict[str, ReportDataFetcher] = {
     "team_current_sprint_progress": _fetch_team_current_sprint_progress,
     "pi_burndown": _fetch_pi_burndown,
     "team_closed_sprints": _fetch_team_closed_sprints,
+    "team_sprint_velocity_advanced": _fetch_team_sprint_velocity_advanced,
     "team_issues_trend": _fetch_team_issues_trend,
     "pi_predictability": _fetch_pi_predictability,
     "epic_scope_changes": _fetch_epic_scope_changes,

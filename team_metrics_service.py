@@ -737,6 +737,103 @@ async def get_sprints(
         )
 
 
+def _fetch_closed_sprints_flat(
+    team_name: Optional[str],
+    isGroup: bool,
+    months: int,
+    issue_type: Optional[str],
+    conn: Connection,
+    sort_by: str = "default"
+) -> Dict[str, Any]:
+    """
+    Shared helper function to fetch closed sprints in flat structure (not grouped by team).
+    
+    Args:
+        team_name: Optional team name or group name (if isGroup=true)
+        isGroup: If true, team_name is treated as a group name
+        months: Number of months to look back
+        issue_type: Optional issue type filter
+        conn: Database connection
+        sort_by: Sort order - "default" or "advanced"
+    
+    Returns:
+        Dictionary with sprints list, metadata, and message
+    """
+    # Validate months parameter
+    if months not in [1, 2, 3, 4, 6, 9]:
+        raise HTTPException(
+            status_code=400, 
+            detail="Months parameter must be one of: 1, 2, 3, 4, 6, 9"
+        )
+    
+    # Resolve team names using shared helper function
+    team_names_list = resolve_team_names_from_filter(team_name, isGroup, conn)
+    
+    # Build filter description for logging and response
+    filter_description = None
+    validated_name = None
+    
+    if team_name is not None:
+        if isGroup:
+            validated_name = validate_group_name(team_name)
+            if team_names_list:
+                filter_description = f"group '{validated_name}' ({len(team_names_list)} teams)"
+                logger.info(f"Found {len(team_names_list)} teams in group '{validated_name}': {team_names_list}")
+        else:
+            validated_name = validate_team_name(team_name)
+            filter_description = f"team '{validated_name}'"
+    
+    # Get closed sprints from database function with specified sort order
+    closed_sprints_all = get_closed_sprints_data_db(
+        team_names_list if team_names_list else None, 
+        months, 
+        issue_type=issue_type, 
+        sort_by=sort_by,
+        conn=conn
+    )
+    
+    # Calculate metrics
+    total_sprints = len(closed_sprints_all)
+    total_issues_done = sum(sprint.get('issues_done', 0) or 0 for sprint in closed_sprints_all)
+    average_velocity = round(total_issues_done / total_sprints, 2) if total_sprints > 0 else 0.0
+    
+    # Get unique teams count
+    unique_teams = set()
+    for sprint in closed_sprints_all:
+        sprint_team = sprint.get('team_name')
+        if sprint_team:
+            unique_teams.add(sprint_team)
+    teams_count = len(unique_teams)
+    
+    # Build metadata
+    meta = {
+        "months": months,
+        "total_sprints": total_sprints,
+        "teams_count": teams_count,
+        "average_velocity": average_velocity
+    }
+    
+    # Add team/group information to metadata
+    if validated_name:
+        if isGroup:
+            meta["group_name"] = validated_name
+            meta["teams_in_group"] = team_names_list
+        else:
+            meta["team_name"] = validated_name
+    
+    # Build response message
+    if filter_description:
+        message = f"Retrieved sprint velocity data for {filter_description} (last {months} months)"
+    else:
+        message = f"Retrieved sprint velocity data for all teams (last {months} months)"
+    
+    return {
+        "sprints": closed_sprints_all,
+        "meta": meta,
+        "message": message
+    }
+
+
 @team_metrics_router.get("/team-metrics/closed-sprints")
 async def get_closed_sprints(
     team_name: Optional[str] = Query(None, description="Team name or group name (if isGroup=true). If not provided, returns all closed sprints."),
@@ -848,6 +945,54 @@ async def get_closed_sprints(
         raise HTTPException(
             status_code=500,
             detail=f"Failed to fetch closed sprints: {str(e)}"
+        )
+
+
+@team_metrics_router.get("/team-metrics/sprint-velocity-advanced")
+async def get_sprint_velocity_advanced(
+    team_name: Optional[str] = Query(None, description="Team name or group name (if isGroup=true). If not provided, returns all closed sprints."),
+    months: int = Query(3, description="Number of months to look back (1, 2, 3, 4, 6, 9)", ge=1, le=12),
+    isGroup: bool = Query(False, description="If true, team_name is treated as a group name"),
+    issue_type: Optional[str] = Query(None, description="Issue type filter (optional, e.g., 'Story', 'Bug', 'Task')"),
+    conn: Connection = Depends(get_db_connection)
+):
+    """
+    Get closed sprints data sorted by start date (ascending) and team name (ascending) in a flat structure.
+    
+    This endpoint retrieves comprehensive sprint completion data including:
+    - Sprint name, start/end dates, and sprint goals
+    - Completion percentages and issue counts
+    - Issues planned, added, done, and remaining
+    
+    Results are returned as a flat array sorted by sprint start date (oldest first) and team name (alphabetical).
+    
+    Parameters:
+    - team_name: Optional team name or group name (if isGroup=true). If not provided, returns all closed sprints.
+    - months: Number of months to look back (optional, default: 3)
+      Valid values: 1, 2, 3, 4, 6, 9
+    - isGroup: If true, team_name is treated as a group name and returns closed sprints for all teams in that group
+    - issue_type: Optional issue type filter (e.g., 'Story', 'Bug', 'Task')
+    
+    Returns:
+        JSON response with closed sprints as flat array sorted by start_date ASC, team_name ASC
+    """
+    try:
+        result = _fetch_closed_sprints_flat(team_name, isGroup, months, issue_type, conn, sort_by="advanced")
+        
+        return {
+            "success": True,
+            "data": result["sprints"],
+            "meta": result["meta"],
+            "message": result["message"]
+        }
+    
+    except HTTPException:
+        raise # Re-raise FastAPI HTTPExceptions
+    except Exception as e:
+        logger.error(f"Error fetching sprint velocity advanced (team_name={team_name}, isGroup={isGroup}): {e}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to fetch sprint velocity advanced: {str(e)}"
         )
 
 
