@@ -109,8 +109,18 @@ DEFAULT_INSIGHT_TYPES = [
         "cron_config": {"hour": 5, "minute": 45}
     },
     {
-        "insight_type": "Group Dependencies",
-        "insight_description": "Analysis of Epic dependencies for the GROUP (inward and outward)",
+        "insight_type": "Group Sprint Dependency",
+        "insight_description": "Current sprint - cross-team dependency analysis",
+        "insight_categories": ["Daily", "Retrospective"],
+        "active": True,
+        "requires_pi": False,
+        "requires_team": False,
+        "requires_group": True,
+        "cron_config": {"hour": 5, "minute": 45}
+    },
+    {
+        "insight_type": "Group Epic Dependencies",
+        "insight_description": "Analysis of EPIC dependencies for the GROUP (inward and outward)",
         "insight_categories": ["Daily", "Retrospective"],
         "active": True,
         "requires_pi": False,
