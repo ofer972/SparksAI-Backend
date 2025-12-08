@@ -167,6 +167,7 @@ def fetch_scope_changes_data(quarters: List[str], conn: Connection = None) -> Li
     
     Uses the view: public.epic_pi_scope_changes_long_with_issues
     Columns: "Quarter Name" (as quarter), "Metric Name" (as metric_name), "Value" (as value)
+    The view orders results by PI end date (chronological order).
     
     Args:
         quarters (List[str]): List of quarter/PI names to filter by (mandatory)
@@ -182,10 +183,10 @@ def fetch_scope_changes_data(quarters: List[str], conn: Connection = None) -> Li
         logger.info(f"Executing scope changes query for quarters: {quarters}")
         
         # SECURITY: Use parameterized query with PostgreSQL array handling for IN clause
+        # Note: View already orders by PI end date, so no additional ORDER BY needed
         sql_query_text = text("""
             SELECT * FROM public.epic_pi_scope_changes_long_with_issues
             WHERE "Quarter Name" = ANY(:quarters)
-            ORDER BY "Quarter Name", "Metric Name"
         """)
         
         logger.info(f"Executing SQL for scope changes")
