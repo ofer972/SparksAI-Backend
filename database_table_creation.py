@@ -26,7 +26,7 @@ DEFAULT_INSIGHT_TYPES = [
         "requires_pi": True,
         "requires_team": False,
         "requires_group": False,
-        "cron_config": {"day_of_week": "sun,tue,thu", "hour": 6, "minute": 0}
+        "cron_config": {"day_of_week": "sun,mon,tue,wed,thu,fri", "hour": 6, "minute": 0}
     },
     {
         "insight_type": "PI Dependencies",
