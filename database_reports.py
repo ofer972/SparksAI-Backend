@@ -513,6 +513,11 @@ def _fetch_team_closed_sprints(filters: Dict[str, Any], conn: Connection) -> Rep
     # Fetch closed sprints (supports None for all teams, or list of team names)
     closed_sprints = get_closed_sprints_data_db(team_names_list, months, issue_type, conn)
 
+    # Calculate average velocity: sum of issues_done across all sprints / number of sprints
+    sprint_count = len(closed_sprints)
+    total_issues_done = sum(sprint.get('issues_done', 0) or 0 for sprint in closed_sprints)
+    average_velocity = round(total_issues_done / sprint_count, 2) if sprint_count > 0 else 0.0
+
     return {
         "data": closed_sprints,
         "meta": {
@@ -521,6 +526,7 @@ def _fetch_team_closed_sprints(filters: Dict[str, Any], conn: Connection) -> Rep
             "months": months,
             "issue_type": issue_type,
             "count": len(closed_sprints),
+            "average_velocity": average_velocity,
             "available_teams": available_teams,
             "available_issue_types": available_issue_types,
         },

@@ -771,53 +771,29 @@ async def get_closed_sprints(
         JSON response with closed sprints grouped by team and metadata
     """
     try:
-        team_names_list = []
-        filter_description = None
-        validated_name = None
-        
-        # Build team list based on parameters
-        if team_name is not None:
-            if isGroup:
-                # Validate as group name
-                validated_group_name = validate_group_name(team_name)
-                validated_name = validated_group_name
-                
-                # Get all teams under this group
-                get_teams_query = text("""
-                    SELECT t.team_name
-                    FROM public.teams t
-                    JOIN public.team_groups g ON t.group_key = g.group_key
-                    WHERE g.group_name = :group_name
-                    ORDER BY t.team_name
-                """)
-                
-                logger.info(f"Fetching teams for group: {validated_group_name}")
-                teams_result = conn.execute(get_teams_query, {"group_name": validated_group_name})
-                team_rows = teams_result.fetchall()
-                
-                if not team_rows:
-                    # Group doesn't exist or has no teams
-                    raise HTTPException(
-                        status_code=404,
-                        detail=f"Group '{validated_group_name}' not found or has no teams"
-                    )
-                
-                team_names_list = [row[0] for row in team_rows]
-                filter_description = f"group '{validated_group_name}' ({len(team_names_list)} teams)"
-                logger.info(f"Found {len(team_names_list)} teams in group '{validated_group_name}': {team_names_list}")
-            else:
-                # Validate as team name
-                validated_team_name = validate_team_name(team_name)
-                validated_name = validated_team_name
-                team_names_list = [validated_team_name]
-                filter_description = f"team '{validated_team_name}'"
-        
-        # Validate months parameter
+        # Validate months parameter first
         if months not in [1, 2, 3, 4, 6, 9]:
             raise HTTPException(
                 status_code=400, 
                 detail="Months parameter must be one of: 1, 2, 3, 4, 6, 9"
             )
+        
+        # Resolve team names using shared helper function (handles single team, group, or None)
+        team_names_list = resolve_team_names_from_filter(team_name, isGroup, conn)
+        
+        # Build filter description for logging and response
+        filter_description = None
+        validated_name = None
+        
+        if team_name is not None:
+            if isGroup:
+                validated_name = validate_group_name(team_name)
+                if team_names_list:
+                    filter_description = f"group '{validated_name}' ({len(team_names_list)} teams)"
+                    logger.info(f"Found {len(team_names_list)} teams in group '{validated_name}': {team_names_list}")
+            else:
+                validated_name = validate_team_name(team_name)
+                filter_description = f"team '{validated_name}'"
         
         # Get closed sprints from database function (supports multiple teams)
         closed_sprints_all = get_closed_sprints_data_db(team_names_list if team_names_list else None, months, issue_type=issue_type, conn=conn)
@@ -839,11 +815,16 @@ async def get_closed_sprints(
         
         total_sprints = len(closed_sprints_all)
         
+        # Calculate average velocity: sum of issues_done across all sprints / number of sprints
+        total_issues_done = sum(sprint.get('issues_done', 0) or 0 for sprint in closed_sprints_all)
+        average_velocity = round(total_issues_done / total_sprints, 2) if total_sprints > 0 else 0.0
+        
         response_data = {
             "months": months,
             "closed_sprints_by_team": sprints_by_team,
             "total_sprints": total_sprints,
-            "teams_count": len(sprints_by_team)
+            "teams_count": len(sprints_by_team),
+            "average_velocity": average_velocity
         }
         
         # Add metadata based on what was filtered
