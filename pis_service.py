@@ -242,7 +242,7 @@ def validate_pi(pi: str) -> str:
 
 def fetch_wip_data_from_db(
     pi: str,
-    team: Optional[str] = None,
+    team_names: Optional[List[str]] = None,
     project: Optional[str] = None,
     conn: Connection = None
 ) -> Dict[str, Any]:
@@ -252,7 +252,7 @@ def fetch_wip_data_from_db(
     
     Args:
         pi: PI name (required)
-        team: Team name filter (optional)
+        team_names: List of team names filter (optional, supports multiple teams)
         project: Project key filter (optional)
         conn: Database connection
     
@@ -274,9 +274,9 @@ def fetch_wip_data_from_db(
     }
     
     # Add optional filters
-    if team:
-        where_conditions.append("team_name = :team")
-        params["team"] = team
+    if team_names:
+        where_conditions.append("team_name = ANY(:team_names)")
+        params["team_names"] = team_names
     
     if project:
         where_conditions.append("project_key = :project")
@@ -293,7 +293,7 @@ def fetch_wip_data_from_db(
         WHERE {where_clause}
     """)
     
-    logger.info(f"Executing WIP query for PI: {pi}, team={team}, project={project}")
+    logger.info(f"Executing WIP query for PI: {pi}, team_names={team_names}, project={project}")
     
     result = conn.execute(query, params)
     row = result.fetchone()
@@ -758,8 +758,8 @@ async def get_pi_status_for_today(
     pi: str = Query(None, description="PI name filter"),
     project: str = Query(None, description="Project key filter"),
     issue_type: str = Query(None, description="Issue type filter"),
-    team: str = Query(None, description="Team name filter (or group name if isGroup=true)"),
-    isGroup: bool = Query(False, description="If true, team is treated as a group name"),
+    team_name: str = Query(None, description="Team name filter (or group name if isGroup=true)"),
+    isGroup: bool = Query(False, description="If true, team_name is treated as a group name"),
     plan_grace_period: int = Query(None, description="Planned grace period in days"),
     conn: Connection = Depends(get_db_connection)
 ):
@@ -772,8 +772,8 @@ async def get_pi_status_for_today(
         pi: PI name filter (optional)
         project: Project key filter (optional)
         issue_type: Issue type filter (optional)
-        team: Team name filter (optional, or group name if isGroup=true)
-        isGroup: If true, team parameter is treated as a group name (default: false)
+        team_name: Team name filter (optional, or group name if isGroup=true)
+        isGroup: If true, team_name parameter is treated as a group name (default: false)
         plan_grace_period: Planned grace period in days (optional)
     
     Returns:
@@ -791,10 +791,10 @@ async def get_pi_status_for_today(
             issue_type = "Epic"
         
         # Resolve team names using shared helper function (handles single team, group, or None)
-        team_names_list = resolve_team_names_from_filter(team, isGroup, conn)
+        team_names_list = resolve_team_names_from_filter(team_name, isGroup, conn)
         
         logger.info(f"Fetching PI status for today")
-        logger.info(f"Parameters: pi={pi}, project={project}, issue_type={issue_type}, team={team}, isGroup={isGroup}, plan_grace_period={plan_grace_period}")
+        logger.info(f"Parameters: pi={pi}, project={project}, issue_type={issue_type}, team_name={team_name}, isGroup={isGroup}, plan_grace_period={plan_grace_period}")
         if team_names_list:
             logger.info(f"Resolved team names: {team_names_list}")
         
@@ -811,12 +811,10 @@ async def get_pi_status_for_today(
         # Fetch WIP data using the same logic as WIP endpoint
         wip_data = None
         if pi:  # Only fetch WIP if PI is provided
-            # For WIP, pass single team name (first from list) or None
-            # Note: fetch_wip_data_from_db accepts single team name, not list
-            wip_team = team_names_list[0] if team_names_list and len(team_names_list) == 1 else None
+            # Pass team_names_list to fetch_wip_data_from_db (now supports multiple teams)
             wip_data = fetch_wip_data_from_db(
                 pi=pi,
-                team=wip_team,
+                team_names=team_names_list,
                 project=project,
                 conn=conn
             )
@@ -863,8 +861,8 @@ async def get_pi_status_for_today_by_team(
     pi: str = Query(None, description="PI name filter"),
     project: str = Query(None, description="Project key filter"),
     issue_type: str = Query(None, description="Issue type filter"),
-    team: str = Query(None, description="Team name filter (or group name if isGroup=true)"),
-    isGroup: bool = Query(False, description="If true, team is treated as a group name"),
+    team_name: str = Query(None, description="Team name filter (or group name if isGroup=true)"),
+    isGroup: bool = Query(False, description="If true, team_name is treated as a group name"),
     plan_grace_period: int = Query(None, description="Planned grace period in days"),
     conn: Connection = Depends(get_db_connection)
 ):
@@ -878,8 +876,8 @@ async def get_pi_status_for_today_by_team(
         pi: PI name filter (optional)
         project: Project key filter (optional)
         issue_type: Issue type filter (optional)
-        team: Team name filter (optional, or group name if isGroup=true)
-        isGroup: If true, team parameter is treated as a group name (default: false)
+        team_name: Team name filter (optional, or group name if isGroup=true)
+        isGroup: If true, team_name parameter is treated as a group name (default: false)
         plan_grace_period: Planned grace period in days (optional)
     
     Returns:
@@ -895,10 +893,10 @@ async def get_pi_status_for_today_by_team(
             issue_type = "Epic"
         
         # Resolve team names using shared helper function (handles single team, group, or None)
-        team_names_list = resolve_team_names_from_filter(team, isGroup, conn)
+        team_names_list = resolve_team_names_from_filter(team_name, isGroup, conn)
         
         logger.info(f"Fetching PI status for today by team")
-        logger.info(f"Parameters: pi={pi}, project={project}, issue_type={issue_type}, team={team}, isGroup={isGroup}, plan_grace_period={plan_grace_period}")
+        logger.info(f"Parameters: pi={pi}, project={project}, issue_type={issue_type}, team_name={team_name}, isGroup={isGroup}, plan_grace_period={plan_grace_period}")
         if team_names_list:
             logger.info(f"Resolved team names: {team_names_list}")
         
@@ -985,13 +983,15 @@ async def get_pi_status_for_today_by_team(
         }
         
         # Add team/group information to response
-        if team:
+        if team_name:
             if isGroup:
-                response_data["group_name"] = team
+                response_data["group_name"] = team_name
                 response_data["teams_in_group"] = team_names_list
             else:
-                response_data["team"] = team
+                response_data["team_name"] = team_name
+                response_data["team"] = team_name  # Keep for backward compatibility
         else:
+            response_data["team_name"] = None
             response_data["team"] = None
         
         return {
@@ -1014,7 +1014,8 @@ async def get_pi_status_for_today_by_team(
 @pis_router.get("/pis/WIP")
 async def get_pi_wip(
     pi: str = Query(..., description="PI name (mandatory)"),
-    team: str = Query(None, description="Team name filter (optional)"),
+    team_name: str = Query(None, description="Team name filter (or group name if isGroup=true)"),
+    isGroup: bool = Query(False, description="If true, team_name is treated as a group name"),
     project: str = Query(None, description="Project key filter (optional)"),
     conn: Connection = Depends(get_db_connection)
 ):
@@ -1026,7 +1027,8 @@ async def get_pi_wip(
     
     Parameters:
         pi: PI name (mandatory)
-        team: Team name filter (optional)
+        team_name: Team name filter (optional, or group name if isGroup=true)
+        isGroup: If true, team_name is treated as a group name (default: false)
         project: Project key filter (optional)
     
     Returns:
@@ -1037,6 +1039,8 @@ async def get_pi_wip(
         - in_progress_percentage: Percentage of epics in progress
     """
     try:
+        from database_team_metrics import resolve_team_names_from_filter
+        
         # Validate pi parameter (mandatory)
         if not pi:
             raise HTTPException(
@@ -1044,13 +1048,39 @@ async def get_pi_wip(
                 detail="pi parameter is required"
             )
         
+        # Resolve team names using shared helper function (handles single team, group, or None)
+        team_names_list = resolve_team_names_from_filter(team_name, isGroup, conn)
+        
+        logger.info(f"Fetching PI WIP counts for PI: {pi}")
+        logger.info(f"Parameters: pi={pi}, team_name={team_name}, isGroup={isGroup}, project={project}")
+        if team_names_list:
+            logger.info(f"Resolved team names: {team_names_list}")
+        
         # Use shared helper function to fetch WIP data
         wip_data = fetch_wip_data_from_db(
             pi=pi,
-            team=team,
+            team_names=team_names_list,
             project=project,
             conn=conn
         )
+        
+        # Build response metadata
+        response_metadata = {
+            "pi": pi,
+            "project": project
+        }
+        
+        # Add team/group information to response
+        if team_name:
+            if isGroup:
+                response_metadata["group_name"] = team_name
+                response_metadata["teams_in_group"] = team_names_list
+            else:
+                response_metadata["team_name"] = team_name
+                response_metadata["team"] = team_name  # Keep for backward compatibility
+        else:
+            response_metadata["team_name"] = None
+            response_metadata["team"] = None
         
         return {
             "success": True,
@@ -1059,9 +1089,7 @@ async def get_pi_wip(
                 "count_in_progress_status": wip_data['count_in_progress_status'],
                 "total_epics": wip_data['total_epics'],
                 "in_progress_percentage": wip_data['in_progress_percentage'],
-                "pi": pi,
-                "team": team,
-                "project": project
+                **response_metadata
             },
             "message": f"Retrieved WIP counts: {wip_data['in_progress_epics']} epics in progress out of {wip_data['total_epics']} total epics ({wip_data['in_progress_percentage']:.2f}%)"
         }
@@ -1082,7 +1110,8 @@ async def get_pi_progress(
     pi: str = Query(None, description="PI name filter"),
     project: str = Query(None, description="Project key filter"),
     issue_type: str = Query(None, description="Issue type filter"),
-    team: str = Query(None, description="Team name filter"),
+    team_name: str = Query(None, description="Team name filter (or group name if isGroup=true)"),
+    isGroup: bool = Query(False, description="If true, team_name is treated as a group name"),
     plan_grace_period: int = Query(None, description="Planned grace period in days"),
     conn: Connection = Depends(get_db_connection)
 ):
@@ -1099,13 +1128,16 @@ async def get_pi_progress(
         pi: PI name filter (optional)
         project: Project key filter (optional)
         issue_type: Issue type filter (optional, defaults to 'Epic')
-        team: Team name filter (optional)
+        team_name: Team name filter (optional, or group name if isGroup=true)
+        isGroup: If true, team_name is treated as a group name (default: false)
         plan_grace_period: Planned grace period in days (optional, defaults to 5)
     
     Returns:
         JSON response with PI progress metrics including calculated status fields
     """
     try:
+        from database_team_metrics import resolve_team_names_from_filter
+        
         # Set default value of 5 for plan_grace_period if empty/None
         if plan_grace_period is None:
             plan_grace_period = 5
@@ -1114,21 +1146,44 @@ async def get_pi_progress(
         if issue_type is None or issue_type == "":
             issue_type = "Epic"
         
+        # Resolve team names using shared helper function (handles single team, group, or None)
+        team_names_list = resolve_team_names_from_filter(team_name, isGroup, conn)
+        
         logger.info(f"Fetching PI progress")
-        logger.info(f"Parameters: pi={pi}, project={project}, issue_type={issue_type}, team={team}, plan_grace_period={plan_grace_period}")
+        logger.info(f"Parameters: pi={pi}, project={project}, issue_type={issue_type}, team_name={team_name}, isGroup={isGroup}, plan_grace_period={plan_grace_period}")
+        if team_names_list:
+            logger.info(f"Resolved team names: {team_names_list}")
         
         # Call database function (same as get-pi-status-for-today)
         summary_data = fetch_pi_summary_data(
             target_pi_name=pi,
             target_project_keys=project,
             target_issue_type=issue_type,
-            target_team_names=team,
+            target_team_names=team_names_list,
             planned_grace_period_days=plan_grace_period,
             conn=conn
         )
         
         # Handle empty result
         if not summary_data or len(summary_data) == 0:
+            # Build response metadata
+            response_metadata = {
+                "pi": pi,
+                "project": project
+            }
+            
+            # Add team/group information to response
+            if team_name:
+                if isGroup:
+                    response_metadata["group_name"] = team_name
+                    response_metadata["teams_in_group"] = team_names_list
+                else:
+                    response_metadata["team_name"] = team_name
+                    response_metadata["team"] = team_name  # Keep for backward compatibility
+            else:
+                response_metadata["team_name"] = None
+                response_metadata["team"] = None
+            
             return {
                 "success": True,
                 "data": {
@@ -1141,9 +1196,7 @@ async def get_pi_progress(
                     "percent_completed": 0.0,
                     "percent_completed_status": "green",
                     "in_progress_issues_status": "green",
-                    "pi": pi,
-                    "team": team,
-                    "project": project
+                    **response_metadata
                 },
                 "message": "No PI data found for the specified filters"
             }
@@ -1224,6 +1277,25 @@ async def get_pi_progress(
             total_issues
         )
         
+        # Build response metadata
+        response_metadata = {
+            "pi": pi,
+            "project": project,
+            "issue_type": issue_type
+        }
+        
+        # Add team/group information to response
+        if team_name:
+            if isGroup:
+                response_metadata["group_name"] = team_name
+                response_metadata["teams_in_group"] = team_names_list
+            else:
+                response_metadata["team_name"] = team_name
+                response_metadata["team"] = team_name  # Keep for backward compatibility
+        else:
+            response_metadata["team_name"] = None
+            response_metadata["team"] = None
+        
         return {
             "success": True,
             "data": {
@@ -1236,10 +1308,7 @@ async def get_pi_progress(
                 "percent_completed": percent_completed,
                 "percent_completed_status": percent_completed_status,
                 "in_progress_issues_status": in_progress_issues_status,
-                "pi": pi,
-                "team": team,
-                "project": project,
-                "issue_type": issue_type
+                **response_metadata
             },
             "message": f"Retrieved PI progress data"
         }
