@@ -270,27 +270,29 @@ async def claim_next_pending_job(
         conn.commit()
         db_duration = time.time() - db_start
 
+        endpoint_duration = time.time() - endpoint_start
+        
         if not row:
-            endpoint_duration = time.time() - endpoint_start
-            # logger.info(f"claim-next: Total={endpoint_duration*1000:.1f}ms (204)")
+            # No job available
+            logger.info(f"Claim job finished - Status: 204 (No pending jobs available)")
             return Response(status_code=204)
 
         job = dict(row._mapping)
-        endpoint_duration = time.time() - endpoint_start
-        logger.info(f"claim-next: Total={endpoint_duration*1000:.1f}ms, job_id={job.get('job_id')}")
+        job_id = job.get('job_id')
+        logger.info(f"Claim job finished - Status: 200, job_id={job_id}")
 
         return {
             "success": True,
             "data": {"job": job},
             "message": "Job claimed successfully"
         }
-    except HTTPException:
+    except HTTPException as http_ex:
         endpoint_duration = time.time() - endpoint_start
-        logger.info(f"claim-next: Total={endpoint_duration*1000:.1f}ms (HTTP error)")
+        logger.info(f"Claim job finished - Status: {http_ex.status_code}")
         raise
     except Exception as e:
         endpoint_duration = time.time() - endpoint_start
-        logger.error(f"claim-next: Total={endpoint_duration*1000:.1f}ms, Error: {e}")
+        logger.info(f"Claim job finished - Status: 500, Error: {str(e)}")
         conn.rollback()
         raise HTTPException(status_code=500, detail=f"Failed to claim next pending job: {str(e)}")
 
