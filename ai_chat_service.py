@@ -14,10 +14,8 @@ from enum import Enum
 import logging
 import json
 import httpx
-import socket
 import os
 from datetime import datetime, date
-from pathlib import Path
 from database_connection import get_db_connection
 from database_general import get_team_ai_card_by_id, get_recommendation_by_id, get_prompt_by_email_and_name, get_pi_ai_card_by_id, get_formatted_job_data_for_llm_followup_insight, get_formatted_job_data_for_llm_followup_recommendation
 from database_team_metrics import (
@@ -100,114 +98,6 @@ def convert_history_to_sql_format(history_json: Dict[str, Any]) -> List[Dict[str
     # Return last 3 exchanges to keep token count reasonable
     return sql_history[-3:] if len(sql_history) > 3 else sql_history
 
-
-def is_localhost():
-    """
-    Detect if running on localhost by checking hostname patterns.
-    Returns True if localhost, False if Railway/production.
-    """
-    try:
-        hostname = socket.gethostname().lower()
-        
-        # Railway/production hostnames typically contain these patterns
-        production_keywords = [
-            'railway',
-            'railway-app',
-            'replica',
-            'prod',
-            'production'
-        ]
-        
-        # If hostname contains production keywords, it's NOT localhost
-        for keyword in production_keywords:
-            if keyword in hostname:
-                return False
-        
-        # Otherwise, assume it's localhost
-        return True
-    except Exception:
-        # If we can't determine, default to False (safer - won't write files in production)
-        return False
-
-
-def write_llm_context_debug_file(
-    chat_type: str,
-    conversation_id: str,
-    conversation_context: Optional[str],
-    system_message: Optional[str],
-    request: Any,
-    history_json: Optional[Dict[str, Any]] = None
-) -> None:
-    """
-    Generic function to write LLM context to debug file (only on localhost).
-    
-    Args:
-        chat_type: Chat type string (e.g., "Team_insights", "Team_dashboard")
-        conversation_id: Conversation ID
-        conversation_context: Conversation context string
-        system_message: System message string
-        request: AIChatRequest object with all request details
-    """
-    if not is_localhost():
-        logger.debug(f"Skipping debug file write for {chat_type} (not running on localhost)")
-        return
-    
-    try:
-        # Build entity identifier for filename
-        entity_id = None
-        if request.insights_id:
-            entity_id = f"_insights{request.insights_id}"
-        elif request.recommendation_id:
-            entity_id = f"_rec{request.recommendation_id}"
-        elif request.selected_team and chat_type == "Team_dashboard":
-            # For Team_dashboard, use team name (sanitized for filename)
-            team_sanitized = request.selected_team.replace(' ', '_').replace('/', '_')[:30]
-            entity_id = f"_team{team_sanitized}"
-        
-        entity_suffix = entity_id if entity_id else ""
-        filename = f"llm_context_debug_{chat_type}_conv{conversation_id}{entity_suffix}.txt"
-        file_path = Path(filename)
-        
-        with open(file_path, 'w', encoding='utf-8') as f:
-            f.write("=" * 80 + "\n")
-            f.write(f"LLM CONTEXT DEBUG - {chat_type}\n")
-            f.write(f"Timestamp: {datetime.now().isoformat()}\n")
-            f.write(f"Conversation ID: {conversation_id}\n")
-            f.write(f"User ID: {request.user_id}\n")
-            f.write(f"Team: {request.selected_team}\n")
-            f.write(f"PI: {request.selected_pi}\n")
-            if request.insights_id:
-                f.write(f"Insights ID: {request.insights_id}\n")
-            if request.recommendation_id:
-                f.write(f"Recommendation ID: {request.recommendation_id}\n")
-            f.write("=" * 80 + "\n\n")
-            
-            f.write("SYSTEM MESSAGE:\n")
-            f.write("-" * 80 + "\n")
-            f.write(system_message or "(None)" + "\n\n")
-            
-            f.write("CONVERSATION CONTEXT:\n")
-            f.write("-" * 80 + "\n")
-            f.write(conversation_context or "(None)" + "\n\n")
-            
-            f.write("USER QUESTION:\n")
-            f.write("-" * 80 + "\n")
-            f.write(request.question or "(Empty)" + "\n\n")
-            
-            # Include chat history if available (last 5 messages)
-            if history_json:
-                f.write("CHAT HISTORY (Last 5 messages):\n")
-                f.write("-" * 80 + "\n")
-                messages = history_json.get('messages', [])
-                for msg in messages[-5:]:
-                    role = msg.get('role', 'unknown')
-                    content = msg.get('content', '')
-                    f.write(f"[{role}]: {content[:200]}...\n")
-                f.write("\n" + "=" * 80 + "\n")
-        
-        logger.info(f"TEMPORARY DEBUG: Wrote LLM context to file: {filename}")
-    except Exception as e:
-        logger.warning(f"Failed to write LLM context debug file for {chat_type}: {e}")
 
 # System message constant for all AI chat interactions
 SYSTEM_MESSAGE = "You are AI assistant specialized in Agile, Scrum, Scaled Agile. All your answers should be brief with no more than 3 paragraphs with concrete and specific information based on the content provided"
@@ -1533,20 +1423,7 @@ async def ai_chat(
         except Exception as e:
             logger.warning(f"Failed to store initial request snapshot: {e}")
 
-        # 2.10. TEMPORARY: Write context to file for testing (AI Chat Insights/Recommendations/Dashboard)
-        # Only write debug files on localhost (not on Railway/production)
-        # One file per conversation (overwrites on each request for same conversation_id)
-        if chat_type_str in ["Team_insights", "PI_insights", "Recommendation_reason", "Team_dashboard", "PI_dashboard"]:
-            write_llm_context_debug_file(
-                chat_type=chat_type_str,
-                conversation_id=conversation_id,
-                conversation_context=conversation_context,
-                system_message=system_message,
-                request=request,
-                history_json=history_json
-            )
-
-        # 2.11. Check for SQL AI trigger and process if needed
+        # 2.10. Check for SQL AI trigger and process if needed
         # Initialize variables to track SQL data for chat history
         sql_was_triggered = False
         sql_was_attempted = False  # Track if SQL was attempted (even if it failed)
