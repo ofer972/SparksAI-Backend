@@ -989,6 +989,42 @@ async def fetch_dashboard_reports_data(
     logger.info(f"Top bar filters: {json.dumps(top_bar_filters, indent=2, cls=DateTimeEncoder)}")
     logger.info(f"Report filters: {json.dumps(report_filters, indent=2, cls=DateTimeEncoder)}")
     
+    def normalize_filters(filters: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Normalize frontend filter names to backend filter names.
+        Converts:
+        - selectedTeam -> team_name
+        - selectedTreeType ('team' or 'group') -> isGroup (boolean)
+        - selectedSprint -> sprint_name
+        - selectedPI -> pi
+        """
+        normalized = {}
+        for key, value in filters.items():
+            if key == 'selectedTeam':
+                normalized['team_name'] = value
+            elif key == 'selectedTreeType':
+                # Convert 'team'/'group' string to boolean isGroup
+                normalized['isGroup'] = (value == 'group')
+            elif key == 'selectedSprint':
+                normalized['sprint_name'] = value
+            elif key == 'selectedPI':
+                normalized['pi'] = value
+            else:
+                # Keep other filters as-is
+                normalized[key] = value
+        return normalized
+    
+    # Normalize top bar filters
+    top_bar_filters = normalize_filters(top_bar_filters)
+    logger.info(f"Normalized top bar filters: {json.dumps(top_bar_filters, indent=2, cls=DateTimeEncoder)}")
+    
+    # Normalize report filters (each report's filters)
+    normalized_report_filters = {}
+    for report_id, filters in report_filters.items():
+        normalized_report_filters[report_id] = normalize_filters(filters)
+    report_filters = normalized_report_filters
+    logger.info(f"Normalized report filters: {json.dumps(report_filters, indent=2, cls=DateTimeEncoder)}")
+    
     # Extract all report IDs from layout
     report_ids = []
     for row in layout_config.get('rows', []):
