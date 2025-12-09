@@ -1110,7 +1110,7 @@ async def fetch_dashboard_reports_data(
             
             formatted_reports.append(formatted_report)
             report_char_count = len(formatted_report)
-            logger.info(f"[AI_CHAT_DASHBOARD] ✓ {report_name}: {report_char_count} chars")
+            logger.info(f"[AI_CHAT_DASHBOARD] ✓ ReportName={report_name}: {report_char_count} chars")
             
         except Exception as e:
             logger.error(f"Error fetching report '{report_id}': {e}")
