@@ -1110,7 +1110,7 @@ async def fetch_dashboard_reports_data(
             
             formatted_reports.append(formatted_report)
             report_char_count = len(formatted_report)
-            logger.info(f"  ✓ Report '{report_name}': {report_char_count} chars")
+            logger.info(f"[AI_CHAT_DASHBOARD] ✓ {report_name}: {report_char_count} chars")
             
         except Exception as e:
             logger.error(f"Error fetching report '{report_id}': {e}")
@@ -1453,10 +1453,15 @@ async def ai_chat(
                 # This allows LLM to access data without the confusing prompt instructions
                 # Applies to: Team_insights, PI_insights, Recommendation_reason, Team_dashboard, PI_dashboard
                 if 'initial_request_data_only' not in history_json and conversation_context:
-                    # Extract data-only version using marker: find "=== DATA_STARTS_HERE ===" and take everything after it
+                    # Extract data-only version using marker: check for either "=== DATA_STARTS_HERE ===" or "=== DASHBOARD DATA STARTS HERE ==="
                     # This works for all chat types: Team_insights, PI_insights, Recommendation_reason, Team_dashboard, PI_dashboard
-                    marker = "=== DATA_STARTS_HERE ==="
-                    if marker in conversation_context:
+                    marker = None
+                    if "=== DASHBOARD DATA STARTS HERE ===" in conversation_context:
+                        marker = "=== DASHBOARD DATA STARTS HERE ==="
+                    elif "=== DATA_STARTS_HERE ===" in conversation_context:
+                        marker = "=== DATA_STARTS_HERE ==="
+                    
+                    if marker:
                         marker_index = conversation_context.find(marker)
                         data_only = conversation_context[marker_index + len(marker):].strip()
                         history_json['initial_request_data_only'] = data_only
