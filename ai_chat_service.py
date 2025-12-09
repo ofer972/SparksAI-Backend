@@ -784,10 +784,30 @@ async def call_llm_service(
     """
     llm_service_url = f"{config.LLM_SERVICE_URL}/chat"
     
+    # OPTIMIZATION: Strip stored context from history_json before sending to LLM
+    # This prevents duplicate data: stored context is already sent via conversation_context parameter
+    # Keep stored context in database, but only send messages to LLM to reduce token usage
+    history_json_for_llm = None
+    if history_json and isinstance(history_json, dict):
+        # Create stripped version with only messages (conversation history)
+        # Remove stored context fields that are already sent via conversation_context
+        history_json_for_llm = {
+            "messages": history_json.get("messages", [])
+        }
+        
+        # Log the optimization
+        original_size = len(json.dumps(history_json))
+        stripped_size = len(json.dumps(history_json_for_llm))
+        reduction = original_size - stripped_size
+        if reduction > 0:
+            logger.info(f"Optimized history_json: reduced from {original_size} to {stripped_size} chars ({reduction} chars removed, {100 * reduction / original_size:.1f}% reduction)")
+    else:
+        history_json_for_llm = history_json
+    
     payload = {
         "conversation_id": conversation_id,
         "question": question,
-        "history_json": history_json,
+        "history_json": history_json_for_llm,
         "username": user_id,
         "selected_team": selected_team,
         "selected_pi": selected_pi,
@@ -804,14 +824,14 @@ async def call_llm_service(
     
     logger.info(f"Calling LLM service: {llm_service_url}")
     
-    # Calculate total chars being sent
+    # Calculate total chars being sent (using stripped history_json)
     total_chars_sent = len(question) if question else 0
     if conversation_context:
         total_chars_sent += len(conversation_context)
     if system_message:
         total_chars_sent += len(system_message)
-    if history_json:
-        history_str = json.dumps(history_json) if isinstance(history_json, dict) else str(history_json)
+    if history_json_for_llm:
+        history_str = json.dumps(history_json_for_llm) if isinstance(history_json_for_llm, dict) else str(history_json_for_llm)
         total_chars_sent += len(history_str)
     
     if conversation_context:
