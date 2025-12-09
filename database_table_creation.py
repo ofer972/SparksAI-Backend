@@ -397,7 +397,7 @@ DEFAULT_REPORT_DEFINITIONS = [
             "parameters": {
                 "quarters": {"type": "array", "description": "List of PI or quarter names (e.g., '2025-Q1')"}
             },
-            "allowed_views": ["every-dashboard"]
+            "allowed_views": ["pi-dashboard"]
         }
     },
     {
@@ -507,7 +507,7 @@ DEFAULT_REPORT_DEFINITIONS = [
             "parameters": {
                 "pi": {"type": "string", "description": "PI name filter"}
             },
-            "allowed_views": ["pi-dashboard"]
+            "allowed_views": ["pi-dashboard", "team-dashboard"]
         }
     },
     {
@@ -525,7 +525,7 @@ DEFAULT_REPORT_DEFINITIONS = [
             "parameters": {
                 "months": {"type": "integer", "description": "Number of months to look back"}
             },
-            "allowed_views": ["every-dashboard"]
+            "allowed_views": ["team-dashboard"]
         }
     },
     {
@@ -546,7 +546,7 @@ DEFAULT_REPORT_DEFINITIONS = [
                 "team_name": {"type": "string", "description": "Team identifier or group name (if isGroup=true)"},
                 "isGroup": {"type": "boolean", "description": "If true, team_name is treated as a group name"}
             },
-            "allowed_views": ["team-dashboard", "pi-dashboard"]
+            "allowed_views": ["team-dashboard"]
         }
     },
     {
