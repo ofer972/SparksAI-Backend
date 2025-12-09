@@ -906,23 +906,35 @@ async def call_llm_service(
         "system_message": system_message
     }
     
+    # ANSI color codes for bold/color
+    BOLD = '\033[1m'
+    CYAN = '\033[96m'
+    YELLOW = '\033[93m'
+    RESET = '\033[0m'
+    
     logger.info(f"Calling LLM service: {llm_service_url}")
+    
+    # Calculate total chars being sent
+    total_chars_sent = len(question) if question else 0
+    if conversation_context:
+        total_chars_sent += len(conversation_context)
+    if system_message:
+        total_chars_sent += len(system_message)
+    if history_json:
+        history_str = json.dumps(history_json) if isinstance(history_json, dict) else str(history_json)
+        total_chars_sent += len(history_str)
+    
     if conversation_context:
         logger.info(f"Conversation context included: {len(conversation_context)} chars")
-        logger.debug(f"Conversation context preview: {conversation_context[:200]}...")
-        # Show last 200 characters of conversation context
-        if len(conversation_context) > 200:
-            last_200 = conversation_context[-200:]
-            logger.info(f"This is the end of the this is the last 200 of characters of the message sent to the LLM: {last_200}")
-        else:
-            logger.info(f"Full conversation context (less than 200 chars): {conversation_context}")
     else:
         logger.info("No conversation context provided")
     if system_message:
         logger.info(f"System message included: {len(system_message)} chars")
     else:
         logger.info("No system message provided")
-    logger.info(f"Question being sent to LLM: {question}")
+    
+    logger.info(f"{BOLD}{YELLOW}Question: {question}{RESET}")
+    logger.info(f"{BOLD}{CYAN}Total chars sent to LLM: {total_chars_sent}{RESET}")
     logger.debug(f"Payload: {payload}")
     
     try:
@@ -973,10 +985,7 @@ async def fetch_dashboard_reports_data(
                 return float(obj)
             return super().default(obj)
     
-    logger.info("=" * 80)
     logger.info("DASHBOARD DATA COLLECTION - Starting")
-    logger.info("=" * 80)
-    logger.info(f"Received dashboard_data: {json.dumps(dashboard_data, indent=2, cls=DateTimeEncoder)}")
     
     layout_config = dashboard_data.get('layoutConfig')
     if not layout_config:
@@ -1093,8 +1102,6 @@ async def fetch_dashboard_reports_data(
             report_desc = report_data["definition"].get("description", "")
             report_result = report_data.get("result", [])
             
-            logger.info(f"  Report data: {len(report_result)} items")
-            
             formatted_report = f"\n## {report_name}\n"
             if report_desc:
                 formatted_report += f"Description: {report_desc}\n"
@@ -1102,25 +1109,22 @@ async def fetch_dashboard_reports_data(
             formatted_report += f"Data: {json.dumps(report_result, indent=2, cls=DateTimeEncoder)}\n"
             
             formatted_reports.append(formatted_report)
-            logger.info(f"  ✓ Successfully formatted report '{report_id}'")
-            logger.info("-" * 80)
+            report_char_count = len(formatted_report)
+            logger.info(f"  ✓ Report '{report_name}': {report_char_count} chars")
             
         except Exception as e:
             logger.error(f"Error fetching report '{report_id}': {e}")
             formatted_reports.append(f"\n## {report_id}\nError: Failed to fetch data - {str(e)}\n")
     
     final_context = "\n".join(formatted_reports)
+    total_chars = len(final_context)
+    # ANSI color codes for bold/color
+    BOLD = '\033[1m'
+    CYAN = '\033[96m'
+    RESET = '\033[0m'
     logger.info(f"Successfully formatted {len(formatted_reports)} reports for LLM context")
-    logger.info(f"Total context length: {len(final_context)} characters")
-    logger.info("=" * 80)
+    logger.info(f"{BOLD}{CYAN}Total context length: {total_chars} characters{RESET}")
     logger.info("DASHBOARD DATA COLLECTION - Complete")
-    logger.info("=" * 80)
-    logger.info("FULL FORMATTED CONTEXT FOR LLM:")
-    logger.info("=" * 80)
-    logger.info(final_context)
-    logger.info("=" * 80)
-    logger.info("END OF FORMATTED CONTEXT")
-    logger.info("=" * 80)
     return final_context
 
 
