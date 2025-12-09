@@ -590,10 +590,14 @@ def _fetch_team_issues_trend(filters: Dict[str, Any], conn: Connection) -> Repor
 
 
 def _fetch_pi_predictability(filters: Dict[str, Any], conn: Connection) -> ReportDataResult:
+    from database_team_metrics import resolve_team_names_from_filter
+    
     pi_values = filters.get("pi_names") or filters.get("pi")
     pi_list = _parse_list(pi_values)
 
-    team_name = filters.get("team_name")
+    # Standardize on team_name: check team_name first, then fall back to team for backward compatibility
+    team = (filters.get("team_name") or filters.get("team") or "").strip() or None
+    is_group = filters.get("isGroup", False)
     
     # Fetch available teams from cache
     from groups_teams_cache import get_cached_teams, set_cached_teams, load_team_names_from_db, load_all_teams_from_db
@@ -620,21 +624,39 @@ def _fetch_pi_predictability(filters: Dict[str, Any], conn: Connection) -> Repor
     pis_rows = conn.execute(pis_query).fetchall()
     available_pis = [row[0] for row in pis_rows if row[0]]
 
+    # Resolve team names using shared helper function (handles single team, group, or None)
+    team_names_list = resolve_team_names_from_filter(team, is_group, conn)
+
     # Only fetch predictability data if PIs are selected
     if pi_list:
-        predictability_data = fetch_pi_predictability_data(pi_list, team_name=team_name, conn=conn)
+        predictability_data = fetch_pi_predictability_data(pi_list, team_names=team_names_list, conn=conn)
     else:
         predictability_data = []
 
+    # Build meta with appropriate fields
+    meta = {
+        "pi_names": pi_list,
+        "isGroup": is_group,
+        "count": len(predictability_data),
+        "available_teams": available_teams,
+        "available_pis": available_pis,
+    }
+    
+    # Add team/group information to meta (standardize on team_name)
+    if team:
+        if is_group:
+            meta["group_name"] = team
+            meta["teams_in_group"] = team_names_list
+        else:
+            meta["team_name"] = team
+            meta["team"] = team  # Keep for backward compatibility
+    else:
+        meta["team_name"] = None
+        meta["team"] = None
+
     return {
         "data": predictability_data,
-        "meta": {
-            "pi_names": pi_list,
-            "team_name": team_name,
-            "count": len(predictability_data),
-            "available_teams": available_teams,
-            "available_pis": available_pis,
-        },
+        "meta": meta,
     }
 
 

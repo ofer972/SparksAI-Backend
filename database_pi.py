@@ -124,16 +124,18 @@ def reduce_pi_burndown_data(burndown_data: List[Dict[str, Any]], days_without_ch
     return reduced_data
 
 
-def fetch_pi_predictability_data(pi_names, team_name=None, conn: Connection = None) -> List[Dict[str, Any]]:
+def fetch_pi_predictability_data(pi_names, team_names: Optional[List[str]] = None, conn: Connection = None) -> List[Dict[str, Any]]:
     """
     Fetch PI predictability data from the database function.
     
     For multiple PIs: loop through each PI and call the database function for each one.
-    This matches the logic from pi_predictability_table.py lines 189-195.
+    For multiple teams: call the function once per team and combine results.
+    The SQL function get_pi_predictability_by_team accepts a single TEXT parameter (not array),
+    so we call it once per team when team_names is provided.
     
     Args:
         pi_names (str | List[str]): Single PI name or list of PI names
-        team_name (str, optional): Single team name filter (can be "ALL SUMMARY")
+        team_names (Optional[List[str]], optional): List of team names filter, or None for all teams
         conn (Connection): Database connection from FastAPI dependency
     
     Returns:
@@ -145,40 +147,70 @@ def fetch_pi_predictability_data(pi_names, team_name=None, conn: Connection = No
             pi_names = [pi_names]
         
         logger.info(f"Executing PI predictability query for PIs: {pi_names}")
-        logger.info(f"Team filter: {team_name if team_name else 'None'}")
+        logger.info(f"Team filter: {team_names if team_names else 'None (all teams)'}")
         
         # Execute query for each PI and combine results
-        # This matches the logic from pi_predictability_table.py lines 189-195
         all_data = []
         for pi_name in pi_names:
-            # Use parameterized query (same approach as other database functions)
-            sql_query_text = text("""
-                SELECT * FROM public.get_pi_predictability_by_team(
-                    :team_name,
-                    :pi_name
-                )
-            """)
-            
-            logger.info(f"Executing SQL for PI: {pi_name}")
-            
-            # Execute query with parameters (SECURE: prevents SQL injection)
-            result = conn.execute(sql_query_text, {
-                'team_name': team_name,
-                'pi_name': pi_name
-            })
-            
-            # Convert rows to list of dictionaries
-            for row in result:
-                row_dict = dict(row._mapping)
+            if team_names:
+                # For multiple teams: call function once per team and combine results
+                # The SQL function accepts a single TEXT parameter, not an array
+                for team_name in team_names:
+                    sql_query_text = text("""
+                        SELECT * FROM public.get_pi_predictability_by_team(
+                            :team_name,
+                            :pi_name
+                        )
+                    """)
+                    
+                    logger.info(f"Executing SQL for PI: {pi_name}, Team: {team_name}")
+                    
+                    # Execute query with parameters (SECURE: prevents SQL injection)
+                    result = conn.execute(sql_query_text, {
+                        'team_name': team_name,
+                        'pi_name': pi_name
+                    })
+                    
+                    # Convert rows to list of dictionaries
+                    for row in result:
+                        row_dict = dict(row._mapping)
+                        
+                        # Format array columns (copied from old project lines 603-606)
+                        for col in ['issues_in_scope_keys', 'completed_issues_keys']:
+                            if col in row_dict:
+                                if isinstance(row_dict[col], list):
+                                    row_dict[col] = ', '.join(row_dict[col])
+                                # else keep as is (already string or None)
+                        
+                        all_data.append(row_dict)
+            else:
+                # Pass NULL for all teams (single call returns all teams)
+                sql_query_text = text("""
+                    SELECT * FROM public.get_pi_predictability_by_team(
+                        NULL,
+                        :pi_name
+                    )
+                """)
                 
-                # Format array columns (copied from old project lines 603-606)
-                for col in ['issues_in_scope_keys', 'completed_issues_keys']:
-                    if col in row_dict:
-                        if isinstance(row_dict[col], list):
-                            row_dict[col] = ', '.join(row_dict[col])
-                        # else keep as is (already string or None)
+                logger.info(f"Executing SQL for PI: {pi_name} for all teams")
                 
-                all_data.append(row_dict)
+                # Execute query with parameters (SECURE: prevents SQL injection)
+                result = conn.execute(sql_query_text, {
+                    'pi_name': pi_name
+                })
+                
+                # Convert rows to list of dictionaries
+                for row in result:
+                    row_dict = dict(row._mapping)
+                    
+                    # Format array columns (copied from old project lines 603-606)
+                    for col in ['issues_in_scope_keys', 'completed_issues_keys']:
+                        if col in row_dict:
+                            if isinstance(row_dict[col], list):
+                                row_dict[col] = ', '.join(row_dict[col])
+                            # else keep as is (already string or None)
+                    
+                    all_data.append(row_dict)
         
         logger.info(f"Retrieved {len(all_data)} PI predictability records")
         

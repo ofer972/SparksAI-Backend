@@ -530,18 +530,20 @@ async def get_current_and_next_pis(
 @pis_router.get("/pis/predictability")
 async def get_pi_predictability(
     pi_names: Union[str, List[str]] = Query(..., description="Single PI name or array of PI names (comma-separated)"),
-    team_name: str = Query(None, description="Single team name filter (or 'ALL SUMMARY' for summary)"),
+    team_name: str = Query(None, description="Team name filter (or group name if isGroup=true)"),
+    isGroup: bool = Query(False, description="If true, team_name is treated as a group name"),
     conn: Connection = Depends(get_db_connection)
 ):
     """
     Get PI predictability report data for specified PI(s).
     
-    Supports multiple PI names (array or comma-separated) and single team name.
+    Supports multiple PI names (array or comma-separated) and team/group filtering.
     Returns all columns from get_pi_predictability_by_team database function.
     
     Parameters:
         pi_names: Single PI name or array of PI names (comma-separated)
-        team_name: Optional single team name for filtering (use 'ALL SUMMARY' for aggregated view)
+        team_name: Optional team name or group name (if isGroup=true) for filtering
+        isGroup: If true, team_name is treated as a group name (default: false)
     
     Returns:
         JSON response with PI predictability data (all columns)
@@ -562,23 +564,42 @@ async def get_pi_predictability(
             else:
                 pi_names = [pi_names]
         
-        logger.info(f"Fetching PI predictability data for PIs: {pi_names}")
-        logger.info(f"Team filter: {team_name if team_name else 'None'}")
+        # Resolve team names using shared helper function (handles single team, group, or None)
+        team_names_list = resolve_team_names_from_filter(team_name, isGroup, conn)
         
-        # Call database function (logic copied from old project)
+        logger.info(f"Fetching PI predictability data for PIs: {pi_names}")
+        logger.info(f"Team filter: {team_name if team_name else 'None'}, isGroup: {isGroup}")
+        if team_names_list:
+            logger.info(f"Resolved team names: {team_names_list}")
+        
+        # Call database function with team_names list
         predictability_data = fetch_pi_predictability_data(
             pi_names=pi_names,
-            team_name=team_name,
+            team_names=team_names_list,
             conn=conn
         )
+        
+        # Build response metadata
+        response_metadata = {
+            "pi_names": pi_names,
+            "count": len(predictability_data),
+        }
+        
+        # Add team/group information to response
+        if team_name:
+            if isGroup:
+                response_metadata["group_name"] = team_name
+                response_metadata["teams_in_group"] = team_names_list
+            else:
+                response_metadata["team_name"] = team_name
+        else:
+            response_metadata["team_name"] = None
         
         return {
             "success": True,
             "data": {
                 "predictability_data": predictability_data,
-                "count": len(predictability_data),
-                "pi_names": pi_names,
-                "team_name": team_name
+                **response_metadata
             },
             "message": f"Retrieved PI predictability data for {len(predictability_data)} records"
         }

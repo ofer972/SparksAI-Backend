@@ -370,14 +370,16 @@ DEFAULT_REPORT_DEFINITIONS = [
         "description": "Summarizes predictability metrics for program increments.",
         "default_filters": {
             "pi_names": [],
-            "team_name": None
+            "team_name": None,
+            "isGroup": False
         },
         "meta_schema": {
             "required_filters": [],
-            "optional_filters": ["pi_names", "team_name"],
+            "optional_filters": ["pi_names", "team_name", "isGroup"],
             "parameters": {
                 "pi_names": {"type": "array", "description": "List of PI names to include"},
-                "team_name": {"type": "string", "description": "Optional team filter"}
+                "team_name": {"type": "string", "description": "Optional team filter or group name (if isGroup=true)"},
+                "isGroup": {"type": "boolean", "description": "If true, team_name is treated as a group name"}
             },
             "allowed_views": ["pi-dashboard", "team-dashboard"]
         }
