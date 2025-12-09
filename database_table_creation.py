@@ -26,7 +26,7 @@ DEFAULT_INSIGHT_TYPES = [
         "requires_pi": True,
         "requires_team": False,
         "requires_group": False,
-        "cron_config": {"day_of_week": "sun,mon,tue,wed,thu", "hour": 6, "minute": 0}
+        "cron_config": {"day_of_week": "sun,mon,tue,wed,thu", "hour": 6, "minute": 30}
     },
     {
         "insight_type": "PI Dependencies",
@@ -36,7 +36,7 @@ DEFAULT_INSIGHT_TYPES = [
         "requires_pi": True,
         "requires_team": False,
         "requires_group": False,
-        "cron_config": {"hour": 5, "minute": 40}
+        "cron_config": {"hour": 5, "minute": 00}
     },
     {
         "insight_type": "PI Planning Gaps",
@@ -46,7 +46,7 @@ DEFAULT_INSIGHT_TYPES = [
         "requires_pi": True,
         "requires_team": False,
         "requires_group": False,
-        "cron_config": {"hour": 5, "minute": 40}
+        "cron_config": {"hour": 5, "minute": 15}
     },
     {
         "insight_type": "Daily Progress",
@@ -56,7 +56,7 @@ DEFAULT_INSIGHT_TYPES = [
         "requires_pi": False,
         "requires_team": True,
         "requires_group": False,
-        "cron_config": {"hour": 5, "minute": 30}
+        "cron_config": {"hour": 5, "minute": 20}
     },
     {
         "insight_type": "Sprint Goal",
@@ -66,7 +66,7 @@ DEFAULT_INSIGHT_TYPES = [
         "requires_pi": False,
         "requires_team": True,
         "requires_group": False,
-        "cron_config": {"hour": 5, "minute": 30}
+        "cron_config": {"hour": 5, "minute": 40}
     },
     {
         "insight_type": "Team Retro Topics",
@@ -76,7 +76,7 @@ DEFAULT_INSIGHT_TYPES = [
         "requires_pi": False,
         "requires_team": True,
         "requires_group": False,
-        "cron_config": {"hour": 5, "minute": 30}
+        "cron_config": {"hour": 6, "minute": 0}
     },
     {
         "insight_type": "Team PI Insight",
@@ -86,7 +86,7 @@ DEFAULT_INSIGHT_TYPES = [
         "requires_pi": True,
         "requires_team": True,
         "requires_group": False,
-        "cron_config": {"hour": 5, "minute": 30}
+        "cron_config": {"hour": 6, "minute": 10}
     },
     {
         "insight_type": "Group Sprint Flow",
@@ -96,7 +96,7 @@ DEFAULT_INSIGHT_TYPES = [
         "requires_pi": False,
         "requires_team": False,
         "requires_group": True,
-        "cron_config": {"hour": 5, "minute": 45}
+        "cron_config": {"hour": 6, "minute": 30}
     },
     {
         "insight_type": "Group Sprint Predictability",
@@ -106,7 +106,7 @@ DEFAULT_INSIGHT_TYPES = [
         "requires_pi": False,
         "requires_team": False,
         "requires_group": True,
-        "cron_config": {"hour": 5, "minute": 45}
+        "cron_config": {"hour": 6, "minute": 45}
     },
     {
         "insight_type": "Group Sprint Dependency",
@@ -116,7 +116,7 @@ DEFAULT_INSIGHT_TYPES = [
         "requires_pi": False,
         "requires_team": False,
         "requires_group": True,
-        "cron_config": {"hour": 5, "minute": 45}
+        "cron_config": {"hour": 7, "minute": 0}
     },
     {
         "insight_type": "Group Epic Dependencies",
@@ -126,7 +126,7 @@ DEFAULT_INSIGHT_TYPES = [
         "requires_pi": False,
         "requires_team": False,
         "requires_group": True,
-        "cron_config": {"hour": 5, "minute": 45}
+        "cron_config": {"hour": 7, "minute": 10}
     },
     {
         "insight_type": "WIP Level",
@@ -136,7 +136,7 @@ DEFAULT_INSIGHT_TYPES = [
         "requires_pi": False,
         "requires_team": True,
         "requires_group": False,
-        "cron_config": {"hour": 5, "minute": 50}
+        "cron_config": {"hour": 7, "minute": 20}
     },
 
 #    {
