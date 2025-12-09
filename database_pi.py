@@ -8,8 +8,120 @@ from sqlalchemy import text
 from sqlalchemy.engine import Connection
 from typing import List, Dict, Any, Optional
 import logging
+from datetime import datetime, date, timedelta
 
 logger = logging.getLogger(__name__)
+
+
+def reduce_pi_burndown_data(burndown_data: List[Dict[str, Any]], days_without_change_threshold: int = 5) -> List[Dict[str, Any]]:
+    """
+    Reduce PI burndown data using Enhanced Option 5:
+    - Keep first and last day
+    - Keep days with changes (issues_completed, issues_removed, total_scope, actual_remaining)
+    - If no change for N days (default 5), add a data point to mark the period
+    
+    Args:
+        burndown_data: List of burndown data dictionaries
+        days_without_change_threshold: Number of days without change before adding a marker point (default: 5)
+    
+    Returns:
+        Reduced list of burndown data dictionaries
+    """
+    if not burndown_data or len(burndown_data) <= 1:
+        return burndown_data
+    
+    # Fields to track for changes (try multiple naming variations)
+    possible_change_fields = [
+        'issues_completed', 'issues_completed_on_day', 'completed_issues',
+        'issues_removed', 'issues_removed_on_day', 'removed_issues',
+        'total_scope', 'total_issues', 'scope',
+        'actual_remaining', 'remaining_issues', 'remaining'
+    ]
+    
+    # Find date field (try common variations)
+    possible_date_fields = ['date', 'snapshot_date', 'day', 'snapshot_day', 'burndown_date']
+    
+    # Get field names that exist in the data
+    first_row = burndown_data[0]
+    available_fields = [field for field in possible_change_fields if field in first_row]
+    date_field = None
+    for field in possible_date_fields:
+        if field in first_row:
+            date_field = field
+            break
+    
+    # If no change fields found, return original data
+    if not available_fields:
+        logger.warning("No change fields found in PI burndown data, returning original data")
+        return burndown_data
+    
+    reduced_data = []
+    last_values = {}
+    last_included_index = -1
+    
+    for i, row in enumerate(burndown_data):
+        is_first = (i == 0)
+        is_last = (i == len(burndown_data) - 1)
+        
+        # Calculate days since last included point (if we have date field)
+        days_since_last_point = 0
+        if date_field and last_included_index >= 0:
+            try:
+                current_date = row.get(date_field)
+                last_date = burndown_data[last_included_index].get(date_field)
+                
+                # Handle different date formats
+                if isinstance(current_date, str):
+                    current_date = datetime.fromisoformat(current_date.replace('Z', '+00:00')).date() if 'T' in current_date else datetime.strptime(current_date, '%Y-%m-%d').date()
+                elif isinstance(current_date, datetime):
+                    current_date = current_date.date()
+                
+                if isinstance(last_date, str):
+                    last_date = datetime.fromisoformat(last_date.replace('Z', '+00:00')).date() if 'T' in last_date else datetime.strptime(last_date, '%Y-%m-%d').date()
+                elif isinstance(last_date, datetime):
+                    last_date = last_date.date()
+                
+                if isinstance(current_date, date) and isinstance(last_date, date):
+                    days_since_last_point = (current_date - last_date).days
+            except (ValueError, AttributeError, TypeError) as e:
+                # If date parsing fails, fall back to index-based counting
+                days_since_last_point = i - last_included_index
+        
+        # Check if any tracked field has changed
+        has_change = False
+        if is_first:
+            # Always include first day
+            has_change = True
+            # Initialize last_values
+            for field in available_fields:
+                last_values[field] = row.get(field)
+        else:
+            # Check for changes in any tracked field
+            for field in available_fields:
+                current_value = row.get(field)
+                last_value = last_values.get(field)
+                # Compare values (handle None, handle type differences)
+                if current_value != last_value:
+                    has_change = True
+                    last_values[field] = current_value
+        
+        # Include if:
+        # 1. First day
+        # 2. Last day
+        # 3. Has changes
+        # 4. No change for threshold days (add marker point)
+        if is_first or is_last or has_change or days_since_last_point >= days_without_change_threshold:
+            reduced_data.append(row)
+            last_included_index = i
+            if has_change:
+                # Update last_values for all fields when we include a point
+                for field in available_fields:
+                    last_values[field] = row.get(field)
+        # else: skip this row
+    
+    logger.info(f"Reduced PI burndown data from {len(burndown_data)} to {len(reduced_data)} records ({len(burndown_data) - len(reduced_data)} removed, {100 * (len(burndown_data) - len(reduced_data)) / len(burndown_data):.1f}% reduction)")
+    
+    return reduced_data
 
 
 def fetch_pi_predictability_data(pi_names, team_name=None, conn: Connection = None) -> List[Dict[str, Any]]:
@@ -153,6 +265,9 @@ def fetch_pi_burndown_data(pi_name: str, project_keys: str = None, issue_type: s
             burndown_data.append(row_dict)
         
         logger.info(f"Retrieved {len(burndown_data)} PI burndown records")
+        
+        # Apply Enhanced Option 5 data reduction
+        burndown_data = reduce_pi_burndown_data(burndown_data, days_without_change_threshold=5)
         
         return burndown_data
             
