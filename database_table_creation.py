@@ -550,6 +550,29 @@ DEFAULT_REPORT_DEFINITIONS = [
         }
     },
     {
+        "report_id": "sprint-velocity-advanced",
+        "report_name": "Sprint Velocity (Advanced)",
+        "chart_type": "stacked_bar",
+        "data_source": "sprint_velocity_advanced",
+        "description": "Provides sprint velocity metric inlcuding issues palanned/added/removed/completd with average velocity.",
+        "default_filters": {
+            "months": 2,
+            "team_name": None,
+            "issue_type": None
+        },
+        "meta_schema": {
+            "required_filters": [],
+            "optional_filters": ["months", "team_name", "isGroup","issue_type"],
+            "parameters": {
+                "months": {"type": "integer", "description": "Number of months to look back"},
+                "team_name": {"type": "string", "description": "Team identifier or group name (if isGroup=true)"},
+                "issue_type": {"type": "string", "description": "Issue type filter"},
+                "isGroup": {"type": "boolean", "description": "If true, team_name is treated as a group name"}
+            },
+            "allowed_views": ["team-dashboard"]
+        }
+    },
+    {
         "report_id": "pi-metrics-summary",
         "report_name": "PI Metrics Summary",
         "chart_type": "summary",
