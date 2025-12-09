@@ -938,6 +938,17 @@ async def fetch_dashboard_reports_data(
     # Fetch data for each report
     formatted_reports = []
     for idx, report_id in enumerate(report_ids, 1):
+        # TEMPORARY FIX: Skip Epic Hierarchy report for LLM context
+        # TODO: Replace with proper solution using report definition flag
+        # Proper fix should:
+        # 1. Add a flag in report definition (e.g., "exclude_from_llm" or "send_to_llm: false") 
+        #    that indicates "Do not send this report to LLM"
+        # 2. UI should not show reports with this flag in the list of reports that will be sent to LLM
+        # 3. Code should use this flag generically to make the decision instead of hardcoding report_id checks
+        if report_id == "issues-epics-hierarchy":
+            logger.info(f"Skipping report '{report_id}' for LLM context (temporary fix)")
+            continue
+        
         try:
             logger.info(f"[{idx}/{len(report_ids)}] Processing report: {report_id}")
             
