@@ -1305,12 +1305,12 @@ def _fetch_epic_dependencies(filters: Dict[str, Any], conn: Connection) -> Repor
 
     pi_names = _parse_list(filters.get("pi") or filters.get("pi_names") or filters.get("pi_name"))
 
-    # Extract team filter parameters
-    team = (filters.get("team_name") or filters.get("team") or "").strip() or None
+    # Extract team filter parameters - only use team_name (removed legacy team parameter)
+    team_name = (filters.get("team_name") or "").strip() or None
     is_group = filters.get("isGroup", False)
 
     # Resolve team names using shared helper function
-    team_names_list = resolve_team_names_from_filter(team, is_group, conn)
+    team_names_list = resolve_team_names_from_filter(team_name, is_group, conn)
 
     # Fetch available PIs from both dependency tables (always)
     pis_query = text(
@@ -1354,12 +1354,12 @@ def _fetch_epic_dependencies(filters: Dict[str, Any], conn: Connection) -> Repor
     }
 
     # Add team/group information to meta
-    if team:
+    if team_name:
         if is_group:
-            meta["group_name"] = team
+            meta["group_name"] = team_name
             meta["teams_in_group"] = team_names_list
         else:
-            meta["team_name"] = team
+            meta["team_name"] = team_name
 
     return {
         "data": {
