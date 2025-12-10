@@ -466,42 +466,63 @@ async def get_avg_sprint_metrics(
 
 @team_metrics_router.get("/team-metrics/count-in-progress")
 async def get_count_in_progress(
-    team_name: str = Query(..., description="Team name to get count for"),
+    team_name: str = Query(..., description="Team name or group name (if isGroup=true)"),
+    isGroup: bool = Query(False, description="If true, team_name is treated as a group name"),
     conn: Connection = Depends(get_db_connection)
 ):
     """
-    Get count of issues currently in progress for a specific team with breakdown by issue type.
+    Get count of issues currently in progress for a team or group with breakdown by issue type.
     
     Returns the number of issues with status_category = 'In Progress', grouped by issue type.
     Only includes issue types that have at least one issue in progress.
+    When isGroup=true, aggregates counts across all teams in the group.
     
     Args:
-        team_name: Name of the team
+        team_name: Name of the team or group name (if isGroup=true)
+        isGroup: If true, team_name is treated as a group name
     
     Returns:
         JSON response with total count and breakdown by issue type
     """
     try:
-        # Validate inputs
-        validated_team_name = validate_team_name(team_name)
+        # Validate inputs (validate team_name or group_name based on isGroup)
+        validated_name = None
+        if isGroup:
+            validated_name = validate_group_name(team_name)
+        else:
+            validated_name = validate_team_name(team_name)
+        
+        # Resolve team names using shared helper function (handles single team, group, or None)
+        team_names_list = resolve_team_names_from_filter(validated_name, isGroup, conn)
         
         # Get count breakdown from database function
-        count_data = get_team_count_in_progress(validated_team_name, conn)
+        count_data = get_team_count_in_progress(team_names_list, conn)
+        
+        # Build response data
+        response_data = {
+            "total_in_progress": count_data['total_in_progress'],
+            "count_by_type": count_data['count_by_type']
+        }
+        
+        # Add team/group information to response
+        if isGroup:
+            response_data["group_name"] = validated_name
+            response_data["teams_in_group"] = team_names_list
+            message = f"Retrieved count in progress for group '{validated_name}'"
+        else:
+            response_data["team_name"] = validated_name
+            message = f"Retrieved count in progress for team '{validated_name}'"
         
         return {
             "success": True,
-            "data": {
-                "total_in_progress": count_data['total_in_progress'],
-                "count_by_type": count_data['count_by_type'],
-                "team_name": validated_team_name
-            },
-            "message": f"Retrieved count in progress for team '{validated_team_name}'"
+            "data": response_data,
+            "message": message
         }
     
     except HTTPException:
         raise  # Re-raise FastAPI HTTPExceptions
     except Exception as e:
-        logger.error(f"Error fetching count in progress for team {validated_team_name}: {e}")
+        logger.error(f"Error fetching count in progress for team/group {team_name}: {e}")
         raise HTTPException(
             status_code=500,
             detail=f"Failed to fetch count in progress: {str(e)}"

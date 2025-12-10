@@ -65,13 +65,13 @@ def get_team_avg_sprint_metrics(sprint_count: int = 5, team_names: Optional[List
         raise e
 
 
-def get_team_count_in_progress(team_name: str, conn: Connection = None) -> Dict[str, Any]:
+def get_team_count_in_progress(team_names: Optional[List[str]], conn: Connection = None) -> Dict[str, Any]:
     """
-    Get current work in progress (WIP) for a team with breakdown by issue type.
+    Get current work in progress (WIP) for team(s) with breakdown by issue type.
     WIP = number of issues currently in progress, grouped by issue type.
     
     Args:
-        team_name (str): Team name
+        team_names (Optional[List[str]]): List of team names, or None for all teams
         conn (Connection): Database connection from FastAPI dependency
     
     Returns:
@@ -79,21 +79,42 @@ def get_team_count_in_progress(team_name: str, conn: Connection = None) -> Dict[
     """
     try:
         # SECURE: Parameterized query prevents SQL injection
-        sql_query = """
-            SELECT 
-                issue_type,
-                COUNT(*) as type_count
-            FROM public.jira_issues
-            WHERE team_name = :team_name 
-            AND status_category = 'In Progress'
-            GROUP BY issue_type
-            ORDER BY type_count DESC;
-        """
+        if team_names:
+            # Build parameterized IN clause
+            placeholders = ", ".join([f":team_name_{i}" for i in range(len(team_names))])
+            params = {f"team_name_{i}": name for i, name in enumerate(team_names)}
+            
+            sql_query = f"""
+                SELECT 
+                    issue_type,
+                    COUNT(*) as type_count
+                FROM public.jira_issues
+                WHERE team_name IN ({placeholders})
+                AND status_category = 'In Progress'
+                GROUP BY issue_type
+                ORDER BY type_count DESC;
+            """
+            
+            logger.info(f"Executing query to get count in progress for teams: {team_names}")
+            logger.info(f"Parameters: team_names={team_names}")
+            
+            result = conn.execute(text(sql_query), params)
+        else:
+            # No filter - return all teams
+            sql_query = """
+                SELECT 
+                    issue_type,
+                    COUNT(*) as type_count
+                FROM public.jira_issues
+                WHERE status_category = 'In Progress'
+                GROUP BY issue_type
+                ORDER BY type_count DESC;
+            """
+            
+            logger.info("Executing query to get count in progress for all teams")
+            
+            result = conn.execute(text(sql_query))
         
-        logger.info(f"Executing query to get count in progress for team: {team_name}")
-        logger.info(f"Parameters: team_name={team_name}")
-        
-        result = conn.execute(text(sql_query), {"team_name": team_name})
         rows = result.fetchall()
         
         total_count = 0
@@ -111,7 +132,7 @@ def get_team_count_in_progress(team_name: str, conn: Connection = None) -> Dict[
         }
             
     except Exception as e:
-        logger.error(f"Error fetching count in progress for team {team_name}: {e}")
+        logger.error(f"Error fetching count in progress for teams {team_names}: {e}")
         raise e
 
 
