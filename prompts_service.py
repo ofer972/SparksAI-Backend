@@ -176,7 +176,8 @@ async def get_prompts(
 @prompts_router.get("/prompts/{email_address}/{prompt_name}")
 async def get_prompt(
     email_address: str, 
-    prompt_name: str, 
+    prompt_name: str,
+    replace_placeholders: bool = Query(False, description="If true, replace {{JIRA_URL}} with value from JIRA_URL env var"),
     conn: Connection = Depends(get_db_connection)
 ):
     """
@@ -186,6 +187,7 @@ async def get_prompt(
     Args:
         email_address: The email address of the prompt owner
         prompt_name: The name of the prompt
+        replace_placeholders: If true, replace {{JIRA_URL}} with value from JIRA_URL env var (default: false)
     
     Returns:
         JSON response with single prompt or 404 if not found
@@ -200,7 +202,8 @@ async def get_prompt(
             email_address=validated_email,
             prompt_name=validated_name,
             conn=conn,
-            active=None  # API returns even inactive prompts; filtering is up to caller
+            active=None,  # API returns even inactive prompts; filtering is up to caller
+            replace_placeholders=replace_placeholders
         )
 
         if not prompt_row:

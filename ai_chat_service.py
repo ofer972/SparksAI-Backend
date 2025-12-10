@@ -318,7 +318,8 @@ def build_team_dashboard_context(
                 email_address='admin',
                 prompt_name=content_prompt_name,
                 conn=conn,
-                active=True
+                active=True,
+                replace_placeholders=True
             )
             if content_prompt and content_prompt.get('prompt_description'):
                 conversation_context = str(content_prompt['prompt_description'])
@@ -333,7 +334,8 @@ def build_team_dashboard_context(
                 email_address=user_id or 'unknown',
                 prompt_name=custom_prompt_name,
                 conn=conn,
-                active=True
+                active=True,
+                replace_placeholders=True
             )
             if custom_prompt and custom_prompt.get('prompt_description'):
                 conversation_context = str(custom_prompt['prompt_description'])
@@ -449,7 +451,8 @@ def build_pi_dashboard_context(
                 email_address='admin',
                 prompt_name=content_prompt_name,
                 conn=conn,
-                active=True
+                active=True,
+                replace_placeholders=True
             )
             if content_prompt and content_prompt.get('prompt_description'):
                 conversation_context = str(content_prompt['prompt_description'])
@@ -464,7 +467,8 @@ def build_pi_dashboard_context(
                 email_address=user_id or 'unknown',
                 prompt_name=custom_prompt_name,
                 conn=conn,
-                active=True
+                active=True,
+                replace_placeholders=True
             )
             if custom_prompt and custom_prompt.get('prompt_description'):
                 conversation_context = str(custom_prompt['prompt_description'])
@@ -1123,7 +1127,8 @@ async def ai_chat(
                         email_address='admin',
                         prompt_name=content_prompt_name,
                         conn=conn,
-                        active=True
+                        active=True,
+                        replace_placeholders=True
                     )
                     if content_prompt and content_prompt.get('prompt_description'):
                         content_intro = str(content_prompt['prompt_description'])
@@ -1184,7 +1189,8 @@ async def ai_chat(
                         email_address='admin',
                         prompt_name=content_prompt_name,
                         conn=conn,
-                        active=True
+                        active=True,
+                        replace_placeholders=True
                     )
                     if content_prompt and content_prompt.get('prompt_description'):
                         content_intro = str(content_prompt['prompt_description'])
@@ -1253,7 +1259,8 @@ async def ai_chat(
                         email_address='admin',
                         prompt_name=content_prompt_name,
                         conn=conn,
-                        active=True
+                        active=True,
+                        replace_placeholders=True
                     )
                     if content_prompt and content_prompt.get('prompt_description'):
                         content_intro = str(content_prompt['prompt_description'])
@@ -1295,7 +1302,8 @@ async def ai_chat(
                     email_address='admin',
                     prompt_name=prompt_name,
                     conn=conn,
-                    active=True
+                    active=True,
+                    replace_placeholders=True
                 )
                 if prompt_row and prompt_row.get('prompt_description'):
                     system_message = str(prompt_row['prompt_description'])
@@ -1321,7 +1329,8 @@ async def ai_chat(
                         email_address='admin',
                         prompt_name=content_prompt_name,
                         conn=conn,
-                        active=True
+                        active=True,
+                        replace_placeholders=True
                     )
                     if content_prompt and content_prompt.get('prompt_description'):
                         content_intro = str(content_prompt['prompt_description'])

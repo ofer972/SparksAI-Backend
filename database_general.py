@@ -471,7 +471,8 @@ def get_prompt_by_email_and_name(
     email_address: str,
     prompt_name: str,
     conn: Connection = None,
-    active: Optional[bool] = None
+    active: Optional[bool] = None,
+    replace_placeholders: bool = False
 ) -> Optional[Dict[str, Any]]:
     """
     Get a single prompt by email_address and prompt_name from the prompts table.
@@ -482,6 +483,7 @@ def get_prompt_by_email_and_name(
         prompt_name: Prompt name (chat type string)
         conn: Database connection
         active: If True, require prompt_active=TRUE; if False, require prompt_active=FALSE; if None, no filter
+        replace_placeholders: If True, replace {{JIRA_URL}} with value from JIRA_URL env var (default: False)
 
     Returns:
         dict: Prompt row as dictionary or None if not found
@@ -520,10 +522,12 @@ def get_prompt_by_email_and_name(
         if not row:
             return None
 
-        # Replace placeholders in prompt_description before returning
+        # Replace placeholders in prompt_description only if requested
         prompt_description = row[2]
-        if prompt_description:
+        if prompt_description and replace_placeholders:
             prompt_description = replace_prompt_placeholders(str(prompt_description))
+        elif prompt_description:
+            prompt_description = str(prompt_description)
 
         return {
             "email_address": row[0],
