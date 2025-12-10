@@ -9,6 +9,7 @@ from sqlalchemy import text
 from sqlalchemy.engine import Connection
 from typing import List, Dict, Any, Optional
 import logging
+import os
 import config
 
 logger = logging.getLogger(__name__)
@@ -443,6 +444,29 @@ def get_team_ai_card_by_id(card_id: int, conn: Connection = None) -> Optional[Di
         raise e
 
 
+def replace_prompt_placeholders(prompt_text: str) -> str:
+    """
+    Replace placeholders in prompt text with values from environment variables.
+    
+    Currently replaces:
+    - {{JIRA_URL}} with the value from JIRA_URL environment variable
+    
+    Args:
+        prompt_text: The prompt text that may contain placeholders
+        
+    Returns:
+        str: Prompt text with placeholders replaced
+    """
+    if not prompt_text:
+        return prompt_text
+    
+    # Replace {{JIRA_URL}} with JIRA_URL environment variable
+    jira_url = os.getenv("JIRA_URL", "")
+    prompt_text = prompt_text.replace("{{JIRA_URL}}", jira_url)
+    
+    return prompt_text
+
+
 def get_prompt_by_email_and_name(
     email_address: str,
     prompt_name: str,
@@ -496,10 +520,15 @@ def get_prompt_by_email_and_name(
         if not row:
             return None
 
+        # Replace placeholders in prompt_description before returning
+        prompt_description = row[2]
+        if prompt_description:
+            prompt_description = replace_prompt_placeholders(str(prompt_description))
+
         return {
             "email_address": row[0],
             "prompt_name": row[1],
-            "prompt_description": row[2],
+            "prompt_description": prompt_description,
             "prompt_type": row[3],
             "prompt_active": row[4],
             "created_at": row[5],
