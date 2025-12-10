@@ -529,7 +529,7 @@ async def get_current_and_next_pis(
 
 @pis_router.get("/pis/predictability")
 async def get_pi_predictability(
-    pi_names: Union[str, List[str]] = Query(..., description="Single PI name or array of PI names (comma-separated)"),
+    pi_names: Optional[Union[str, List[str]]] = Query(None, description="Optional: Single PI name or array of PI names (comma-separated). If not provided, returns data for all PIs."),
     team_name: str = Query(None, description="Team name filter (or group name if isGroup=true)"),
     isGroup: bool = Query(False, description="If true, team_name is treated as a group name"),
     conn: Connection = Depends(get_db_connection)
@@ -538,10 +538,11 @@ async def get_pi_predictability(
     Get PI predictability report data for specified PI(s).
     
     Supports multiple PI names (array or comma-separated) and team/group filtering.
+    If pi_names is not provided, returns data for all PIs.
     Returns all columns from get_pi_predictability_by_team database function.
     
     Parameters:
-        pi_names: Single PI name or array of PI names (comma-separated)
+        pi_names: Optional single PI name or array of PI names (comma-separated). If None, returns all PIs.
         team_name: Optional team name or group name (if isGroup=true) for filtering
         isGroup: If true, team_name is treated as a group name (default: false)
     
@@ -549,11 +550,23 @@ async def get_pi_predictability(
         JSON response with PI predictability data (all columns)
     """
     try:
+        # If pi_names is not provided, fetch all PIs from database
+        # Note: We don't order here - we preserve whatever order the database function returns
+        if pi_names is None:
+            pis_query = text(f"""
+                SELECT DISTINCT pi_name
+                FROM {config.PIS_TABLE}
+                WHERE pi_name IS NOT NULL
+            """)
+            pis_rows = conn.execute(pis_query).fetchall()
+            pi_names = [row[0] for row in pis_rows if row[0]]
+            logger.info(f"No pi_names provided, fetching all PIs: {pi_names}")
+        
         # Handle pi_names parameter - can be comma-separated string or already a list
         if not pi_names:
             raise HTTPException(
-                status_code=400,
-                detail="pi_names parameter is required"
+                status_code=404,
+                detail="No PIs found in database"
             )
         
         # Convert to list if it's a string
