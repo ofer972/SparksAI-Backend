@@ -175,10 +175,10 @@ def get_percent_completed_status(
     
     # If sprint has ended
     if today >= end_date:
-        # Compare actual completion to 100% expected
-        if percent_completed >= 100 - slack_threshold:
+        # Compare actual completion to 100% expected (stricter thresholds)
+        if percent_completed >= 90:  # Stricter: was 85% (100 - 15)
             return "green"
-        elif percent_completed >= 75:
+        elif percent_completed >= 80:  # Stricter: was 75%
             return "yellow"
         else:
             return "red"
@@ -191,10 +191,11 @@ def get_percent_completed_status(
     days_elapsed = (today - start_date).days
     expected_completion = (days_elapsed / total_sprint_days) * 100
     
-    # Determine status with slack
+    # Determine status with slack (more relaxed thresholds)
+    yellow_threshold = 25.0  # More relaxed: was 15.0
     if percent_completed >= expected_completion - slack_threshold:
         return "green"
-    elif percent_completed >= expected_completion - 25.0:
+    elif percent_completed >= expected_completion - yellow_threshold:
         return "yellow"
     else:
         return "red"
@@ -214,9 +215,9 @@ def get_in_progress_issues_status(
         total_issues: Total number of issues in sprint
     
     Returns:
-        "green" if < 40% of issues are in progress
-        "yellow" if 40-60% of issues are in progress
-        "red" if > 60% of issues are in progress
+        "green" if < 25% of issues are in progress
+        "yellow" if 25-50% of issues are in progress
+        "red" if > 50% of issues are in progress
     """
     # Handle edge cases
     if total_issues == 0:
@@ -224,9 +225,9 @@ def get_in_progress_issues_status(
     
     in_progress_percent = (in_progress_issues / total_issues) * 100
     
-    if in_progress_percent > 60:
+    if in_progress_percent > 50:
         return "red"
-    elif in_progress_percent >= 40:
+    elif in_progress_percent >= 25:
         return "yellow"
     else:
         return "green"
@@ -531,25 +532,28 @@ async def get_count_in_progress(
 
 @team_metrics_router.get("/team-metrics/current-sprint-progress")
 async def get_current_sprint_progress(
-    team_name: str = Query(..., description="Team name to get sprint progress for"),
+    team_name: str = Query(..., description="Team name or group name (if isGroup=true)"),
+    isGroup: bool = Query(False, description="If true, team_name is treated as a group name"),
     conn: Connection = Depends(get_db_connection)
 ):
     """
-    Get current sprint progress for a specific team with detailed breakdown.
+    Get current sprint progress for a team or group with detailed breakdown.
     
     Returns sprint ID, sprint name, days left, total issues, completed, in progress, to do counts, completion percentage,
     and status indicators for the current active sprint.
+    When isGroup=true and teams have different active sprints, aggregates counts and excludes sprint-specific fields.
     
     Args:
-        team_name: Name of the team
+        team_name: Name of the team or group name (if isGroup=true)
+        isGroup: If true, team_name is treated as a group name
     
     Returns:
         JSON response with sprint progress metrics including:
-        - sprint_id: Sprint ID
-        - sprint_name: Sprint name
-        - days_left: Days remaining in sprint as integer (inclusive counting, 1 = last day)
-        - days_in_sprint: Total days in sprint as integer (inclusive counting)
-        - total_issues: Total number of issues in active sprint
+        - sprint_id: Sprint ID (only if single sprint)
+        - sprint_name: Sprint name (only if single sprint)
+        - days_left: Days remaining in sprint (only if single sprint)
+        - days_in_sprint: Total days in sprint (only if single sprint)
+        - total_issues: Total number of issues in active sprint(s)
         - completed_issues: Number of completed issues (status_category = 'Done')
         - in_progress_issues: Number of issues in progress
         - todo_issues: Number of issues in to do status
@@ -558,18 +562,20 @@ async def get_current_sprint_progress(
         - in_progress_issues_status: Status indicator (green/yellow/red) based on WIP percentage
     """
     try:
-        # Validate inputs
-        validated_team_name = validate_team_name(team_name)
+        # Validate inputs (validate team_name or group_name based on isGroup)
+        validated_name = None
+        if isGroup:
+            validated_name = validate_group_name(team_name)
+        else:
+            validated_name = validate_team_name(team_name)
+        
+        # Resolve team names using shared helper function (handles single team, group, or None)
+        team_names_list = resolve_team_names_from_filter(validated_name, isGroup, conn)
         
         # Get sprint progress data from database function
-        progress_data = get_team_current_sprint_progress(validated_team_name, conn)
+        progress_data = get_team_current_sprint_progress(team_names_list, conn)
         
-        # Calculate derived fields in service layer (business logic)
-        days_left = calculate_days_left(progress_data['end_date'])
-        days_in_sprint = calculate_days_in_sprint(
-            progress_data['start_date'],
-            progress_data['end_date']
-        )
+        # Calculate status indicators based on aggregated data
         percent_completed_status = get_percent_completed_status(
             progress_data['percent_completed'],
             progress_data['start_date'],
@@ -580,29 +586,50 @@ async def get_current_sprint_progress(
             progress_data['total_issues']
         )
         
+        # Build response data
+        response_data = {
+            "total_issues": progress_data['total_issues'],
+            "completed_issues": progress_data['completed_issues'],
+            "in_progress_issues": progress_data['in_progress_issues'],
+            "todo_issues": progress_data['todo_issues'],
+            "percent_completed": progress_data['percent_completed'],
+            "percent_completed_status": percent_completed_status,
+            "in_progress_issues_status": in_progress_issues_status
+        }
+        
+        # Always include sprint_id and sprint_name (null if multiple sprints)
+        # Always calculate days_left and days_in_sprint if dates are available
+        response_data["sprint_id"] = progress_data['sprint_id']
+        response_data["sprint_name"] = progress_data['sprint_name']
+        
+        # Calculate days_left and days_in_sprint if we have dates (even for multiple sprints, use earliest dates)
+        days_left = calculate_days_left(progress_data['end_date'])
+        days_in_sprint = calculate_days_in_sprint(
+            progress_data['start_date'],
+            progress_data['end_date']
+        )
+        response_data["days_left"] = days_left
+        response_data["days_in_sprint"] = days_in_sprint
+        
+        # Add team/group information to response
+        if isGroup:
+            response_data["group_name"] = validated_name
+            response_data["teams_in_group"] = team_names_list
+            message = f"Retrieved current sprint progress for group '{validated_name}'"
+        else:
+            response_data["team_name"] = validated_name
+            message = f"Retrieved current sprint progress for team '{validated_name}'"
+        
         return {
             "success": True,
-            "data": {
-                "sprint_id": progress_data['sprint_id'],
-                "sprint_name": progress_data['sprint_name'],
-                "days_left": days_left,
-                "days_in_sprint": days_in_sprint,
-                "total_issues": progress_data['total_issues'],
-                "completed_issues": progress_data['completed_issues'],
-                "in_progress_issues": progress_data['in_progress_issues'],
-                "todo_issues": progress_data['todo_issues'],
-                "percent_completed": progress_data['percent_completed'],
-                "percent_completed_status": percent_completed_status,
-                "in_progress_issues_status": in_progress_issues_status,
-                "team_name": validated_team_name
-            },
-            "message": f"Retrieved current sprint progress for team '{validated_team_name}'"
+            "data": response_data,
+            "message": message
         }
     
     except HTTPException:
         raise  # Re-raise FastAPI HTTPExceptions
     except Exception as e:
-        logger.error(f"Error fetching current sprint progress for team {validated_team_name}: {e}")
+        logger.error(f"Error fetching current sprint progress for team/group {team_name}: {e}")
         raise HTTPException(
             status_code=500,
             detail=f"Failed to fetch current sprint progress: {str(e)}"

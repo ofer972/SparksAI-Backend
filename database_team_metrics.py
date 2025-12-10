@@ -136,52 +136,111 @@ def get_team_count_in_progress(team_names: Optional[List[str]], conn: Connection
         raise e
 
 
-def get_team_current_sprint_progress(team_name: str, conn: Connection = None) -> Dict[str, Any]:
+def get_team_current_sprint_progress(team_names: Optional[List[str]], conn: Connection = None) -> Dict[str, Any]:
     """
-    Get current sprint progress for a team with detailed breakdown.
+    Get current sprint progress for team(s) with detailed breakdown.
     Returns sprint ID, sprint name, start date, end date, total issues, completed, in progress, to do counts, and completion percentage.
     
+    When multiple sprints are found:
+    - Single team (1 team in list): Returns the sprint with the most issues
+    - Group (multiple teams): Aggregates counts and sets sprint_id/sprint_name to None
+    
     Args:
-        team_name (str): Team name
+        team_names (Optional[List[str]]): List of team names, or None for all teams
         conn (Connection): Database connection from FastAPI dependency
     
     Returns:
         dict: Dictionary with 'sprint_id', 'sprint_name', 'start_date', 'end_date', 'total_issues', 'completed_issues', 
-              'in_progress_issues', 'todo_issues', and 'percent_completed' values
+              'in_progress_issues', 'todo_issues', and 'percent_completed' values.
+              For single team with multiple sprints: returns sprint with most issues.
+              For group with multiple sprints: sprint_id and sprint_name will be None.
     """
     try:
+        # Default empty data structure
+        default_data = {
+            'sprint_id': None,
+            'sprint_name': None,
+            'start_date': None,
+            'end_date': None,
+            'total_issues': 0,
+            'completed_issues': 0,
+            'in_progress_issues': 0,
+            'todo_issues': 0,
+            'percent_completed': 0.0
+        }
+        
         # SECURE: Parameterized query prevents SQL injection
-        sql_query = """
-            SELECT 
-                s.sprint_id,
-                s.name as sprint_name,
-                s.start_date,
-                s.end_date,
-                COUNT(*) as total_issues,
-                COUNT(CASE WHEN i.status_category = 'Done' THEN 1 END) as completed_issues,
-                COUNT(CASE WHEN i.status_category = 'In Progress' THEN 1 END) as in_progress_issues,
-                COUNT(CASE WHEN i.status_category = 'To Do' THEN 1 END) as todo_issues,
-                (COUNT(CASE WHEN i.status_category = 'Done' THEN 1 END)::numeric * 100) 
-                    / NULLIF(COUNT(*), 0) as percent_completed
-            FROM 
-                public.jira_issues AS i
-            INNER JOIN 
-                public.jira_sprints AS s
-                ON i.current_sprint_id = s.sprint_id
-            WHERE 
-                i.team_name = :team_name
-                AND s.state = 'active'
-            GROUP BY 
-                s.sprint_id, s.name, s.start_date, s.end_date;
-        """
+        if team_names:
+            # Build parameterized IN clause
+            placeholders = ", ".join([f":team_name_{i}" for i in range(len(team_names))])
+            params = {f"team_name_{i}": name for i, name in enumerate(team_names)}
+            
+            sql_query = f"""
+                SELECT 
+                    s.sprint_id,
+                    s.name as sprint_name,
+                    s.start_date,
+                    s.end_date,
+                    COUNT(*) as total_issues,
+                    COUNT(CASE WHEN i.status_category = 'Done' THEN 1 END) as completed_issues,
+                    COUNT(CASE WHEN i.status_category = 'In Progress' THEN 1 END) as in_progress_issues,
+                    COUNT(CASE WHEN i.status_category = 'To Do' THEN 1 END) as todo_issues,
+                    (COUNT(CASE WHEN i.status_category = 'Done' THEN 1 END)::numeric * 100) 
+                        / NULLIF(COUNT(*), 0) as percent_completed
+                FROM 
+                    public.jira_issues AS i
+                INNER JOIN 
+                    public.jira_sprints AS s
+                    ON i.current_sprint_id = s.sprint_id
+                WHERE 
+                    i.team_name IN ({placeholders})
+                    AND s.state = 'active'
+                GROUP BY 
+                    s.sprint_id, s.name, s.start_date, s.end_date;
+            """
+            
+            logger.info(f"Executing query to get current sprint progress for teams: {team_names}")
+            logger.info(f"Parameters: team_names={team_names}")
+            
+            result = conn.execute(text(sql_query), params)
+        else:
+            # No filter - return all teams
+            sql_query = """
+                SELECT 
+                    s.sprint_id,
+                    s.name as sprint_name,
+                    s.start_date,
+                    s.end_date,
+                    COUNT(*) as total_issues,
+                    COUNT(CASE WHEN i.status_category = 'Done' THEN 1 END) as completed_issues,
+                    COUNT(CASE WHEN i.status_category = 'In Progress' THEN 1 END) as in_progress_issues,
+                    COUNT(CASE WHEN i.status_category = 'To Do' THEN 1 END) as todo_issues,
+                    (COUNT(CASE WHEN i.status_category = 'Done' THEN 1 END)::numeric * 100) 
+                        / NULLIF(COUNT(*), 0) as percent_completed
+                FROM 
+                    public.jira_issues AS i
+                INNER JOIN 
+                    public.jira_sprints AS s
+                    ON i.current_sprint_id = s.sprint_id
+                WHERE 
+                    s.state = 'active'
+                GROUP BY 
+                    s.sprint_id, s.name, s.start_date, s.end_date;
+            """
+            
+            logger.info("Executing query to get current sprint progress for all teams")
+            
+            result = conn.execute(text(sql_query))
         
-        logger.info(f"Executing query to get current sprint progress for team: {team_name}")
-        logger.info(f"Parameters: team_name={team_name}")
+        rows = result.fetchall()
         
-        result = conn.execute(text(sql_query), {"team_name": team_name})
-        row = result.fetchone()
+        if len(rows) == 0:
+            # No active sprint found
+            return default_data
         
-        if row:
+        if len(rows) == 1:
+            # Single row - all teams have same sprint
+            row = rows[0]
             # Keep dates as date objects (not strings) for calculations in service layer
             sprint_id = int(row[0]) if row[0] else None
             sprint_name = str(row[1]) if row[1] else None
@@ -199,21 +258,63 @@ def get_team_current_sprint_progress(team_name: str, conn: Connection = None) ->
                 'todo_issues': int(row[7]) if row[7] else 0,
                 'percent_completed': float(row[8]) if row[8] is not None else 0.0
             }
-        else:
+        
+        # Multiple rows - different sprints
+        # Check if this is a single team (isGroup=false) or group (isGroup=true)
+        is_single_team = team_names and len(team_names) == 1
+        
+        if is_single_team:
+            # Single team with multiple sprints - use the sprint with the most issues
+            # Find the row with maximum total_issues
+            max_issues_row = max(rows, key=lambda row: int(row[4]) if row[4] else 0)
+            
+            sprint_id = int(max_issues_row[0]) if max_issues_row[0] else None
+            sprint_name = str(max_issues_row[1]) if max_issues_row[1] else None
+            start_date = max_issues_row[2] if max_issues_row[2] and hasattr(max_issues_row[2], 'strftime') else None
+            end_date = max_issues_row[3] if max_issues_row[3] and hasattr(max_issues_row[3], 'strftime') else None
+            
             return {
-                'sprint_id': None,
-                'sprint_name': None,
-                'start_date': None,
-                'end_date': None,
-                'total_issues': 0,
-                'completed_issues': 0,
-                'in_progress_issues': 0,
-                'todo_issues': 0,
-                'percent_completed': 0.0
+                'sprint_id': sprint_id,
+                'sprint_name': sprint_name,
+                'start_date': start_date,
+                'end_date': end_date,
+                'total_issues': int(max_issues_row[4]) if max_issues_row[4] else 0,
+                'completed_issues': int(max_issues_row[5]) if max_issues_row[5] else 0,
+                'in_progress_issues': int(max_issues_row[6]) if max_issues_row[6] else 0,
+                'todo_issues': int(max_issues_row[7]) if max_issues_row[7] else 0,
+                'percent_completed': float(max_issues_row[8]) if max_issues_row[8] is not None else 0.0
+            }
+        else:
+            # Group with multiple sprints - aggregate the data
+            total_issues_sum = sum(int(row[4]) if row[4] else 0 for row in rows)
+            completed_issues_sum = sum(int(row[5]) if row[5] else 0 for row in rows)
+            in_progress_issues_sum = sum(int(row[6]) if row[6] else 0 for row in rows)
+            todo_issues_sum = sum(int(row[7]) if row[7] else 0 for row in rows)
+            
+            # Calculate percent_completed from aggregated totals
+            percent_completed = (completed_issues_sum / total_issues_sum * 100) if total_issues_sum > 0 else 0.0
+            
+            # Use earliest start_date and earliest end_date for timeline calculation
+            start_dates = [row[2] for row in rows if row[2] and hasattr(row[2], 'strftime')]
+            end_dates = [row[3] for row in rows if row[3] and hasattr(row[3], 'strftime')]
+            
+            earliest_start_date = min(start_dates) if start_dates else None
+            earliest_end_date = min(end_dates) if end_dates else None
+            
+            return {
+                'sprint_id': None,  # Multiple sprints - no single sprint_id
+                'sprint_name': None,  # Multiple sprints - no single sprint_name
+                'start_date': earliest_start_date,  # Multiple sprints - use earliest start_date
+                'end_date': earliest_end_date,  # Multiple sprints - use earliest end_date
+                'total_issues': total_issues_sum,
+                'completed_issues': completed_issues_sum,
+                'in_progress_issues': in_progress_issues_sum,
+                'todo_issues': todo_issues_sum,
+                'percent_completed': percent_completed
             }
             
     except Exception as e:
-        logger.error(f"Error fetching current sprint progress for team {team_name}: {e}")
+        logger.error(f"Error fetching current sprint progress for teams {team_names}: {e}")
         raise e
 
 
