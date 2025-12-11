@@ -1140,12 +1140,12 @@ async def ai_chat(
                 if not content_intro:
                     content_intro = "This is previous discussion we had in a different chat. Read this information as I want to ask follow up questions."
                 
-                # Extract description from card
-                description = card.get('description', '')
+                # Extract full_information from card
+                full_information = card.get('full_information', '')
                 
-                # Build conversation_context: content_intro + marker + description + input_sent
+                # Build conversation_context: content_intro + marker + full_information + input_sent
                 # Add marker to separate prompt from data
-                conversation_context = content_intro + '\n\n=== DATA_STARTS_HERE ===\n\n' + description + '\n\n' + formatted_job_data
+                conversation_context = content_intro + '\n\n=== DATA_STARTS_HERE ===\n\n' + full_information + '\n\n' + formatted_job_data
                 logger.info(f"Built conversation context from team AI card {insights_id_int} with intro (length: {len(conversation_context)} chars)")
             except ValueError:
                 raise HTTPException(
@@ -1202,12 +1202,12 @@ async def ai_chat(
                 if not content_intro:
                     content_intro = "This is previous discussion we had in a different chat. Read this information as I want to ask follow up questions."
                 
-                # Extract description from card
-                description = card.get('description', '')
+                # Extract full_information from card
+                full_information = card.get('full_information', '')
                 
-                # Build conversation_context: content_intro + marker + description + input_sent
+                # Build conversation_context: content_intro + marker + full_information + input_sent
                 # Add marker to separate prompt from data
-                conversation_context = content_intro + '\n\n=== DATA_STARTS_HERE ===\n\n' + description + '\n\n' + formatted_job_data
+                conversation_context = content_intro + '\n\n=== DATA_STARTS_HERE ===\n\n' + full_information + '\n\n' + formatted_job_data
                 logger.info(f"Built conversation context from PI AI card {insights_id_int} (length: {len(conversation_context)} chars)")
             except ValueError:
                 raise HTTPException(
@@ -1403,10 +1403,10 @@ async def ai_chat(
                             try:
                                 insights_id_int = int(request.insights_id)
                                 card = get_team_ai_card_by_id(insights_id_int, conn)
-                                description = card.get('description', '')
+                                full_information = card.get('full_information', '')
                                 source_job_id = card.get('source_job_id')
                                 formatted_job_data = get_formatted_job_data_for_llm_followup_insight(insights_id_int, source_job_id, conn)
-                                data_only = description + '\n\n' + formatted_job_data if description else formatted_job_data
+                                data_only = full_information + '\n\n' + formatted_job_data if full_information else formatted_job_data
                                 history_json['initial_request_data_only'] = data_only
                                 logger.info(f"Stored data-only context for Team_insights follow-ups using fallback (length: {len(data_only)} chars)")
                             except Exception as e:
@@ -1415,10 +1415,10 @@ async def ai_chat(
                             try:
                                 insights_id_int = int(request.insights_id)
                                 card = get_pi_ai_card_by_id(insights_id_int, conn)
-                                description = card.get('description', '')
+                                full_information = card.get('full_information', '')
                                 source_job_id = card.get('source_job_id')
                                 formatted_job_data = get_formatted_job_data_for_llm_followup_insight(insights_id_int, source_job_id, conn)
-                                data_only = description + '\n\n' + formatted_job_data if description else formatted_job_data
+                                data_only = full_information + '\n\n' + formatted_job_data if full_information else formatted_job_data
                                 history_json['initial_request_data_only'] = data_only
                                 logger.info(f"Stored data-only context for PI_insights follow-ups using fallback (length: {len(data_only)} chars)")
                             except Exception as e:
