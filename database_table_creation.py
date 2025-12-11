@@ -554,7 +554,7 @@ DEFAULT_REPORT_DEFINITIONS = [
     {
         "report_id": "sprint-velocity-advanced",
         "report_name": "Sprint Velocity (Advanced)",
-        "chart_type": "stacked_bar",
+        "chart_type": "stacked_bardfoe",
         "data_source": "sprint_velocity_advanced",
         "description": "Provides sprint velocity metric inlcuding issues palanned/added/removed/completd with average velocity.",
         "default_filters": {

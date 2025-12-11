@@ -19,6 +19,7 @@ from database_general import (
     update_ai_card_by_id,
     delete_ai_card_by_id,
     get_top_ai_cards_with_recommendations_filtered,
+    get_top_team_ai_cards_with_recommendations_from_json,
 )
 from insight_types_service import get_insight_category_names
 import config
@@ -244,17 +245,30 @@ async def get_team_ai_cards_with_recommendations(
                     seen.add(cat)
             validated_categories = validated_categories if validated_categories else None
         
-        # Get AI cards with recommendations using shared generic function
+        # Get AI cards with recommendations from JSON (NEW APPROACH)
         # Use 'group_name' filter column if isGroup=True, otherwise 'team_name'
         filter_column = 'group_name' if isGroup else 'team_name'
-        ai_cards = get_top_ai_cards_with_recommendations_filtered(
+        # Limit recommendations to max 3 as per requirements
+        recommendations_limit = min(validated_recommendations_limit, 3)
+        ai_cards = get_top_team_ai_cards_with_recommendations_from_json(
             filter_column,
             validated_team_name,
             validated_limit,
-            validated_recommendations_limit,
+            recommendations_limit,
             validated_categories,
             conn
         )
+        
+        # OLD FUNCTION CALL - COMMENTED OUT
+        # Get AI cards with recommendations from database table
+        # ai_cards = get_top_ai_cards_with_recommendations_filtered(
+        #     filter_column,
+        #     validated_team_name,
+        #     validated_limit,
+        #     validated_recommendations_limit,
+        #     validated_categories,
+        #     conn
+        # )
         
         return {
             "success": True,
@@ -407,6 +421,131 @@ async def get_team_ai_cards_collection(
     
     except Exception as e:
         logger.error(f"Error fetching team AI cards: {e}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to fetch team AI cards: {str(e)}"
+        )
+
+@team_ai_cards_router.get("/team-ai-cards/getAllFields")
+async def get_team_ai_cards_all_fields(
+    date: Optional[str] = Query(None, description="Filter by date in YYYY-MM-DD format (e.g., '2025-12-05')"),
+    card_name: Optional[str] = Query(None, description="Filter by exact card name"),
+    limit: int = Query(100, description="Maximum number of cards to return (default: 100)"),
+    conn: Connection = Depends(get_db_connection)
+):
+    """
+    Get team AI summary cards from ai_summary table with ALL fields.
+    Returns all columns from the table using SELECT *.
+    Uses parameterized queries to prevent SQL injection.
+    
+    Args:
+        date: Optional date filter in YYYY-MM-DD format (e.g., '2025-12-05')
+        card_name: Optional card name filter (exact match)
+        limit: Maximum number of cards to return (default: 100)
+    
+    Returns:
+        JSON response with list of team AI cards (all fields) and count
+    """
+    try:
+        # Validate date format if provided
+        if date:
+            # Validate date format YYYY-MM-DD
+            date_pattern = re.compile(r'^\d{4}-\d{2}-\d{2}$')
+            if not date_pattern.match(date):
+                raise HTTPException(
+                    status_code=400,
+                    detail="Date must be in YYYY-MM-DD format (e.g., '2025-12-05')"
+                )
+            # Validate it's a valid date
+            try:
+                from datetime import datetime
+                datetime.strptime(date, '%Y-%m-%d')
+            except ValueError:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Invalid date: '{date}'. Date must be in YYYY-MM-DD format and be a valid date."
+                )
+        
+        # Validate limit
+        if limit < 1:
+            raise HTTPException(status_code=400, detail="Limit must be at least 1")
+        if limit > 1000:
+            raise HTTPException(status_code=400, detail="Limit cannot exceed 1000")
+        
+        # Build WHERE clause dynamically based on provided parameters
+        where_conditions = []
+        params = {}
+        
+        if date:
+            where_conditions.append("date = :date")
+            params["date"] = date
+        
+        if card_name:
+            where_conditions.append("card_name = :card_name")
+            params["card_name"] = card_name
+        
+        # Always exclude cards where both team_name and group_name are NULL
+        where_conditions.append("(team_name IS NOT NULL OR group_name IS NOT NULL)")
+        
+        # Build WHERE clause
+        where_clause = ""
+        if where_conditions:
+            where_clause = "WHERE " + " AND ".join(where_conditions)
+        
+        # SECURE: Parameterized query prevents SQL injection
+        # Return ALL fields using SELECT *
+        query = text(f"""
+            SELECT *
+            FROM {config.TEAM_AI_CARDS_TABLE}
+            {where_clause}
+            ORDER BY id DESC 
+            LIMIT :limit
+        """)
+        params["limit"] = limit
+        
+        filter_info = []
+        if date:
+            filter_info.append(f"date={date}")
+        if card_name:
+            filter_info.append(f"card_name={card_name}")
+        filter_str = f" with filters: {', '.join(filter_info)}" if filter_info else ""
+        
+        logger.info(f"Executing query to get all fields from team AI cards from {config.TEAM_AI_CARDS_TABLE}{filter_str}")
+        
+        # Execute query with connection from dependency
+        result = conn.execute(query, params)
+        rows = result.fetchall()
+        
+        # Convert rows to list of dictionaries with all fields
+        # Using _mapping to convert SQLAlchemy row to dictionary
+        cards = []
+        for row in rows:
+            card_dict = dict(row._mapping)
+            cards.append(card_dict)
+        
+        filter_message = ""
+        if date or card_name:
+            filter_parts = []
+            if date:
+                filter_parts.append(f"date={date}")
+            if card_name:
+                filter_parts.append(f"card_name='{card_name}'")
+            filter_message = f" (filtered by: {', '.join(filter_parts)})"
+        
+        return {
+            "success": True,
+            "data": {
+                "cards": cards,
+                "count": len(cards)
+            },
+            "message": f"Retrieved {len(cards)} team AI summary cards with all fields{filter_message}"
+        }
+    
+    except HTTPException:
+        # Re-raise HTTP exceptions (validation errors)
+        raise
+    except Exception as e:
+        logger.error(f"Error fetching team AI cards with all fields: {e}")
         raise HTTPException(
             status_code=500,
             detail=f"Failed to fetch team AI cards: {str(e)}"

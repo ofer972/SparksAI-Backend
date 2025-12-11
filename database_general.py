@@ -351,6 +351,168 @@ def get_recommendations_by_ai_summary_id(
         raise e
 
 
+def get_top_team_ai_cards_with_recommendations_from_json(
+    filter_column: str,
+    filter_value: str,
+    limit: int = 4,
+    recommendations_limit: int = 3,
+    categories: Optional[List[str]] = None,
+    conn: Connection = None
+) -> List[Dict[str, Any]]:
+    """
+    Get top Team AI cards with recommendations extracted from information_json field.
+    
+    Returns the most recent + highest priority card for each type (max 1 per type),
+    with recommendations parsed from the card's information_json field.
+    
+    Args:
+        filter_column (str): Column to filter by ('team_name' or 'group_name')
+        filter_value (str): Value to filter by
+        limit (int): Number of AI cards to return (default: 4)
+        recommendations_limit (int): Maximum recommendations per card (default: 3, max: 3)
+        categories (Optional[List[str]]): Optional category filter - only return cards with card_type matching insight types for any of these categories
+        conn (Connection): Database connection from FastAPI dependency
+    
+    Returns:
+        list: List of AI card dictionaries, each with 'recommendations' array and 'recommendations_count'
+    """
+    import json
+    
+    try:
+        # Get top AI cards using existing function
+        ai_cards = get_top_ai_cards_filtered(filter_column, filter_value, limit, categories=categories, conn=conn)
+        
+        # For each card, parse recommendations from information_json
+        for card in ai_cards:
+            card_id = card.get('id')
+            information_json_str = card.get('information_json')
+            
+            recommendations = []
+            
+            if card_id and information_json_str:
+                try:
+                    # Parse the JSON string
+                    information_json = json.loads(information_json_str) if isinstance(information_json_str, str) else information_json_str
+                    
+                    # Extract Recommendations array
+                    if isinstance(information_json, dict) and 'Recommendations' in information_json:
+                        json_recommendations = information_json['Recommendations']
+                        
+                        if isinstance(json_recommendations, list):
+                            # Take first 3 recommendations (no sorting, as they appear in JSON)
+                            for index, json_rec in enumerate(json_recommendations[:recommendations_limit]):
+                                if isinstance(json_rec, dict):
+                                    # Map fields from JSON to recommendation structure
+                                    recommendation = {
+                                        'id': f"{card_id}_{index + 1}",  # Format: {card_id}_{index} starting from 1
+                                        'team_name': card.get('team_name'),
+                                        'date': card.get('date'),
+                                        'action_text': json_rec.get('text', ''),  # text -> action_text
+                                        'rational': json_rec.get('header', ''),  # header -> rational
+                                        'priority': 'Important',  # Always "Important"
+                                        'status': 'Pending',  # Always "Pending"
+                                        'source_job_id': card.get('source_job_id'),
+                                        'source_ai_summary_id': card_id,  # Same as card ID
+                                        'created_at': card.get('created_at'),
+                                        'updated_at': card.get('updated_at')
+                                    }
+                                    recommendations.append(recommendation)
+                    
+                except (json.JSONDecodeError, TypeError, KeyError) as e:
+                    # Log error but continue - return empty recommendations array
+                    logger.warning(f"Error parsing information_json for card {card_id}: {e}")
+            
+            card['recommendations'] = recommendations
+            card['recommendations_count'] = len(recommendations)
+        
+        return ai_cards
+            
+    except Exception as e:
+        logger.error(f"Error fetching top team AI cards with recommendations from JSON filtered by {filter_column}={filter_value}: {e}")
+        raise e
+
+
+def get_top_pi_ai_cards_with_recommendations_from_json(
+    filter_column: str,
+    filter_value: str,
+    limit: int = 4,
+    recommendations_limit: int = 3,
+    categories: Optional[List[str]] = None,
+    conn: Connection = None
+) -> List[Dict[str, Any]]:
+    """
+    Get top PI AI cards with recommendations extracted from information_json field.
+    
+    Returns the most recent + highest priority card for each type (max 1 per type),
+    with recommendations parsed from the card's information_json field.
+    
+    Args:
+        filter_column (str): Column to filter by ('pi')
+        filter_value (str): Value to filter by
+        limit (int): Number of AI cards to return (default: 4)
+        recommendations_limit (int): Maximum recommendations per card (default: 3, max: 3)
+        categories (Optional[List[str]]): Optional category filter - only return cards with card_type matching insight types for any of these categories
+        conn (Connection): Database connection from FastAPI dependency
+    
+    Returns:
+        list: List of AI card dictionaries, each with 'recommendations' array and 'recommendations_count'
+    """
+    import json
+    
+    try:
+        # Get top AI cards using existing function
+        ai_cards = get_top_ai_cards_filtered(filter_column, filter_value, limit, categories=categories, conn=conn)
+        
+        # For each card, parse recommendations from information_json
+        for card in ai_cards:
+            card_id = card.get('id')
+            information_json_str = card.get('information_json')
+            
+            recommendations = []
+            
+            if card_id and information_json_str:
+                try:
+                    # Parse the JSON string
+                    information_json = json.loads(information_json_str) if isinstance(information_json_str, str) else information_json_str
+                    
+                    # Extract Recommendations array
+                    if isinstance(information_json, dict) and 'Recommendations' in information_json:
+                        json_recommendations = information_json['Recommendations']
+                        
+                        if isinstance(json_recommendations, list):
+                            # Take first 3 recommendations (no sorting, as they appear in JSON)
+                            for index, json_rec in enumerate(json_recommendations[:recommendations_limit]):
+                                if isinstance(json_rec, dict):
+                                    # Map fields from JSON to recommendation structure
+                                    recommendation = {
+                                        'id': f"{card_id}_{index + 1}",  # Format: {card_id}_{index} starting from 1
+                                        'team_name': card.get('team_name'),
+                                        'date': card.get('date'),
+                                        'action_text': json_rec.get('text', ''),  # text -> action_text
+                                        'rational': json_rec.get('header', ''),  # header -> rational
+                                        'priority': 'Important',  # Always "Important"
+                                        'status': 'Pending',  # Always "Pending"
+                                        'source_job_id': card.get('source_job_id'),
+                                        'source_ai_summary_id': card_id,  # Same as card ID
+                                        'created_at': card.get('created_at'),
+                                        'updated_at': card.get('updated_at')
+                                    }
+                                    recommendations.append(recommendation)
+                    
+                except (json.JSONDecodeError, TypeError, KeyError) as e:
+                    # Log error but continue - return empty recommendations array
+                    logger.warning(f"Error parsing information_json for card {card_id}: {e}")
+            
+            card['recommendations'] = recommendations
+            card['recommendations_count'] = len(recommendations)
+        
+        return ai_cards
+            
+    except Exception as e:
+        logger.error(f"Error fetching top PI AI cards with recommendations from JSON filtered by {filter_column}={filter_value}: {e}")
+        raise e
+
+
 def get_top_ai_cards_with_recommendations_filtered(
     filter_column: str,
     filter_value: str,
@@ -380,7 +542,7 @@ def get_top_ai_cards_with_recommendations_filtered(
         # Get top AI cards using existing function
         ai_cards = get_top_ai_cards_filtered(filter_column, filter_value, limit, categories=categories, conn=conn)
         
-        # For each card, fetch and attach recommendations
+        # For each card, fetch and attach recommendations from database
         for card in ai_cards:
             card_id = card.get('id')
             if card_id:
