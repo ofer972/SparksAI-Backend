@@ -351,14 +351,6 @@ async def get_avg_sprint_metrics(
         try:
             from collections import defaultdict
             
-            # Debug: Log data structure
-            if raw_data:
-                logger.info(f"DEBUG: raw_data has {len(raw_data)} rows")
-                logger.info(f"DEBUG: First row keys: {list(raw_data[0].keys())}")
-                logger.info(f"DEBUG: First row sprint_id (out_sprint_id): {raw_data[0].get('out_sprint_id')}")
-            else:
-                logger.info("DEBUG: raw_data is empty")
-            
             sprint_groups = defaultdict(lambda: {
                 'issues_completed': 0,
                 'total_cycle_time': 0.0,
