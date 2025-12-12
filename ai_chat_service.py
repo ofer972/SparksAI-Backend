@@ -1819,17 +1819,24 @@ Results ({row_count} row{'s' if row_count != 1 else ''}):
                 # Initial call: send full conversation_context (with content_intro prompt)
                 conversation_context_for_llm = conversation_context
             else:
-                # Follow-up: send data-only version (without content_intro prompt)
-                # This gives LLM access to data without confusing prompt instructions
-                data_only = history_json.get('initial_request_data_only')
-                if data_only:
-                    conversation_context_for_llm = data_only
-                    logger.info(f"Using data-only context for follow-up (length: {len(data_only)} chars, no prompt)")
+                # Follow-up: check if this is an epic refinement request
+                # Epic refinement is always a follow-up, and we need to send the template on every call
+                if conversation_context and "=== EPIC INFORMATION FOR REFINEMENT ===" in conversation_context:
+                    # Epic refinement: use fresh context (includes template) on every follow-up call
+                    conversation_context_for_llm = conversation_context
+                    logger.info(f"Using fresh epic refinement context for follow-up (includes template, length: {len(conversation_context)} chars)")
                 else:
-                    # Fallback: use full context if data-only not available
-                    stored_context = history_json.get('initial_request_conversation_context')
-                    conversation_context_for_llm = stored_context if stored_context else conversation_context
-                    logger.warning("Data-only context not found, using full context as fallback")
+                    # Other follow-ups: send data-only version (without content_intro prompt)
+                    # This gives LLM access to data without confusing prompt instructions
+                    data_only = history_json.get('initial_request_data_only')
+                    if data_only:
+                        conversation_context_for_llm = data_only
+                        logger.info(f"Using data-only context for follow-up (length: {len(data_only)} chars, no prompt)")
+                    else:
+                        # Fallback: use full context if data-only not available
+                        stored_context = history_json.get('initial_request_conversation_context')
+                        conversation_context_for_llm = stored_context if stored_context else conversation_context
+                        logger.warning("Data-only context not found, using full context as fallback")
         
         # DIAGNOSTIC LOGGING: Verify what's in history_json for follow-up calls
         if not is_initial_call:
