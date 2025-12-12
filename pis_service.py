@@ -1488,7 +1488,7 @@ async def get_average_epic_cycle_time(
         where_conditions = [
             "issue_type = 'Epic'",
             "status_category = 'Done'",
-            "cycle_time_days IS NOT NULL",
+            "cycle_time_days > 1",
             "resolved_at >= :start_date",
             "resolved_at IS NOT NULL"
         ]
