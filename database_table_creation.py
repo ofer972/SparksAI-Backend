@@ -26,7 +26,7 @@ DEFAULT_INSIGHT_TYPES = [
         "requires_pi": True,
         "requires_team": False,
         "requires_group": False,
-        "cron_config": {"day_of_week": "sun,mon,tue,wed,thu", "hour": 6, "minute": 30}
+        "cron_config": {"day_of_week": "sun,mon,tue,wed,thu", "hour": 6, "minute": 0}
     },
     {
         "insight_type": "PI Dependencies",
@@ -36,7 +36,7 @@ DEFAULT_INSIGHT_TYPES = [
         "requires_pi": True,
         "requires_team": False,
         "requires_group": False,
-        "cron_config": {"hour": 5, "minute": 00}
+        "cron_config": {"hour": 5, "minute": 40}
     },
     {
         "insight_type": "PI Planning Gaps",
@@ -46,7 +46,7 @@ DEFAULT_INSIGHT_TYPES = [
         "requires_pi": True,
         "requires_team": False,
         "requires_group": False,
-        "cron_config": {"hour": 5, "minute": 15}
+        "cron_config": {"hour": 5, "minute": 40}
     },
     {
         "insight_type": "Daily Progress",
@@ -56,7 +56,7 @@ DEFAULT_INSIGHT_TYPES = [
         "requires_pi": False,
         "requires_team": True,
         "requires_group": False,
-        "cron_config": {"hour": 5, "minute": 20}
+        "cron_config": {"hour": 5, "minute": 30}
     },
     {
         "insight_type": "Sprint Goal",
@@ -66,7 +66,7 @@ DEFAULT_INSIGHT_TYPES = [
         "requires_pi": False,
         "requires_team": True,
         "requires_group": False,
-        "cron_config": {"hour": 5, "minute": 40}
+        "cron_config": {"hour": 5, "minute": 30}
     },
     {
         "insight_type": "Team Retro Topics",
@@ -76,7 +76,7 @@ DEFAULT_INSIGHT_TYPES = [
         "requires_pi": False,
         "requires_team": True,
         "requires_group": False,
-        "cron_config": {"hour": 6, "minute": 0}
+        "cron_config": {"hour": 5, "minute": 30}
     },
     {
         "insight_type": "Team PI Insight",
@@ -86,7 +86,7 @@ DEFAULT_INSIGHT_TYPES = [
         "requires_pi": True,
         "requires_team": True,
         "requires_group": False,
-        "cron_config": {"hour": 6, "minute": 10}
+        "cron_config": {"hour": 5, "minute": 30}
     },
     {
         "insight_type": "Group Sprint Flow",
@@ -96,7 +96,7 @@ DEFAULT_INSIGHT_TYPES = [
         "requires_pi": False,
         "requires_team": False,
         "requires_group": True,
-        "cron_config": {"hour": 6, "minute": 30}
+        "cron_config": {"hour": 5, "minute": 45}
     },
     {
         "insight_type": "Group Sprint Predictability",
@@ -106,7 +106,7 @@ DEFAULT_INSIGHT_TYPES = [
         "requires_pi": False,
         "requires_team": False,
         "requires_group": True,
-        "cron_config": {"hour": 6, "minute": 45}
+        "cron_config": {"hour": 5, "minute": 45}
     },
     {
         "insight_type": "Group Sprint Dependency",
@@ -116,7 +116,7 @@ DEFAULT_INSIGHT_TYPES = [
         "requires_pi": False,
         "requires_team": False,
         "requires_group": True,
-        "cron_config": {"hour": 7, "minute": 0}
+        "cron_config": {"hour": 5, "minute": 45}
     },
     {
         "insight_type": "Group Epic Dependencies",
@@ -126,7 +126,7 @@ DEFAULT_INSIGHT_TYPES = [
         "requires_pi": False,
         "requires_team": False,
         "requires_group": True,
-        "cron_config": {"hour": 7, "minute": 10}
+        "cron_config": {"hour": 5, "minute": 45}
     },
     {
         "insight_type": "WIP Level",
@@ -136,7 +136,7 @@ DEFAULT_INSIGHT_TYPES = [
         "requires_pi": False,
         "requires_team": True,
         "requires_group": False,
-        "cron_config": {"hour": 7, "minute": 20}
+        "cron_config": {"hour": 5, "minute": 50}
     },
 
 #    {
@@ -341,10 +341,10 @@ DEFAULT_REPORT_DEFINITIONS = [
         }
     },
     {
-        "report_id": "team-velocity-advanced",
-        "report_name": "Team Velocity (Advanced)",
+        "report_id": "sprint-velocity-advanced",
+        "report_name": "Team Velocity",
         "chart_type": "stacked_bar",
-        "data_source": "team_velocity_advanced",
+        "data_source": "team_sprint_velocity_advanced",
         "description": "Displays sprint velocity chart with planned, added, completed, not completed, and removed issues.",
         "default_filters": {
             "team_name": None,
@@ -356,7 +356,7 @@ DEFAULT_REPORT_DEFINITIONS = [
             "optional_filters": ["team_name", "months", "issue_type"],
             "parameters": {
                 "team_name": {"type": "string", "description": "Team identifier"},
-                "months": {"type": "integer", "description": "Number of months to look back (1, 2, 3, 4, 6, 9)"},
+                "months": {"type": "integer", "description": "Number of months to look back (1-12)"},
                 "issue_type": {"type": "string", "description": "Issue type filter (optional, e.g., 'Story', 'Bug', 'Task')"}
             },
             "allowed_views": ["team-dashboard"]
@@ -392,16 +392,14 @@ DEFAULT_REPORT_DEFINITIONS = [
         "description": "Summarizes predictability metrics for program increments.",
         "default_filters": {
             "pi_names": [],
-            "team_name": None,
-            "isGroup": False
+            "team_name": None
         },
         "meta_schema": {
             "required_filters": [],
-            "optional_filters": ["pi_names", "team_name", "isGroup"],
+            "optional_filters": ["pi_names", "team_name"],
             "parameters": {
                 "pi_names": {"type": "array", "description": "List of PI names to include"},
-                "team_name": {"type": "string", "description": "Optional team filter or group name (if isGroup=true)"},
-                "isGroup": {"type": "boolean", "description": "If true, team_name is treated as a group name"}
+                "team_name": {"type": "string", "description": "Optional team filter"}
             },
             "allowed_views": ["pi-dashboard", "team-dashboard"]
         }
@@ -421,7 +419,7 @@ DEFAULT_REPORT_DEFINITIONS = [
             "parameters": {
                 "quarters": {"type": "array", "description": "List of PI or quarter names (e.g., '2025-Q1')"}
             },
-            "allowed_views": ["pi-dashboard"]
+            "allowed_views": ["every-dashboard"]
         }
     },
     {
@@ -531,7 +529,7 @@ DEFAULT_REPORT_DEFINITIONS = [
             "parameters": {
                 "pi": {"type": "string", "description": "PI name filter"}
             },
-            "allowed_views": ["pi-dashboard", "team-dashboard"]
+            "allowed_views": ["pi-dashboard"]
         }
     },
     {
@@ -549,7 +547,7 @@ DEFAULT_REPORT_DEFINITIONS = [
             "parameters": {
                 "months": {"type": "integer", "description": "Number of months to look back"}
             },
-            "allowed_views": ["team-dashboard"]
+            "allowed_views": ["every-dashboard"]
         }
     },
     {
@@ -570,30 +568,7 @@ DEFAULT_REPORT_DEFINITIONS = [
                 "team_name": {"type": "string", "description": "Team identifier or group name (if isGroup=true)"},
                 "isGroup": {"type": "boolean", "description": "If true, team_name is treated as a group name"}
             },
-            "allowed_views": ["team-dashboard"]
-        }
-    },
-    {
-        "report_id": "sprint-velocity-advanced",
-        "report_name": "Sprint Velocity (Advanced)",
-        "chart_type": "stacked_bardfoe",
-        "data_source": "sprint_velocity_advanced",
-        "description": "Provides sprint velocity metric inlcuding issues palanned/added/removed/completd with average velocity.",
-        "default_filters": {
-            "months": 2,
-            "team_name": None,
-            "issue_type": None
-        },
-        "meta_schema": {
-            "required_filters": [],
-            "optional_filters": ["months", "team_name", "isGroup","issue_type"],
-            "parameters": {
-                "months": {"type": "integer", "description": "Number of months to look back"},
-                "team_name": {"type": "string", "description": "Team identifier or group name (if isGroup=true)"},
-                "issue_type": {"type": "string", "description": "Issue type filter"},
-                "isGroup": {"type": "boolean", "description": "If true, team_name is treated as a group name"}
-            },
-            "allowed_views": ["team-dashboard"]
+            "allowed_views": ["team-dashboard", "pi-dashboard"]
         }
     },
     {
