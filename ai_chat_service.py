@@ -15,6 +15,7 @@ import logging
 import json
 import httpx
 import os
+import re
 from datetime import datetime, date
 from database_connection import get_db_connection
 from database_general import get_team_ai_card_by_id, get_recommendation_by_id, get_prompt_by_email_and_name, get_pi_ai_card_by_id, get_formatted_job_data_for_llm_followup_insight, get_formatted_job_data_for_llm_followup_recommendation
@@ -758,6 +759,216 @@ def format_pi_dashboard_data(
     return "\n".join(formatted_parts)
 
 
+# ============================================================================
+# Epic Refinement Request Handling
+# ============================================================================
+
+
+def detect_epic_refinement_request(question: str) -> Optional[str]:
+    """
+    Detect if question is requesting epic refinement/recommendation.
+    
+    Returns:
+        JIRA issue key if detected, None otherwise
+    """
+    if not question:
+        return None
+    
+    question_lower = question.lower()
+    
+    # Check for refinement keywords
+    has_refinement_keyword = any(
+        keyword in question_lower 
+        for keyword in ['recommend', 'refined', 'refine']
+    )
+    
+    # Check for epic keyword
+    has_epic_keyword = 'epic' in question_lower
+    
+    # Extract JIRA issue key (format: UP_TO_10_CHARS-NUMBER)
+    # JIRA project keys can be 1-10 characters, but we allow up to 10 for flexibility
+    jira_key_pattern = r'\b[A-Z]{1,10}-\d+\b'
+    jira_keys = re.findall(jira_key_pattern, question.upper())
+    
+    # All conditions must be met
+    if has_refinement_keyword and has_epic_keyword and jira_keys:
+        return jira_keys[0]  # Return first matching key
+    
+    return None
+
+
+def fetch_epic_refinement_data(
+    epic_key: str, 
+    conn: Connection
+) -> Optional[Dict[str, Any]]:
+    """
+    Fetch epic data and all children summaries for epic refinement.
+    
+    Args:
+        epic_key: JIRA issue key (e.g., 'PROJ-123')
+        conn: Database connection
+        
+    Returns:
+        Dictionary with epic data and children, or None if epic not found
+    """
+    try:
+        # 1. Get epic data
+        epic_query = text(f"""
+            SELECT 
+                issue_key,
+                summary,
+                description
+            FROM {config.WORK_ITEMS_TABLE}
+            WHERE issue_key = :epic_key
+              AND issue_type = 'Epic'
+            LIMIT 1
+        """)
+        
+        logger.info(f"SQL Query: Fetching epic {epic_key}")
+        epic_result = conn.execute(epic_query, {"epic_key": epic_key})
+        epic_row = epic_result.fetchone()
+        
+        if not epic_row:
+            logger.warning(f"Epic {epic_key} not found or not an Epic type")
+            return None
+        
+        epic_data = {
+            "issue_key": epic_row[0],
+            "summary": epic_row[1] or "",
+            "description": epic_row[2] or ""
+        }
+        
+        # 2. Get all children
+        children_query = text(f"""
+            SELECT 
+                issue_key,
+                summary
+            FROM {config.WORK_ITEMS_TABLE}
+            WHERE parent_key = :epic_key
+            ORDER BY issue_key
+        """)
+        
+        logger.info(f"SQL Query: Fetching children of epic {epic_key}")
+        children_result = conn.execute(children_query, {"epic_key": epic_key})
+        children_rows = children_result.fetchall()
+        
+        children = [
+            {
+                "issue_key": row[0],
+                "summary": row[1] or ""
+            }
+            for row in children_rows
+        ]
+        
+        logger.info(f"Found {len(children)} children for epic {epic_key}")
+        
+        return {
+            "epic": epic_data,
+            "children": children,
+            "children_count": len(children)
+        }
+        
+    except Exception as e:
+        logger.error(f"Error fetching epic refinement data for {epic_key}: {e}")
+        return None
+
+
+def format_epic_refinement_context(
+    epic_data: Dict[str, Any],
+    template_text: str
+) -> str:
+    """
+    Format epic refinement data using template.
+    
+    Args:
+        epic_data: Dictionary from fetch_epic_refinement_data()
+        template_text: Template text from prompts table (required, no fallback)
+        
+    Returns:
+        Formatted string to send as conversation_context
+    """
+    # Build epic information section
+    epic = epic_data.get("epic", {})
+    children = epic_data.get("children", [])
+    
+    epic_section = f"""
+=== EPIC INFORMATION FOR REFINEMENT ===
+Epic Key: {epic.get('issue_key', 'N/A')}
+Epic Summary: {epic.get('summary', 'N/A')}
+Epic Description: {epic.get('description', 'N/A')}
+
+=== EPIC CHILDREN ({epic_data.get('children_count', 0)} total) ===
+"""
+    
+    for i, child in enumerate(children, 1):
+        epic_section += f"""
+{i}. {child.get('issue_key', 'N/A')}: {child.get('summary', 'N/A')}
+"""
+    
+    epic_section += "\n=== END EPIC INFORMATION ===\n"
+    
+    # Combine template with data
+    return f"{template_text}\n\n{epic_section}"
+
+
+def handle_epic_refinement_request(
+    question: str,
+    conn: Connection
+) -> Optional[str]:
+    """
+    Handle epic refinement request if detected in question.
+    
+    Args:
+        question: User's question
+        conn: Database connection
+        
+    Returns:
+        Formatted conversation_context string if epic refinement detected, None otherwise
+        
+    Raises:
+        HTTPException: If epic refinement detected but template not found or epic not found
+    """
+    # 1. Detect if this is an epic refinement request
+    epic_key = detect_epic_refinement_request(question)
+    if not epic_key:
+        return None
+    
+    logger.info(f"Epic refinement detected for epic: {epic_key}")
+    
+    # 2. Fetch epic data
+    epic_data = fetch_epic_refinement_data(epic_key, conn)
+    if not epic_data:
+        raise HTTPException(
+            status_code=404,
+            detail=f"Epic {epic_key} not found or is not an Epic type"
+        )
+    
+    # 3. Get template (required - no fallback)
+    logger.info("Fetching template 'Epic Refinement' for admin")
+    refinement_template = get_prompt_by_email_and_name(
+        email_address='admin',
+        prompt_name='Epic Refinement',
+        conn=conn,
+        active=True,
+        replace_placeholders=True
+    )
+    
+    if not refinement_template or not refinement_template.get('prompt_description'):
+        raise HTTPException(
+            status_code=404,
+            detail="Template 'Epic Refinement' not found for admin or is not active"
+        )
+    
+    template_text = str(refinement_template['prompt_description'])
+    logger.info(f"Template retrieved (length: {len(template_text)} chars)")
+    
+    # 4. Format context
+    conversation_context = format_epic_refinement_context(epic_data, template_text)
+    logger.info(f"Epic refinement context prepared (length: {len(conversation_context)} chars)")
+    
+    return conversation_context
+
+
 async def call_llm_service(
     conversation_id: str,
     question: str,
@@ -1094,9 +1305,21 @@ async def ai_chat(
         logger.info(f"Conversation ID: {conversation_id}")
         logger.info(f"History messages count: {len(history_json.get('messages', []))}")
         
-        # 2. Handle Team_insights chat type - fetch card data and build context
+        # 2. Check for epic refinement request (before other chat type handlers)
         conversation_context = None
-        if chat_type_str == "Team_insights":
+        try:
+            epic_refinement_context = handle_epic_refinement_request(request.question, conn)
+            if epic_refinement_context:
+                conversation_context = epic_refinement_context
+                logger.info("Using epic refinement context")
+        except HTTPException:
+            raise  # Re-raise HTTP exceptions (template/epic not found)
+        except Exception as e:
+            logger.error(f"Error handling epic refinement request: {e}")
+            # Continue without special context - let LLM handle the question normally
+        
+        # 3. Handle Team_insights chat type - fetch card data and build context
+        if not conversation_context and chat_type_str == "Team_insights":
             # Validate insights_id is provided
             if not request.insights_id:
                 raise HTTPException(
@@ -1161,8 +1384,8 @@ async def ai_chat(
                     detail=f"Failed to fetch team AI card: {str(e)}"
                 )
         
-        # 2.3. Handle PI_insights chat type - fetch PI card and build context
-        elif chat_type_str == "PI_insights":
+        # 3.1. Handle PI_insights chat type - fetch PI card and build context
+        elif not conversation_context and chat_type_str == "PI_insights":
             if not request.insights_id:
                 raise HTTPException(
                     status_code=400,
@@ -1223,8 +1446,8 @@ async def ai_chat(
                     detail=f"Failed to fetch PI AI card: {str(e)}"
                 )
 
-        # 2.5. Handle Recommendation_reason chat type - fetch recommendation data and build context
-        elif chat_type_str == "Recommendation_reason":
+        # 3.2. Handle Recommendation_reason chat type - fetch recommendation data and build context
+        elif not conversation_context and chat_type_str == "Recommendation_reason":
             # Validate recommendation_id is provided
             if not request.recommendation_id:
                 raise HTTPException(
@@ -1381,7 +1604,7 @@ async def ai_chat(
                     history_json['initial_request_conversation_context'] = conversation_context
                 # Store data-only version (without content_intro) for follow-up calls
                 # This allows LLM to access data without the confusing prompt instructions
-                # Applies to: Team_insights, PI_insights, Recommendation_reason, Team_dashboard, PI_dashboard
+                # Applies to: Team_insights, PI_insights, Recommendation_reason, Team_dashboard, PI_dashboard, Epic Refinement
                 if 'initial_request_data_only' not in history_json and conversation_context:
                     # Extract data-only version using marker: check for either "=== DATA_STARTS_HERE ===" or "=== DASHBOARD DATA STARTS HERE ==="
                     # This works for all chat types: Team_insights, PI_insights, Recommendation_reason, Team_dashboard, PI_dashboard
@@ -1439,6 +1662,21 @@ async def ai_chat(
                             # Fallback: if marker not found, use full context (shouldn't happen but safe fallback)
                             history_json['initial_request_data_only'] = conversation_context
                             logger.warning(f"Marker not found in {chat_type_str} context, using full context as fallback")
+                        elif conversation_context and "=== EPIC INFORMATION FOR REFINEMENT ===" in conversation_context:
+                            # Handle Epic Refinement: extract data-only (epic data without template)
+                            # Epic refinement format: template_text + "\n\n" + epic_section
+                            # We want to extract just the epic_section part
+                            epic_marker = "=== EPIC INFORMATION FOR REFINEMENT ==="
+                            epic_marker_index = conversation_context.find(epic_marker)
+                            if epic_marker_index >= 0:
+                                # Extract everything from the epic marker onwards (the data part)
+                                data_only = conversation_context[epic_marker_index:].strip()
+                                history_json['initial_request_data_only'] = data_only
+                                logger.info(f"Stored data-only context for Epic Refinement follow-ups (length: {len(data_only)} chars)")
+                            else:
+                                # Fallback: use full context if marker not found
+                                history_json['initial_request_data_only'] = conversation_context
+                                logger.warning("Epic marker not found in Epic Refinement context, using full context as fallback")
 
                 # Seed initial messages into history_json for follow-ups
                 history_json.setdefault('messages', [])
