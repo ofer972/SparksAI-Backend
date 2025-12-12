@@ -341,6 +341,28 @@ DEFAULT_REPORT_DEFINITIONS = [
         }
     },
     {
+        "report_id": "team-velocity-advanced",
+        "report_name": "Team Velocity (Advanced)",
+        "chart_type": "stacked_bar",
+        "data_source": "team_velocity_advanced",
+        "description": "Displays sprint velocity chart with planned, added, completed, not completed, and removed issues.",
+        "default_filters": {
+            "team_name": None,
+            "months": 2,
+            "issue_type": None
+        },
+        "meta_schema": {
+            "required_filters": [],
+            "optional_filters": ["team_name", "months", "issue_type"],
+            "parameters": {
+                "team_name": {"type": "string", "description": "Team identifier"},
+                "months": {"type": "integer", "description": "Number of months to look back (1, 2, 3, 4, 6, 9)"},
+                "issue_type": {"type": "string", "description": "Issue type filter (optional, e.g., 'Story', 'Bug', 'Task')"}
+            },
+            "allowed_views": ["team-dashboard"]
+        }
+    },
+    {
         "report_id": "team-issues-trend",
         "report_name": "Bugs Created and Resolved Over Time",
         "chart_type": "trend",
