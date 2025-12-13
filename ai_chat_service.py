@@ -823,29 +823,18 @@ def detect_issue_suggestion_request(question: str) -> Tuple[bool, Optional[str]]
     found_entity_keyword = next((kw for kw in entity_keywords if kw in question_lower), None)
     
     # Check for action keywords (case-insensitive)
-    action_keywords = ['suggest', 'recommend', 'recommendation', 'suggestion', 'advise', 'propose', 'what is', 'what are']
+    action_keywords = ['suggest', 'recommend', 'recommendation', 'suggestion', 'advise', 'propose', 'what is', 'what are', 'how']
     has_action_keyword = any(keyword in question_lower for keyword in action_keywords)
-    found_action_keyword = next((kw for kw in action_keywords if kw in question_lower), None)
     
     # Check for reference keywords (case-insensitive)
     reference_keywords = ['this', 'that']
     has_reference_keyword = any(keyword in question_lower for keyword in reference_keywords)
-    found_reference_keyword = next((kw for kw in reference_keywords if kw in question_lower), None)
     
     # All three must be present
     is_detected = has_entity_keyword and has_action_keyword and has_reference_keyword
     
-    # DEBUG LOGGING: Show detection results
-    logger.info(f"[ISSUE_DETECTION] Question: '{question[:100]}...'")
-    logger.info(f"[ISSUE_DETECTION] Entity keyword: {found_entity_keyword if has_entity_keyword else 'NOT FOUND'}")
-    logger.info(f"[ISSUE_DETECTION] Action keyword: {found_action_keyword if has_action_keyword else 'NOT FOUND'}")
-    logger.info(f"[ISSUE_DETECTION] Reference keyword: {found_reference_keyword if has_reference_keyword else 'NOT FOUND'}")
-    logger.info(f"[ISSUE_DETECTION] Detection result: {is_detected}")
-    
     # Extract issue key from question if present (takes precedence)
     issue_key_from_question = extract_issue_key_from_response(question)
-    if issue_key_from_question:
-        logger.info(f"[ISSUE_DETECTION] Issue key found in question: {issue_key_from_question}")
     
     return is_detected, issue_key_from_question
 
@@ -907,13 +896,14 @@ def fetch_issue_details(
             LIMIT 1
         """)
         
-        logger.info(f"SQL Query: Fetching issue {issue_key}")
         issue_result = conn.execute(issue_query, {"issue_key": issue_key})
         issue_row = issue_result.fetchone()
         
         if not issue_row:
             logger.warning(f"Issue {issue_key} not found")
             return None
+        
+        logger.info(f"Issue {issue_key} fetched successfully")
         
         # Map row to dictionary with fixed field list
         issue_data = {
@@ -953,7 +943,6 @@ def fetch_issue_details(
                 ORDER BY issue_key
             """)
             
-            logger.info(f"SQL Query: Fetching children of epic {issue_key}")
             children_result = conn.execute(children_query, {"issue_key": issue_key})
             children_rows = children_result.fetchall()
             
@@ -967,7 +956,7 @@ def fetch_issue_details(
             
             result["children"] = children
             result["children_count"] = len(children)
-            logger.info(f"Found {len(children)} children for epic {issue_key}")
+            logger.info(f"Epic {issue_key}: fetched {len(children)} children successfully")
         
         return result
         
@@ -1144,13 +1133,11 @@ def handle_issue_suggestion_request(
         Formatted issue details string if detected and issue_key found, None otherwise
     """
     # 1. Detect if this is an issue suggestion request and extract issue key from question
-    logger.info(f"[ISSUE_DETECTION] handle_issue_suggestion_request called with question: '{question[:100] if question else 'None'}...'")
     is_detected, issue_key_from_question = detect_issue_suggestion_request(question)
     if not is_detected:
-        logger.info("[ISSUE_DETECTION] Detection returned False - returning None")
         return None
     
-    logger.info("Issue suggestion request detected in follow-up question")
+    logger.info("Issue suggestion request detected - fetching issue details")
     
     # 2. Determine which issue_key to use (priority: question > chat_history)
     issue_key = None
@@ -1182,12 +1169,12 @@ def handle_issue_suggestion_request(
         return None
     
     issue_type = issue_data.get("issue", {}).get("issue_type", "")
+    children_count = issue_data.get("children_count", 0)
     
     # 4. Determine template usage based on issue_type
     template_text = None
     if issue_type == "Epic":
         # Epic: Use Epic Refinement template
-        logger.info("Issue is Epic - fetching Epic Refinement template")
         refinement_template = get_prompt_by_email_and_name(
             email_address='admin',
             prompt_name='Epic Refinement',
@@ -1198,12 +1185,6 @@ def handle_issue_suggestion_request(
         
         if refinement_template and refinement_template.get('prompt_description'):
             template_text = str(refinement_template['prompt_description'])
-            logger.info(f"Epic Refinement template retrieved (length: {len(template_text)} chars)")
-        else:
-            logger.warning("Epic Refinement template not found, proceeding without template")
-    else:
-        # NOT Epic: No template, just pass original question to LLM
-        logger.info(f"Issue is {issue_type} - no template, will pass original question to LLM")
     
     # 5. Format issue data (unified function)
     formatted_issue_details = format_issue_details_for_llm(
@@ -1211,7 +1192,12 @@ def handle_issue_suggestion_request(
         template_text=template_text,
         include_children=True  # Include children if Epic
     )
-    logger.info(f"Issue details formatted for LLM (length: {len(formatted_issue_details)} chars)")
+    
+    # Log successful fetch summary
+    if issue_type == "Epic":
+        logger.info(f"Issue details fetched: {issue_key} (Epic with {children_count} children, {len(formatted_issue_details)} chars)")
+    else:
+        logger.info(f"Issue details fetched: {issue_key} ({issue_type}, {len(formatted_issue_details)} chars)")
     
     return formatted_issue_details
 
@@ -2082,9 +2068,7 @@ Results ({row_count} row{'s' if row_count != 1 else ''}):
         
         # Check for issue suggestion request in follow-up questions (before building conversation_context_for_llm)
         issue_details_context = None
-        logger.info(f"[ISSUE_DETECTION] Checking conditions: is_initial_call={is_initial_call}, sql_was_attempted={sql_was_attempted}")
         if not is_initial_call and not sql_was_attempted:
-            logger.info(f"[ISSUE_DETECTION] Conditions met - calling handle_issue_suggestion_request for question: '{request.question[:100] if request.question else 'None'}...'")
             try:
                 issue_details_context = handle_issue_suggestion_request(
                     request.question,
@@ -2092,17 +2076,10 @@ Results ({row_count} row{'s' if row_count != 1 else ''}):
                     conn
                 )
                 if issue_details_context:
-                    logger.info("Using issue details context for suggestion request")
-                else:
-                    logger.info("[ISSUE_DETECTION] handle_issue_suggestion_request returned None (no issue details context)")
+                    logger.info("Issue details context added for suggestion request")
             except Exception as e:
                 logger.error(f"Error handling issue suggestion request: {e}")
                 # Continue without issue details - don't block chat
-        else:
-            if is_initial_call:
-                logger.info("[ISSUE_DETECTION] Skipped - this is an initial call")
-            if sql_was_attempted:
-                logger.info("[ISSUE_DETECTION] Skipped - SQL was attempted")
         
         # Determine conversation_context parameter
         # REVERTED TO SIMPLE APPROACH: Always send conversation_context (except for SQL calls)
