@@ -822,7 +822,7 @@ def detect_issue_suggestion_request(question: str) -> Tuple[bool, Optional[str]]
     has_entity_keyword = any(keyword in question_lower for keyword in entity_keywords)
     
     # Check for action keywords (case-insensitive)
-    action_keywords = ['suggest', 'recommend', 'recommendation', 'suggestion', 'advise', 'propose']
+    action_keywords = ['suggest', 'recommend', 'recommendation', 'suggestion', 'advise', 'propose', 'what is', 'what are']
     has_action_keyword = any(keyword in question_lower for keyword in action_keywords)
     
     # Check for reference keywords (case-insensitive)
