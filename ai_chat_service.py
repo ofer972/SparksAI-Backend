@@ -820,20 +820,32 @@ def detect_issue_suggestion_request(question: str) -> Tuple[bool, Optional[str]]
     # Check for entity keywords (case-insensitive)
     entity_keywords = ['issue', 'pbi', 'work item', 'epic']
     has_entity_keyword = any(keyword in question_lower for keyword in entity_keywords)
+    found_entity_keyword = next((kw for kw in entity_keywords if kw in question_lower), None)
     
     # Check for action keywords (case-insensitive)
     action_keywords = ['suggest', 'recommend', 'recommendation', 'suggestion', 'advise', 'propose', 'what is', 'what are']
     has_action_keyword = any(keyword in question_lower for keyword in action_keywords)
+    found_action_keyword = next((kw for kw in action_keywords if kw in question_lower), None)
     
     # Check for reference keywords (case-insensitive)
     reference_keywords = ['this', 'that']
     has_reference_keyword = any(keyword in question_lower for keyword in reference_keywords)
+    found_reference_keyword = next((kw for kw in reference_keywords if kw in question_lower), None)
     
     # All three must be present
     is_detected = has_entity_keyword and has_action_keyword and has_reference_keyword
     
+    # DEBUG LOGGING: Show detection results
+    logger.info(f"[ISSUE_DETECTION] Question: '{question[:100]}...'")
+    logger.info(f"[ISSUE_DETECTION] Entity keyword: {found_entity_keyword if has_entity_keyword else 'NOT FOUND'}")
+    logger.info(f"[ISSUE_DETECTION] Action keyword: {found_action_keyword if has_action_keyword else 'NOT FOUND'}")
+    logger.info(f"[ISSUE_DETECTION] Reference keyword: {found_reference_keyword if has_reference_keyword else 'NOT FOUND'}")
+    logger.info(f"[ISSUE_DETECTION] Detection result: {is_detected}")
+    
     # Extract issue key from question if present (takes precedence)
     issue_key_from_question = extract_issue_key_from_response(question)
+    if issue_key_from_question:
+        logger.info(f"[ISSUE_DETECTION] Issue key found in question: {issue_key_from_question}")
     
     return is_detected, issue_key_from_question
 
@@ -1132,8 +1144,10 @@ def handle_issue_suggestion_request(
         Formatted issue details string if detected and issue_key found, None otherwise
     """
     # 1. Detect if this is an issue suggestion request and extract issue key from question
+    logger.info(f"[ISSUE_DETECTION] handle_issue_suggestion_request called with question: '{question[:100] if question else 'None'}...'")
     is_detected, issue_key_from_question = detect_issue_suggestion_request(question)
     if not is_detected:
+        logger.info("[ISSUE_DETECTION] Detection returned False - returning None")
         return None
     
     logger.info("Issue suggestion request detected in follow-up question")
@@ -2068,7 +2082,9 @@ Results ({row_count} row{'s' if row_count != 1 else ''}):
         
         # Check for issue suggestion request in follow-up questions (before building conversation_context_for_llm)
         issue_details_context = None
+        logger.info(f"[ISSUE_DETECTION] Checking conditions: is_initial_call={is_initial_call}, sql_was_attempted={sql_was_attempted}")
         if not is_initial_call and not sql_was_attempted:
+            logger.info(f"[ISSUE_DETECTION] Conditions met - calling handle_issue_suggestion_request for question: '{request.question[:100] if request.question else 'None'}...'")
             try:
                 issue_details_context = handle_issue_suggestion_request(
                     request.question,
@@ -2077,9 +2093,16 @@ Results ({row_count} row{'s' if row_count != 1 else ''}):
                 )
                 if issue_details_context:
                     logger.info("Using issue details context for suggestion request")
+                else:
+                    logger.info("[ISSUE_DETECTION] handle_issue_suggestion_request returned None (no issue details context)")
             except Exception as e:
                 logger.error(f"Error handling issue suggestion request: {e}")
                 # Continue without issue details - don't block chat
+        else:
+            if is_initial_call:
+                logger.info("[ISSUE_DETECTION] Skipped - this is an initial call")
+            if sql_was_attempted:
+                logger.info("[ISSUE_DETECTION] Skipped - SQL was attempted")
         
         # Determine conversation_context parameter
         # REVERTED TO SIMPLE APPROACH: Always send conversation_context (except for SQL calls)
