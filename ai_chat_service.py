@@ -797,118 +797,234 @@ def detect_epic_refinement_request(question: str) -> Optional[str]:
     return None
 
 
-def fetch_epic_refinement_data(
-    epic_key: str, 
+def detect_issue_suggestion_request(question: str) -> Tuple[bool, Optional[str]]:
+    """
+    Detect if follow-up question is asking for suggestions/recommendations about an issue/PBI/work item/epic.
+    Also extracts issue key from question if present (takes precedence over chat_history).
+    
+    All keywords are case-insensitive.
+    
+    Args:
+        question: User's question
+        
+    Returns:
+        Tuple of (is_detected: bool, issue_key_from_question: Optional[str])
+        - is_detected: True if all keywords detected
+        - issue_key_from_question: Issue key if found in question, None otherwise
+    """
+    if not question:
+        return False, None
+    
+    question_lower = question.lower()
+    
+    # Check for entity keywords (case-insensitive)
+    entity_keywords = ['issue', 'pbi', 'work item', 'epic']
+    has_entity_keyword = any(keyword in question_lower for keyword in entity_keywords)
+    
+    # Check for action keywords (case-insensitive)
+    action_keywords = ['suggest', 'recommend', 'recommendation', 'suggestion', 'advise', 'propose']
+    has_action_keyword = any(keyword in question_lower for keyword in action_keywords)
+    
+    # Check for reference keywords (case-insensitive)
+    reference_keywords = ['this', 'that']
+    has_reference_keyword = any(keyword in question_lower for keyword in reference_keywords)
+    
+    # All three must be present
+    is_detected = has_entity_keyword and has_action_keyword and has_reference_keyword
+    
+    # Extract issue key from question if present (takes precedence)
+    issue_key_from_question = extract_issue_key_from_response(question)
+    
+    return is_detected, issue_key_from_question
+
+
+def fetch_issue_details(
+    issue_key: str, 
     conn: Connection
 ) -> Optional[Dict[str, Any]]:
     """
-    Fetch epic data and all children summaries for epic refinement.
+    Fetch issue details from JIRA issues table.
+    If issue is an Epic, also fetches all children.
+    
+    Uses fixed field list - no parameters needed.
     
     Args:
-        epic_key: JIRA issue key (e.g., 'PROJ-123')
+        issue_key: JIRA issue key (e.g., 'PROJ-123')
         conn: Database connection
         
     Returns:
-        Dictionary with epic data and children, or None if epic not found
+        Dictionary with issue data and children (if Epic), or None if issue not found
+        Structure:
+        {
+            "issue": {
+                "issue_key": "...",
+                "issue_type": "...",
+                "summary": "...",
+                ... (all fields from fixed list)
+            },
+            "children": [  # Only if issue_type is Epic
+                {"issue_key": "...", "summary": "..."},
+                ...
+            ],
+            "children_count": 0  # Only if issue_type is Epic
+        }
     """
     try:
-        # 1. Get epic data
-        epic_query = text(f"""
+        # 1. Get issue data with fixed field list
+        issue_query = text(f"""
             SELECT 
                 issue_key,
+                issue_type,
                 summary,
-                description
+                description,
+                status,
+                status_category,
+                resolution,
+                created_at,
+                updated_at,
+                resolved_at,
+                team_name,
+                flagged,
+                first_date_in_progress,
+                cycle_time_days,
+                dependency,
+                number_of_children,
+                number_of_completed_children
             FROM {config.WORK_ITEMS_TABLE}
-            WHERE issue_key = :epic_key
-              AND issue_type = 'Epic'
+            WHERE issue_key = :issue_key
             LIMIT 1
         """)
         
-        logger.info(f"SQL Query: Fetching epic {epic_key}")
-        epic_result = conn.execute(epic_query, {"epic_key": epic_key})
-        epic_row = epic_result.fetchone()
+        logger.info(f"SQL Query: Fetching issue {issue_key}")
+        issue_result = conn.execute(issue_query, {"issue_key": issue_key})
+        issue_row = issue_result.fetchone()
         
-        if not epic_row:
-            logger.warning(f"Epic {epic_key} not found or not an Epic type")
+        if not issue_row:
+            logger.warning(f"Issue {issue_key} not found")
             return None
         
-        epic_data = {
-            "issue_key": epic_row[0],
-            "summary": epic_row[1] or "",
-            "description": epic_row[2] or ""
+        # Map row to dictionary with fixed field list
+        issue_data = {
+            "issue_key": issue_row[0],
+            "issue_type": issue_row[1],
+            "summary": issue_row[2] or "",
+            "description": issue_row[3] or "",
+            "status": issue_row[4] or "",
+            "status_category": issue_row[5] or "",
+            "resolution": issue_row[6] or "",
+            "created_at": issue_row[7],
+            "updated_at": issue_row[8],
+            "resolved_at": issue_row[9],
+            "team_name": issue_row[10] or "",
+            "flagged": issue_row[11] if issue_row[11] is not None else False,
+            "first_date_in_progress": issue_row[12],
+            "cycle_time_days": issue_row[13] if issue_row[13] is not None else 0.0,
+            "dependency": issue_row[14] if issue_row[14] is not None else False,
+            "number_of_children": issue_row[15] if issue_row[15] is not None else 0,
+            "number_of_completed_children": issue_row[16] if issue_row[16] is not None else 0
         }
         
-        # 2. Get all children
-        children_query = text(f"""
-            SELECT 
-                issue_key,
-                summary
-            FROM {config.WORK_ITEMS_TABLE}
-            WHERE parent_key = :epic_key
-            ORDER BY issue_key
-        """)
-        
-        logger.info(f"SQL Query: Fetching children of epic {epic_key}")
-        children_result = conn.execute(children_query, {"epic_key": epic_key})
-        children_rows = children_result.fetchall()
-        
-        children = [
-            {
-                "issue_key": row[0],
-                "summary": row[1] or ""
-            }
-            for row in children_rows
-        ]
-        
-        logger.info(f"Found {len(children)} children for epic {epic_key}")
-        
-        return {
-            "epic": epic_data,
-            "children": children,
-            "children_count": len(children)
+        result = {
+            "issue": issue_data,
+            "children": [],
+            "children_count": 0
         }
+        
+        # 2. If Epic, get all children
+        if issue_data.get("issue_type") == "Epic":
+            children_query = text(f"""
+                SELECT 
+                    issue_key,
+                    summary
+                FROM {config.WORK_ITEMS_TABLE}
+                WHERE parent_key = :issue_key
+                ORDER BY issue_key
+            """)
+            
+            logger.info(f"SQL Query: Fetching children of epic {issue_key}")
+            children_result = conn.execute(children_query, {"issue_key": issue_key})
+            children_rows = children_result.fetchall()
+            
+            children = [
+                {
+                    "issue_key": row[0],
+                    "summary": row[1] or ""
+                }
+                for row in children_rows
+            ]
+            
+            result["children"] = children
+            result["children_count"] = len(children)
+            logger.info(f"Found {len(children)} children for epic {issue_key}")
+        
+        return result
         
     except Exception as e:
-        logger.error(f"Error fetching epic refinement data for {epic_key}: {e}")
+        logger.error(f"Error fetching issue details for {issue_key}: {e}")
         return None
 
 
-def format_epic_refinement_context(
-    epic_data: Dict[str, Any],
-    template_text: str
+def format_issue_details_for_llm(
+    issue_data: Dict[str, Any],
+    template_text: Optional[str] = None,
+    include_children: bool = True
 ) -> str:
     """
-    Format epic refinement data using template.
+    Format issue details for LLM context.
+    Works for both epic refinement and issue suggestion.
     
     Args:
-        epic_data: Dictionary from fetch_epic_refinement_data()
-        template_text: Template text from prompts table (required, no fallback)
+        issue_data: Dictionary from fetch_issue_details()
+        template_text: Optional template text (for epic refinement only)
+        include_children: Whether to include children section (default: True)
         
     Returns:
         Formatted string to send as conversation_context
     """
-    # Build epic information section
-    epic = epic_data.get("epic", {})
-    children = epic_data.get("children", [])
+    issue = issue_data.get("issue", {})
+    children = issue_data.get("children", [])
+    children_count = issue_data.get("children_count", 0)
     
-    epic_section = f"""
-=== EPIC INFORMATION FOR REFINEMENT ===
-Epic Key: {epic.get('issue_key', 'N/A')}
-Epic Summary: {epic.get('summary', 'N/A')}
-Epic Description: {epic.get('description', 'N/A')}
-
-=== EPIC CHILDREN ({epic_data.get('children_count', 0)} total) ===
+    # Build issue information section
+    issue_section = f"""
+=== ISSUE INFORMATION ===
+Issue Key: {issue.get('issue_key', 'N/A')}
+Issue Type: {issue.get('issue_type', 'N/A')}
+Summary: {issue.get('summary', 'N/A')}
+Description: {issue.get('description', 'N/A')}
+Status: {issue.get('status', 'N/A')}
+Status Category: {issue.get('status_category', 'N/A')}
+Resolution: {issue.get('resolution', 'N/A')}
+Created At: {issue.get('created_at', 'N/A')}
+Updated At: {issue.get('updated_at', 'N/A')}
+Resolved At: {issue.get('resolved_at', 'N/A')}
+Team Name: {issue.get('team_name', 'N/A')}
+Flagged: {issue.get('flagged', False)}
+First Date In Progress: {issue.get('first_date_in_progress', 'N/A')}
+Cycle Time Days: {issue.get('cycle_time_days', 0.0)}
+Dependency: {issue.get('dependency', False)}
+Number of Children: {issue.get('number_of_children', 0)}
+Number of Completed Children: {issue.get('number_of_completed_children', 0)}
 """
     
-    for i, child in enumerate(children, 1):
-        epic_section += f"""
+    # Add children section if Epic and include_children is True
+    if include_children and children_count > 0:
+        issue_section += f"""
+=== ISSUE CHILDREN ({children_count} total) ===
+"""
+        for i, child in enumerate(children, 1):
+            issue_section += f"""
 {i}. {child.get('issue_key', 'N/A')}: {child.get('summary', 'N/A')}
 """
+        issue_section += "\n=== END ISSUE CHILDREN ===\n"
     
-    epic_section += "\n=== END EPIC INFORMATION ===\n"
+    issue_section += "\n=== END ISSUE INFORMATION ===\n"
     
-    # Combine template with data
-    return f"{template_text}\n\n{epic_section}"
+    # Combine template (if provided) with issue data
+    if template_text:
+        return f"{template_text}\n\n{issue_section}"
+    else:
+        return issue_section
 
 
 def handle_epic_refinement_request(
@@ -917,6 +1033,8 @@ def handle_epic_refinement_request(
 ) -> Optional[str]:
     """
     Handle epic refinement request if detected in question.
+    Uses unified fetch_issue_details() and format_issue_details_for_llm().
+    Always uses Epic Refinement template.
     
     Args:
         question: User's question
@@ -935,15 +1053,22 @@ def handle_epic_refinement_request(
     
     logger.info(f"Epic refinement detected for epic: {epic_key}")
     
-    # 2. Fetch epic data
-    epic_data = fetch_epic_refinement_data(epic_key, conn)
-    if not epic_data:
+    # 2. Fetch issue data (unified function - will fetch children if Epic)
+    issue_data = fetch_issue_details(epic_key, conn)
+    if not issue_data:
         raise HTTPException(
             status_code=404,
-            detail=f"Epic {epic_key} not found or is not an Epic type"
+            detail=f"Epic {epic_key} not found"
         )
     
-    # 3. Get template (required - no fallback)
+    # Verify it's an Epic
+    if issue_data.get("issue", {}).get("issue_type") != "Epic":
+        raise HTTPException(
+            status_code=400,
+            detail=f"Issue {epic_key} is not an Epic type"
+        )
+    
+    # 3. Get Epic Refinement template (required - no fallback)
     logger.info("Fetching template 'Epic Refinement' for admin")
     refinement_template = get_prompt_by_email_and_name(
         email_address='admin',
@@ -962,11 +1087,119 @@ def handle_epic_refinement_request(
     template_text = str(refinement_template['prompt_description'])
     logger.info(f"Template retrieved (length: {len(template_text)} chars)")
     
-    # 4. Format context
-    conversation_context = format_epic_refinement_context(epic_data, template_text)
+    # 4. Format context (unified function with Epic Refinement template)
+    # Note: We need to add the "=== EPIC INFORMATION FOR REFINEMENT ===" marker for backward compatibility
+    formatted_context = format_issue_details_for_llm(
+        issue_data,
+        template_text=template_text,
+        include_children=True
+    )
+    
+    # Replace "=== ISSUE INFORMATION ===" with "=== EPIC INFORMATION FOR REFINEMENT ===" for backward compatibility
+    conversation_context = formatted_context.replace(
+        "=== ISSUE INFORMATION ===",
+        "=== EPIC INFORMATION FOR REFINEMENT ==="
+    )
+    
     logger.info(f"Epic refinement context prepared (length: {len(conversation_context)} chars)")
     
     return conversation_context
+
+
+def handle_issue_suggestion_request(
+    question: str,
+    conversation_id: str,
+    conn: Connection
+) -> Optional[str]:
+    """
+    Handle issue suggestion request if detected in follow-up question.
+    Uses unified fetch_issue_details() and format_issue_details_for_llm().
+    
+    Issue key priority:
+    1. From question (if present) - takes precedence
+    2. From chat_history.issue_key column
+    
+    Template usage:
+    - If Epic: Use Epic Refinement template
+    - If NOT Epic: No template, just pass original question
+    
+    Args:
+        question: User's follow-up question
+        conversation_id: Conversation ID
+        conn: Database connection
+        
+    Returns:
+        Formatted issue details string if detected and issue_key found, None otherwise
+    """
+    # 1. Detect if this is an issue suggestion request and extract issue key from question
+    is_detected, issue_key_from_question = detect_issue_suggestion_request(question)
+    if not is_detected:
+        return None
+    
+    logger.info("Issue suggestion request detected in follow-up question")
+    
+    # 2. Determine which issue_key to use (priority: question > chat_history)
+    issue_key = None
+    if issue_key_from_question:
+        issue_key = issue_key_from_question
+        logger.info(f"Using issue_key from question: {issue_key}")
+    else:
+        # Get issue_key from chat_history
+        query = text(f"""
+            SELECT issue_key
+            FROM {config.CHAT_HISTORY_TABLE}
+            WHERE id = :conversation_id
+        """)
+        
+        result = conn.execute(query, {"conversation_id": int(conversation_id)})
+        row = result.fetchone()
+        
+        if row and row[0]:
+            issue_key = row[0]
+            logger.info(f"Using issue_key from chat_history: {issue_key}")
+        else:
+            logger.info("No issue_key found in question or chat_history, skipping issue details fetch")
+            return None
+    
+    # 3. Fetch issue details (unified function - will fetch children if Epic)
+    issue_data = fetch_issue_details(issue_key, conn)
+    if not issue_data:
+        logger.warning(f"Could not fetch issue details for {issue_key}")
+        return None
+    
+    issue_type = issue_data.get("issue", {}).get("issue_type", "")
+    
+    # 4. Determine template usage based on issue_type
+    template_text = None
+    if issue_type == "Epic":
+        # Epic: Use Epic Refinement template
+        logger.info("Issue is Epic - fetching Epic Refinement template")
+        refinement_template = get_prompt_by_email_and_name(
+            email_address='admin',
+            prompt_name='Epic Refinement',
+            conn=conn,
+            active=True,
+            replace_placeholders=True
+        )
+        
+        if refinement_template and refinement_template.get('prompt_description'):
+            template_text = str(refinement_template['prompt_description'])
+            logger.info(f"Epic Refinement template retrieved (length: {len(template_text)} chars)")
+        else:
+            logger.warning("Epic Refinement template not found, proceeding without template")
+    else:
+        # NOT Epic: No template, just pass original question to LLM
+        logger.info(f"Issue is {issue_type} - no template, will pass original question to LLM")
+    
+    # 5. Format issue data (unified function)
+    formatted_issue_details = format_issue_details_for_llm(
+        issue_data,
+        template_text=template_text,
+        include_children=True  # Include children if Epic
+    )
+    logger.info(f"Issue details formatted for LLM (length: {len(formatted_issue_details)} chars)")
+    
+    return formatted_issue_details
 
 
 def extract_issue_key_from_response(response: str) -> Optional[str]:
@@ -1833,6 +2066,21 @@ Results ({row_count} row{'s' if row_count != 1 else ''}):
             question_to_send = f"{question_to_send}\n\n=== DATABASE QUERY RESULTS ===\n{sql_formatted_for_history}\n=== END DATABASE QUERY RESULTS ==="
             logger.info(f"Combined SQL results with question for LLM (question length: {len(question_to_send)} chars)")
         
+        # Check for issue suggestion request in follow-up questions (before building conversation_context_for_llm)
+        issue_details_context = None
+        if not is_initial_call and not sql_was_attempted:
+            try:
+                issue_details_context = handle_issue_suggestion_request(
+                    request.question,
+                    conversation_id,
+                    conn
+                )
+                if issue_details_context:
+                    logger.info("Using issue details context for suggestion request")
+            except Exception as e:
+                logger.error(f"Error handling issue suggestion request: {e}")
+                # Continue without issue details - don't block chat
+        
         # Determine conversation_context parameter
         # REVERTED TO SIMPLE APPROACH: Always send conversation_context (except for SQL calls)
         # This matches the original working behavior before recent changes
@@ -1865,6 +2113,13 @@ Results ({row_count} row{'s' if row_count != 1 else ''}):
                         stored_context = history_json.get('initial_request_conversation_context')
                         conversation_context_for_llm = stored_context if stored_context else conversation_context
                         logger.warning("Data-only context not found, using full context as fallback")
+        
+        # Add issue details to conversation_context if available (for issue suggestion)
+        if issue_details_context:
+            if conversation_context_for_llm:
+                conversation_context_for_llm = conversation_context_for_llm + "\n\n" + issue_details_context
+            else:
+                conversation_context_for_llm = issue_details_context
         
         # DIAGNOSTIC LOGGING: Verify what's in history_json for follow-up calls
         if not is_initial_call:
