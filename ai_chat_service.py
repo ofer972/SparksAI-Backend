@@ -969,6 +969,34 @@ def handle_epic_refinement_request(
     return conversation_context
 
 
+def extract_issue_key_from_response(response: str) -> Optional[str]:
+    """
+    Extract first JIRA issue key from LLM response.
+    
+    Issue key format: [JIRA_PROJECT]-[NUMBER]
+    Where NUMBER must be 2+ digits.
+    
+    Args:
+        response: LLM response text
+        
+    Returns:
+        First matching issue key if found, None otherwise
+    """
+    if not response:
+        return None
+    
+    # Pattern: 1-10 uppercase letters, dash, 2+ digits
+    # \b ensures word boundaries
+    pattern = r'\b[A-Z]{1,10}-\d{2,}\b'
+    
+    matches = re.findall(pattern, response.upper())
+    
+    if matches:
+        return matches[0]  # Return first occurrence
+    
+    return None
+
+
 async def call_llm_service(
     conversation_id: str,
     question: str,
@@ -1916,6 +1944,29 @@ Results ({row_count} row{'s' if row_count != 1 else ''}):
         logger.info(f"Model: {llm_response.get('model', 'N/A')}")
         logger.info(f"Tokens used: {llm_response.get('tokens_used', 'N/A')}")
         logger.info("=" * 80)
+        
+        # 3.5. Extract and save issue key from LLM response (only for LLM responses, not SQL)
+        if not sql_was_attempted:
+            extracted_issue_key = extract_issue_key_from_response(ai_response)
+            if extracted_issue_key:
+                # Update chat_history table with issue_key
+                update_issue_key_query = text(f"""
+                    UPDATE {config.CHAT_HISTORY_TABLE}
+                    SET issue_key = :issue_key
+                    WHERE id = :conversation_id
+                """)
+                
+                try:
+                    conn.execute(update_issue_key_query, {
+                        "issue_key": extracted_issue_key,
+                        "conversation_id": int(conversation_id)
+                    })
+                    conn.commit()
+                    logger.info(f"Updated issue_key in chat_history: {extracted_issue_key}")
+                except Exception as e:
+                    logger.error(f"Error updating issue_key in chat_history: {e}")
+                    # Don't fail the request if issue_key update fails
+                    conn.rollback()
         
         # 4. Update chat history with new exchange
         # Remove "!" trigger from question before saving to history

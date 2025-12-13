@@ -1434,7 +1434,8 @@ def create_chat_history_table_if_not_exists(engine=None) -> bool:
                     pi VARCHAR(255) NOT NULL,
                     chat_type VARCHAR(50) NOT NULL,
                     start_timestamp TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
-                    history_json JSONB
+                    history_json JSONB,
+                    issue_key VARCHAR(50)
                 );
                 
                 CREATE INDEX idx_chat_history_username ON public.chat_history(username);
