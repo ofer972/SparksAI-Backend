@@ -101,7 +101,7 @@ DEFAULT_INSIGHT_TYPES = [
     {
         "insight_type": "Group Sprint Predictability",
         "insight_description": "Evaluates GROUP forecast stability",
-        "insight_categories": ["Daily", "Retrospective"],
+        "insight_categories": [ "Retrospective"],
         "active": True,
         "requires_pi": False,
         "requires_team": False,
@@ -111,7 +111,7 @@ DEFAULT_INSIGHT_TYPES = [
     {
         "insight_type": "Group Sprint Dependency",
         "insight_description": "Current sprint - cross-team dependency analysis",
-        "insight_categories": ["Daily", "Retrospective"],
+        "insight_categories": ["Daily", "Planning"],
         "active": True,
         "requires_pi": False,
         "requires_team": False,
@@ -121,7 +121,7 @@ DEFAULT_INSIGHT_TYPES = [
     {
         "insight_type": "Group Epic Dependencies",
         "insight_description": "Analysis of EPIC dependencies for the GROUP (inward and outward)",
-        "insight_categories": ["Daily", "Retrospective"],
+        "insight_categories": ["Planning"],
         "active": True,
         "requires_pi": False,
         "requires_team": False,
