@@ -102,6 +102,165 @@ def get_sprint_progress_status_with_slack(
         return "red"
 
 
+def get_active_sprint_summary_data_db(
+    issue_type: Optional[str] = None,
+    team_names: Optional[List[str]] = None,
+    conn: Connection = None
+) -> List[Dict[str, Any]]:
+    """
+    Get active sprint summary data from the database function get_active_sprint_summary_with_issue_keys.
+    
+    This is a reusable helper function that can be called by endpoints and report functions.
+    Returns raw data from the database function without any calculations or formatting.
+    
+    Args:
+        issue_type (Optional[str]): Issue type filter (e.g., "Story", "Bug", "Task"). If None, passes NULL to function.
+        team_names (Optional[List[str]]): List of team names to filter by. If None, passes NULL to function (returns all teams).
+        conn (Connection): Database connection from FastAPI dependency
+    
+    Returns:
+        list: List of dictionaries with raw data from database function (all columns as-is)
+    """
+    try:
+        # Build parameters for the function call
+        params = {}
+        
+        # Handle issue_type parameter (pass NULL if not provided)
+        if issue_type:
+            params['p_issue_type'] = issue_type
+        else:
+            params['p_issue_type'] = None
+        
+        # Build query - pass team_names as array or NULL
+        # Note: Function parameter is p_teams (varchar), but we pass as text[] array
+        if team_names:
+            # Pass array of team names to function
+            params['p_teams'] = team_names
+            sql_query_text = text("""
+                SELECT * FROM public.get_active_sprint_summary_with_issue_keys(
+                    :p_issue_type,
+                    CAST(:p_teams AS text[])
+                )
+            """)
+            
+            logger.info(f"Executing SQL for active sprint summary: issue_type={issue_type}, teams={team_names}")
+        else:
+            # Pass NULL for all teams
+            sql_query_text = text("""
+                SELECT * FROM public.get_active_sprint_summary_with_issue_keys(
+                    :p_issue_type,
+                    NULL
+                )
+            """)
+            
+            logger.info(f"Executing SQL for active sprint summary: issue_type={issue_type}, all teams")
+        
+        # Execute query with parameters (SECURE: prevents SQL injection)
+        result = conn.execute(sql_query_text, params)
+        rows = result.fetchall()
+        
+        # Convert rows to list of dictionaries - return raw data (no processing)
+        raw_data = []
+        for row in rows:
+            row_dict = dict(row._mapping)
+            raw_data.append(row_dict)
+        
+        logger.info(f"Retrieved {len(raw_data)} active sprint summary records from database")
+        
+        return raw_data
+            
+    except Exception as e:
+        logger.error(f"Error fetching active sprint summary data (issue_type={issue_type}, team_names={team_names}): {e}")
+        raise e
+
+
+def process_active_sprint_summary_data(
+    raw_data: List[Dict[str, Any]]
+) -> List[Dict[str, Any]]:
+    """
+    Process active sprint summary raw data and add calculated fields.
+    
+    This is a reusable helper function that:
+    1. Calculates overall_progress_pct from issues_done, issues_at_start, issues_added
+    2. Calculates overall_progress_pct_color based on progress vs timeline
+    3. Formats date/datetime fields
+    
+    This function can be called by endpoints and report functions to ensure consistent calculations.
+    
+    Args:
+        raw_data (List[Dict[str, Any]]): Raw data from get_active_sprint_summary_data_db()
+    
+    Returns:
+        list: List of dictionaries with processed data including calculated fields
+    """
+    processed_data = []
+    
+    for row in raw_data:
+        summary_dict = dict(row)  # Create a copy to avoid modifying original
+        
+        # Store original date values for calculation before formatting
+        start_date_raw = summary_dict.get('start_date')
+        end_date_raw = summary_dict.get('end_date')
+        
+        # Extract values needed for overall_progress_pct calculation
+        # Using exact field names from function definition
+        total_issues_done = summary_dict.get('total_issues_done')
+        issues_at_start = summary_dict.get('issues_at_start')
+        issues_added = summary_dict.get('issues_added')
+        
+        # Calculate overall_progress_pct in Python
+        # Formula: (total_issues_done / (issues_at_start + issues_added)) * 100
+        overall_progress_pct = None
+        if total_issues_done is not None and issues_at_start is not None and issues_added is not None:
+            denominator = issues_at_start + issues_added
+            if denominator > 0:
+                overall_progress_pct = (total_issues_done / denominator) * 100
+            else:
+                overall_progress_pct = 0.0
+        
+        # Add calculated field to summary_dict
+        summary_dict['overall_progress_pct'] = overall_progress_pct
+        
+        # Calculate overall_progress_pct_color (using existing function)
+        if start_date_raw is not None and end_date_raw is not None and overall_progress_pct is not None:
+            summary_dict['overall_progress_pct_color'] = get_sprint_progress_status_with_slack(
+                overall_progress_pct=float(overall_progress_pct),
+                start_date=start_date_raw,
+                end_date=end_date_raw,
+                slack_threshold=20.0
+            )
+        else:
+            summary_dict['overall_progress_pct_color'] = None
+        
+        # Calculate issues_added_color
+        # Based on percentage of issues_added compared to issues_at_start
+        issues_added_color = None
+        if issues_added is not None and issues_at_start is not None and issues_at_start > 0:
+            issues_added_pct = (issues_added / issues_at_start) * 100
+            if issues_added_pct > 50:
+                issues_added_color = "red"
+            elif issues_added_pct > 30:
+                issues_added_color = "yellow"
+            else:
+                issues_added_color = "default"
+        
+        summary_dict['issues_added_color'] = issues_added_color
+        
+        # Format date/datetime fields if they exist
+        for key, value in summary_dict.items():
+            if value is not None:
+                if hasattr(value, 'strftime'):
+                    # Date field
+                    summary_dict[key] = value.strftime('%Y-%m-%d')
+                elif hasattr(value, 'isoformat'):
+                    # Datetime field
+                    summary_dict[key] = value.isoformat()
+        
+        processed_data.append(summary_dict)
+    
+    return processed_data
+
+
 def validate_team_name(team_name: str) -> str:
     """
     Validate team name (basic validation only).
@@ -196,22 +355,32 @@ async def get_sprints(conn: Connection = Depends(get_db_connection)):
 
 @sprints_router.get("/sprints/active-sprint-summary-by-team")
 async def get_active_sprint_summary_by_team(
+    issue_type: Optional[str] = Query(None, description="Issue type filter (optional, e.g., 'Story', 'Bug', 'Task'). If not provided, returns all issue types."),
     team_name: Optional[str] = Query(None, description="Team name or group name (if isGroup=true). If not provided, returns all summaries."),
     isGroup: bool = Query(False, description="If true, team_name is treated as a group name"),
     conn: Connection = Depends(get_db_connection)
 ):
     """
-    Get active sprint summary by team from the active_sprint_summary_with_issue_keys view.
+    Get active sprint summary by team from the get_active_sprint_summary_with_issue_keys database function.
     
-    Returns all columns from the view for the specified team(s) or group.
+    Returns all columns from the function for the specified team(s), group, and/or issue type.
     If team_name is not provided, returns summaries for all teams.
+    If issue_type is not provided, returns summaries for all issue types.
+    
+    The function does not return overall_progress_pct, so it is calculated in Python using:
+    overall_progress_pct = (issues_done / (issues_at_start + issues_added)) * 100
+    
+    This endpoint uses reusable helper functions:
+    - get_active_sprint_summary_data_db(): Fetches raw data from database
+    - process_active_sprint_summary_data(): Adds calculated fields and formats data
     
     Args:
+        issue_type: Optional issue type filter (e.g., "Story", "Bug", "Task"). If not provided, returns all issue types.
         team_name: Optional team name or group name (if isGroup=true). If not provided, returns all summaries.
         isGroup: If true, team_name is treated as a group name and returns summaries for all teams in that group
     
     Returns:
-        JSON response with active sprint summary (all columns from view)
+        JSON response with active sprint summary (all columns from function + calculated overall_progress_pct)
     """
     try:
         from database_team_metrics import resolve_team_names_from_filter
@@ -234,75 +403,27 @@ async def get_active_sprint_summary_by_team(
                 if team_names_list:
                     filter_description = f"team '{team_name}'"
         
-        # Build query with IN clause or no filter
-        # Always exclude sprints without team_name
-        if team_names_list:
-            # Build parameterized IN clause
-            placeholders = ", ".join([f":team_name_{i}" for i in range(len(team_names_list))])
-            params = {f"team_name_{i}": name for i, name in enumerate(team_names_list)}
-            
-            query = text(f"""
-                SELECT *
-                FROM public.active_sprint_summary_with_issue_keys
-                WHERE team_name IN ({placeholders})
-                AND team_name IS NOT NULL
-                AND team_name != ''
-            """)
-            
-            logger.info(f"Executing query to get active sprint summary for {filter_description}")
-            result = conn.execute(query, params)
-        else:
-            # No filter - return all summaries (excluding sprints without team_name)
-            query = text("""
-                SELECT *
-                FROM public.active_sprint_summary_with_issue_keys
-                WHERE team_name IS NOT NULL
-                AND team_name != ''
-            """)
-            
-            logger.info("Executing query to get active sprint summary for all teams")
-            result = conn.execute(query)
+        # Get raw data from database using reusable function
+        raw_summaries = get_active_sprint_summary_data_db(
+            issue_type=issue_type,
+            team_names=team_names_list if team_names_list else None,
+            conn=conn
+        )
         
-        rows = result.fetchall()
-        
-        # Convert rows to list of dictionaries - return all columns from view
-        summaries = []
-        for row in rows:
-            summary_dict = dict(row._mapping)
-            
-            # Store original date values for calculation before formatting
-            start_date_raw = summary_dict.get('start_date')
-            end_date_raw = summary_dict.get('end_date')
-            overall_progress_pct = summary_dict.get('overall_progress_pct')
-            
-            # Calculate overall_progress_pct_color
-            if start_date_raw is not None and end_date_raw is not None and overall_progress_pct is not None:
-                summary_dict['overall_progress_pct_color'] = get_sprint_progress_status_with_slack(
-                    overall_progress_pct=float(overall_progress_pct) if overall_progress_pct is not None else None,
-                    start_date=start_date_raw,
-                    end_date=end_date_raw,
-                    slack_threshold=20.0
-                )
-            else:
-                summary_dict['overall_progress_pct_color'] = None  # Return None if data missing
-            
-            # Format date/datetime fields if they exist
-            for key, value in summary_dict.items():
-                if value is not None:
-                    if hasattr(value, 'strftime'):
-                        # Date field
-                        summary_dict[key] = value.strftime('%Y-%m-%d')
-                    elif hasattr(value, 'isoformat'):
-                        # Datetime field
-                        summary_dict[key] = value.isoformat()
-            
-            summaries.append(summary_dict)
+        # Process data and add calculated fields using reusable function
+        summaries = process_active_sprint_summary_data(raw_summaries)
         
         # Build response message
         if filter_description:
-            message = f"Retrieved active sprint summary for {filter_description}"
+            if issue_type:
+                message = f"Retrieved active sprint summary for {filter_description} (issue_type: {issue_type})"
+            else:
+                message = f"Retrieved active sprint summary for {filter_description}"
         else:
-            message = f"Retrieved active sprint summary for all teams"
+            if issue_type:
+                message = f"Retrieved active sprint summary for all teams (issue_type: {issue_type})"
+            else:
+                message = f"Retrieved active sprint summary for all teams"
         
         response_data = {
             "summaries": summaries,
@@ -318,6 +439,10 @@ async def get_active_sprint_summary_by_team(
             else:
                 response_data["team_name"] = validated_name
         
+        # Optionally add issue_type to metadata if provided
+        if issue_type:
+            response_data["issue_type"] = issue_type
+        
         return {
             "success": True,
             "data": response_data,
@@ -328,7 +453,7 @@ async def get_active_sprint_summary_by_team(
         # Re-raise HTTP exceptions (validation errors)
         raise
     except Exception as e:
-        logger.error(f"Error fetching active sprint summary (team_name={team_name}, isGroup={isGroup}): {e}")
+        logger.error(f"Error fetching active sprint summary (team_name={team_name}, isGroup={isGroup}, issue_type={issue_type}): {e}")
         raise HTTPException(
             status_code=500,
             detail=f"Failed to fetch active sprint summary: {str(e)}"
