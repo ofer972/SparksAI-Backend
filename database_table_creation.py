@@ -515,6 +515,31 @@ DEFAULT_REPORT_DEFINITIONS = [
         }
     },
     {
+        "report_id": "issues-hierarchy",
+        "report_name": "Issue Hierarchy",
+        "chart_type": "table",
+        "data_source": "issues_hierarchy",
+        "description": "Displays the hierarchy of issues with status, dependency, and progress information.",
+        "default_filters": {
+            "hierarchy_level": None,
+            "pi": None,
+            "team_name": None,
+            "limit": 500
+        },
+        "meta_schema": {
+            "required_filters": [],
+            "optional_filters": ["hierarchy_level", "pi", "team_name", "isGroup", "limit"],
+            "parameters": {
+                "hierarchy_level": {"type": "integer", "description": "Filter by hierarchy level (less than or equal to)"},
+                "pi": {"type": "string", "description": "PI name filter (supports multiple PIs)"},
+                "team_name": {"type": "string", "description": "Team name filter (or group name if isGroup=true)"},
+                "isGroup": {"type": "boolean", "description": "If true, team_name is treated as a group name"},
+                "limit": {"type": "integer", "description": "Maximum number of records to return (up to 1000)"}
+            },
+            "allowed_views": ["pi-dashboard", "team-dashboard"]
+        }
+    },
+    {
         "report_id": "issues-epic-dependencies",
         "report_name": "Epic Dependencies",
         "chart_type": "table",

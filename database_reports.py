@@ -1322,6 +1322,127 @@ def _fetch_epics_hierarchy(filters: Dict[str, Any], conn: Connection) -> ReportD
     }
 
 
+def _fetch_issue_hierarchy(filters: Dict[str, Any], conn: Connection) -> ReportDataResult:
+    from database_team_metrics import resolve_team_names_from_filter
+    
+    pi_names = _parse_list(filters.get("pi") or filters.get("pi_names") or filters.get("pi_name"))
+    team_name = (filters.get("team_name") or "").strip() or None
+    is_group = filters.get("isGroup", False)
+    hierarchy_level = filters.get("hierarchy_level")
+    limit_value = filters.get("limit")
+    limit_int = _parse_int(limit_value, default=DEFAULT_HIERARCHY_LIMIT)
+    if limit_int <= 0 or limit_int > 1000:
+        limit_int = DEFAULT_HIERARCHY_LIMIT
+    
+    # Validate hierarchy_level if provided
+    if hierarchy_level is not None:
+        try:
+            hierarchy_level = int(hierarchy_level)
+            if hierarchy_level < 0:
+                raise ValueError("Hierarchy level must be non-negative")
+        except (ValueError, TypeError):
+            raise ValueError("Hierarchy level must be a non-negative integer")
+    
+    # Resolve team names if team_name provided (handles isGroup)
+    team_names_list = resolve_team_names_from_filter(team_name, is_group, conn) if team_name else None
+    
+    # Fetch available teams (always)
+    teams_query = text(
+        f"""
+        SELECT DISTINCT "Team Name of Epic"
+        FROM get_issue_hierarchy_advanced
+        WHERE "Team Name of Epic" IS NOT NULL
+        ORDER BY "Team Name of Epic"
+        """
+    )
+    teams_rows = conn.execute(teams_query).fetchall()
+    available_teams = [row[0] for row in teams_rows if row[0]]
+    
+    # Fetch available PIs (always)
+    pis_query = text(
+        f"""
+        SELECT DISTINCT "Quarter PI of Epic"
+        FROM get_issue_hierarchy_advanced
+        WHERE "Quarter PI of Epic" IS NOT NULL
+        ORDER BY "Quarter PI of Epic" DESC
+        """
+    )
+    pis_rows = conn.execute(pis_query).fetchall()
+    available_pis = [row[0] for row in pis_rows if row[0]]
+    
+    where_conditions = []
+    params: Dict[str, Any] = {"limit": limit_int}
+    
+    # Hierarchy level filter (less than or equal to)
+    if hierarchy_level is not None:
+        where_conditions.append('"Hierarchy Level" <= :hierarchy_level')
+        params["hierarchy_level"] = hierarchy_level
+    
+    # Team name filter (single team or group) - using "Team Name of Epic" column
+    if team_names_list:
+        if len(team_names_list) == 1:
+            # Single team
+            where_conditions.append('"Team Name of Epic" = :team_name')
+            params["team_name"] = team_names_list[0]
+        else:
+            # Multiple teams (from group)
+            placeholders = ", ".join([f":team_{i}" for i in range(len(team_names_list))])
+            where_conditions.append(f'"Team Name of Epic" IN ({placeholders})')
+            for i, team in enumerate(team_names_list):
+                params[f"team_{i}"] = team
+    
+    # PI filter (multiple PIs) - using "Quarter PI of Epic" column
+    if pi_names:
+        placeholders = ", ".join([f":pi_{i}" for i in range(len(pi_names))])
+        where_conditions.append(f'"Quarter PI of Epic" IN ({placeholders})')
+        for i, pi in enumerate(pi_names):
+            params[f"pi_{i}"] = pi
+    
+    where_clause = " AND ".join(where_conditions) if where_conditions else "1=1"
+    
+    query = text(
+        f"""
+        SELECT *
+        FROM get_issue_hierarchy_advanced
+        WHERE {where_clause}
+        LIMIT :limit
+        """
+    )
+    
+    rows = conn.execute(query, params).fetchall()
+    issues = [dict(row._mapping) for row in rows]
+    
+    # Build meta with appropriate fields (matching pattern from other reports)
+    meta = {
+        "hierarchy_level": hierarchy_level,
+        "pi_names": pi_names,
+        "isGroup": is_group,
+        "available_teams": available_teams,
+        "available_pis": available_pis,
+    }
+    
+    # Add team/group information to meta (standardize on team_name - matching pattern from _fetch_pi_burndown and _fetch_pi_predictability)
+    if team_name:
+        if is_group:
+            meta["group_name"] = team_name
+            meta["teams_in_group"] = team_names_list
+        else:
+            meta["team_name"] = team_name
+            meta["team"] = team_name  # Keep for backward compatibility
+    else:
+        meta["team_name"] = None
+        meta["team"] = None
+    
+    return {
+        "data": {
+            "issues": issues,
+            "count": len(issues),
+            "limit": limit_int,
+        },
+        "meta": meta,
+    }
+
+
 def _fetch_epic_dependencies(filters: Dict[str, Any], conn: Connection) -> ReportDataResult:
     from database_team_metrics import resolve_team_names_from_filter
 
@@ -1816,6 +1937,7 @@ _REPORT_DATA_FETCHERS: Dict[str, ReportDataFetcher] = {
     "issues_bugs_by_team": _fetch_issues_bugs_by_team,
     "issues_flow_status_duration": _fetch_issues_flow_status_duration,
     "issues_epics_hierarchy": _fetch_epics_hierarchy,
+    "issues_hierarchy": _fetch_issue_hierarchy,
     "issues_epic_dependencies": _fetch_epic_dependencies,
     "issues_release_predictability": _fetch_release_predictability,
     "sprint_predictability": _fetch_sprint_predictability,
