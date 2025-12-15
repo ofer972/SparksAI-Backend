@@ -1630,6 +1630,138 @@ async def get_active_sprint_stories_by_epic(
         )
 
 
+@issues_router.get("/issues/issue-types")
+async def get_issue_types(
+    conn: Connection = Depends(get_db_connection)
+):
+    """
+    Get all issue types from the issue_types table.
+    
+    Returns all issue types with their metadata including description, iconUrl, name, subtask, and hierarchyLevel.
+    
+    Returns:
+        JSON response with list of issue types and count
+    """
+    try:
+        # SECURE: Parameterized query prevents SQL injection
+        query = text(f"""
+            SELECT 
+                issue_type,
+                description,
+                "iconUrl",
+                name,
+                subtask,
+                "hierarchyLevel"
+            FROM public.{config.ISSUE_TYPES_TABLE}
+            ORDER BY issue_type
+        """)
+        
+        logger.info("Executing query to get issue types")
+        
+        result = conn.execute(query)
+        rows = result.fetchall()
+        
+        # Convert rows to list of dictionaries
+        issue_types = []
+        for row in rows:
+            issue_type_dict = {
+                "issue_type": row[0],
+                "description": row[1],
+                "iconUrl": row[2],
+                "name": row[3],
+                "subtask": row[4],
+                "hierarchyLevel": row[5]
+            }
+            issue_types.append(issue_type_dict)
+        
+        return {
+            "success": True,
+            "data": {
+                "issue_types": issue_types,
+                "count": len(issue_types)
+            },
+            "message": f"Retrieved {len(issue_types)} issue types"
+        }
+    
+    except Exception as e:
+        logger.error(f"Error fetching issue types: {e}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to fetch issue types: {str(e)}"
+        )
+
+
+@issues_router.get("/issues/issue-types-hierarchy")
+async def get_issue_types_hierarchy(
+    conn: Connection = Depends(get_db_connection)
+):
+    """
+    Get all issue types grouped by hierarchy level.
+    
+    Returns issue types organized by their hierarchy level, ordered from highest to lowest.
+    Issue types with NULL hierarchy level are included at the end.
+    
+    Returns:
+        JSON response with levels array, where each level contains:
+        - hierarchyLevel: The hierarchy level number (or null)
+        - issue_types: Array of issue type names at that level
+    """
+    try:
+        # SECURE: Parameterized query prevents SQL injection
+        query = text(f"""
+            SELECT 
+                issue_type,
+                "hierarchyLevel"
+            FROM public.{config.ISSUE_TYPES_TABLE}
+            ORDER BY "hierarchyLevel" DESC NULLS LAST, issue_type ASC
+        """)
+        
+        logger.info("Executing query to get issue types grouped by hierarchy")
+        
+        result = conn.execute(query)
+        rows = result.fetchall()
+        
+        # Group issue types by hierarchy level
+        levels_dict = {}
+        for row in rows:
+            issue_type = row[0]
+            hierarchy_level = row[1]
+            
+            # Use None as key for NULL hierarchy levels (for consistent handling)
+            level_key = hierarchy_level if hierarchy_level is not None else None
+            
+            if level_key not in levels_dict:
+                levels_dict[level_key] = {
+                    "hierarchyLevel": hierarchy_level,
+                    "issue_types": []
+                }
+            
+            levels_dict[level_key]["issue_types"].append(issue_type)
+        
+        # Convert to list, maintaining order (highest to lowest, then NULL)
+        # The dict keys are already in the correct order from the query
+        levels = list(levels_dict.values())
+        
+        # Calculate total count
+        total_count = sum(len(level["issue_types"]) for level in levels)
+        
+        return {
+            "success": True,
+            "data": {
+                "levels": levels,
+                "count": total_count
+            },
+            "message": f"Retrieved {total_count} issue types grouped by hierarchy"
+        }
+    
+    except Exception as e:
+        logger.error(f"Error fetching issue types hierarchy: {e}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to fetch issue types hierarchy: {str(e)}"
+        )
+
+
 @issues_router.get("/issues/{issue_id}")
 async def get_issue(
     issue_id: str,
@@ -1684,65 +1816,4 @@ async def get_issue(
         raise HTTPException(
             status_code=500,
             detail=f"Failed to fetch issue: {str(e)}"
-        )
-
-
-@issues_router.get("/issues/issue-types")
-async def get_issue_types(
-    conn: Connection = Depends(get_db_connection)
-):
-    """
-    Get all issue types from the issue_types table.
-    
-    Returns all issue types with their metadata including description, iconUrl, name, subtask, and hierarchyLevel.
-    
-    Returns:
-        JSON response with list of issue types and count
-    """
-    try:
-        # SECURE: Parameterized query prevents SQL injection
-        query = text(f"""
-            SELECT 
-                issue_type,
-                description,
-                "iconUrl",
-                name,
-                subtask,
-                "hierarchyLevel"
-            FROM {config.ISSUE_TYPES_TABLE}
-            ORDER BY issue_type
-        """)
-        
-        logger.info("Executing query to get issue types")
-        
-        result = conn.execute(query)
-        rows = result.fetchall()
-        
-        # Convert rows to list of dictionaries
-        issue_types = []
-        for row in rows:
-            issue_type_dict = {
-                "issue_type": row[0],
-                "description": row[1],
-                "iconUrl": row[2],
-                "name": row[3],
-                "subtask": row[4],
-                "hierarchyLevel": row[5]
-            }
-            issue_types.append(issue_type_dict)
-        
-        return {
-            "success": True,
-            "data": {
-                "issue_types": issue_types,
-                "count": len(issue_types)
-            },
-            "message": f"Retrieved {len(issue_types)} issue types"
-        }
-    
-    except Exception as e:
-        logger.error(f"Error fetching issue types: {e}")
-        raise HTTPException(
-            status_code=500,
-            detail=f"Failed to fetch issue types: {str(e)}"
         )
