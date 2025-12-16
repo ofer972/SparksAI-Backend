@@ -1248,80 +1248,6 @@ def _fetch_issues_flow_status_duration(filters: Dict[str, Any], conn: Connection
     }
 
 
-def _fetch_epics_hierarchy(filters: Dict[str, Any], conn: Connection) -> ReportDataResult:
-    pi_names = _parse_list(filters.get("pi") or filters.get("pi_names") or filters.get("pi_name"))
-    team_name = (filters.get("team_name") or "").strip() or None
-    limit_value = filters.get("limit")
-    limit_int = _parse_int(limit_value, default=DEFAULT_HIERARCHY_LIMIT)
-    if limit_int <= 0 or limit_int > 1000:
-        limit_int = DEFAULT_HIERARCHY_LIMIT
-
-    # Fetch available teams (always)
-    teams_query = text(
-        f"""
-        SELECT DISTINCT "Team Name of Epic"
-        FROM epic_hierarchy_with_progress
-        WHERE "Team Name of Epic" IS NOT NULL
-        ORDER BY "Team Name of Epic"
-        """
-    )
-    teams_rows = conn.execute(teams_query).fetchall()
-    available_teams = [row[0] for row in teams_rows if row[0]]
-
-    # Fetch available PIs (always)
-    pis_query = text(
-        f"""
-        SELECT DISTINCT "Quarter PI of Epic"
-        FROM epic_hierarchy_with_progress
-        WHERE "Quarter PI of Epic" IS NOT NULL
-        ORDER BY "Quarter PI of Epic" DESC
-        """
-    )
-    pis_rows = conn.execute(pis_query).fetchall()
-    available_pis = [row[0] for row in pis_rows if row[0]]
-
-    where_conditions = []
-    params: Dict[str, Any] = {"limit": limit_int}
-
-    if pi_names:
-        placeholders = ", ".join([f":pi_{i}" for i in range(len(pi_names))])
-        where_conditions.append(f'"Quarter PI of Epic" IN ({placeholders})')
-        for i, pi in enumerate(pi_names):
-            params[f"pi_{i}"] = pi
-
-    if team_name:
-        where_conditions.append('"Team Name of Epic" = :team_name')
-        params["team_name"] = team_name
-
-    where_clause = " AND ".join(where_conditions) if where_conditions else "1=1"
-
-    query = text(
-        f"""
-        SELECT *
-        FROM epic_hierarchy_with_progress
-        WHERE {where_clause}
-        LIMIT :limit
-        """
-    )
-
-    rows = conn.execute(query, params).fetchall()
-    issues = [dict(row._mapping) for row in rows]
-
-    return {
-        "data": {
-            "issues": issues,
-            "count": len(issues),
-            "limit": limit_int,
-        },
-        "meta": {
-            "pi_names": pi_names,
-            "team_name": team_name,
-            "available_teams": available_teams,
-            "available_pis": available_pis,
-        },
-    }
-
-
 def _fetch_issue_hierarchy(filters: Dict[str, Any], conn: Connection) -> ReportDataResult:
     from database_team_metrics import resolve_team_names_from_filter
     
@@ -1936,7 +1862,6 @@ _REPORT_DATA_FETCHERS: Dict[str, ReportDataFetcher] = {
     "issues_bugs_by_priority": _fetch_issues_bugs_by_priority,
     "issues_bugs_by_team": _fetch_issues_bugs_by_team,
     "issues_flow_status_duration": _fetch_issues_flow_status_duration,
-    "issues_epics_hierarchy": _fetch_epics_hierarchy,
     "issues_hierarchy": _fetch_issue_hierarchy,
     "issues_epic_dependencies": _fetch_epic_dependencies,
     "issues_release_predictability": _fetch_release_predictability,

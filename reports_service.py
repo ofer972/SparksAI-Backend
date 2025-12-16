@@ -201,7 +201,6 @@ async def get_report_instance(
     - issues-bugs-by-team
     - issues-flow-status-duration
     - issues-epics-hierarchy
-    - issues-hierarchy
     - issues-epic-dependencies
     - issues-release-predictability
     - sprint-predictability

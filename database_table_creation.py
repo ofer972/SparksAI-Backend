@@ -496,40 +496,18 @@ DEFAULT_REPORT_DEFINITIONS = [
         "report_id": "issues-epics-hierarchy",
         "report_name": "Epics Hierarchy",
         "chart_type": "table",
-        "data_source": "issues_epics_hierarchy",
-        "description": "Displays the hierarchy of epics with status and dependency information.",
-        "default_filters": {
-            "pi": None,
-            "team_name": None,
-            "limit": 500
-        },
-        "meta_schema": {
-            "required_filters": [],
-            "optional_filters": ["pi", "team_name", "limit"],
-            "parameters": {
-                "pi": {"type": "string", "description": "PI name filter"},
-                "team_name": {"type": "string", "description": "Team name filter"},
-                "limit": {"type": "integer", "description": "Maximum number of records to return (up to 1000)"}
-            },
-            "allowed_views": ["pi-dashboard", "team-dashboard"]
-        }
-    },
-    {
-        "report_id": "issues-hierarchy",
-        "report_name": "Issue Hierarchy",
-        "chart_type": "table",
         "data_source": "issues_hierarchy",
-        "description": "Displays the hierarchy of issues with status, dependency, and progress information.",
+        "description": "Displays the hierarchy of issues with status and dependency information.",
         "default_filters": {
-            "hierarchy_level": None,
             "pi": None,
+            "hierarchy_level": None,
             "team_name": None,
             "limit": 500
         },
         "meta_schema": {
             "required_filters": [],
-            "optional_filters": ["hierarchy_level", "pi", "team_name", "isGroup", "limit"],
-            "parameters": {
+            "optional_filters": ["pi", "hierarchy_level", "team_name", "isGroup", "limit"],
+             "parameters": {
                 "hierarchy_level": {"type": "integer", "description": "Filter by hierarchy level (less than or equal to)"},
                 "pi": {"type": "string", "description": "PI name filter (supports multiple PIs)"},
                 "team_name": {"type": "string", "description": "Team name filter (or group name if isGroup=true)"},
