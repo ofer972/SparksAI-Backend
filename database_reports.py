@@ -1850,6 +1850,56 @@ def _fetch_pi_metrics_summary_by_team(filters: Dict[str, Any], conn: Connection)
     }
 
 
+def _fetch_active_sprint_summary(filters: Dict[str, Any], conn: Connection) -> ReportDataResult:
+    """
+    Fetch active sprint summary data using the same functions as the endpoint.
+    Reuses get_active_sprint_summary_data_db() and process_active_sprint_summary_data()
+    from sprints_service.py to avoid code duplication.
+    """
+    from database_team_metrics import resolve_team_names_from_filter
+    from sprints_service import get_active_sprint_summary_data_db, process_active_sprint_summary_data
+    
+    # Extract filters
+    team_name = (filters.get("team_name") or "").strip() or None
+    is_group = filters.get("isGroup", False)
+    issue_type = (filters.get("issue_type") or "").strip() or None
+    
+    # Resolve team names using shared helper function
+    team_names_list = resolve_team_names_from_filter(team_name, is_group, conn)
+    
+    # Fetch raw data using existing function
+    raw_summaries = get_active_sprint_summary_data_db(
+        issue_type=issue_type,
+        team_names=team_names_list if team_names_list else None,
+        conn=conn
+    )
+    
+    # Process data using existing function
+    summaries = process_active_sprint_summary_data(raw_summaries)
+    
+    # Build metadata (following pattern from other reports)
+    meta = {
+        "issue_type": issue_type,
+        "isGroup": is_group,
+        "count": len(summaries),
+    }
+    
+    # Add team/group information to meta
+    if team_name:
+        if is_group:
+            meta["group_name"] = team_name
+            meta["teams_in_group"] = team_names_list
+        else:
+            meta["team_name"] = team_name
+    else:
+        meta["team_name"] = None
+    
+    return {
+        "data": summaries,
+        "meta": meta,
+    }
+
+
 _REPORT_DATA_FETCHERS: Dict[str, ReportDataFetcher] = {
     "team_sprint_burndown": _fetch_team_sprint_burndown,
     "team_current_sprint_progress": _fetch_team_current_sprint_progress,
@@ -1868,5 +1918,6 @@ _REPORT_DATA_FETCHERS: Dict[str, ReportDataFetcher] = {
     "sprint_predictability": _fetch_sprint_predictability,
     "pi_metrics_summary": _fetch_pi_metrics_summary,
     "pi_metrics_summary_by_team": _fetch_pi_metrics_summary_by_team,
+    "active_sprint_summary": _fetch_active_sprint_summary,
 }
 

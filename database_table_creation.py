@@ -626,6 +626,37 @@ DEFAULT_REPORT_DEFINITIONS = [
             },
             "allowed_views": ["pi-dashboard"]
         }
+    },
+    {
+        "report_id": "active-sprint-summary",
+        "report_name": "Active Sprint Summary",
+        "chart_type": "table",
+        "data_source": "active_sprint_summary",
+        "description": "Displays active sprint summary by team with progress metrics, issues added, and completion status.",
+        "default_filters": {
+            "team_name": None,
+            "issue_type": None,
+            "isGroup": False
+        },
+        "meta_schema": {
+            "required_filters": [],
+            "optional_filters": ["team_name", "issue_type", "isGroup"],
+            "parameters": {
+                "team_name": {
+                    "type": "string",
+                    "description": "Team name or group name (if isGroup=true). If not provided, returns summaries for all teams."
+                },
+                "issue_type": {
+                    "type": "string",
+                    "description": "Issue type filter (optional, e.g., 'Story', 'Bug', 'Task'). If not provided, returns all issue types."
+                },
+                "isGroup": {
+                    "type": "boolean",
+                    "description": "If true, team_name is treated as a group name and returns summaries for all teams in that group"
+                }
+            },
+            "allowed_views": ["team-dashboard", "pi-dashboard"]
+        }
     }
 ]
 
