@@ -188,7 +188,7 @@ def get_report_cache_ttl(report_id: str) -> int:
     if any(x in report_id for x in ["current", "progress", "wip"]):
         # Real-time reports: 1 minute
         return config.CACHE_TTL_REALTIME
-    elif any(x in report_id for x in ["burndown", "trend", "predictability"]):
+    elif any(x in report_id for x in ["burndown", "trend", "predictability", "active"]):
         # Aggregate reports: 5 minutes
         return config.CACHE_TTL_AGGREGATE
     elif any(x in report_id for x in ["closed", "historical", "summary"]):
