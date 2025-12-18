@@ -793,7 +793,8 @@ def get_sprint_burndown_data_db(team_names: List[str], sprint_name: str, issue_t
                 'total_issues': safe_int(row_dict.get('total_issues')),
                 'issues_added_on_day': safe_int(row_dict.get('issues_added_on_day')),
                 'issues_removed_on_day': safe_int(row_dict.get('issues_removed_on_day')),
-                'issues_completed_on_day': safe_int(row_dict.get('issues_completed_on_day'))
+                'issues_completed_on_day': safe_int(row_dict.get('issues_completed_on_day')),
+                'wip_issues_in_progress': safe_int(row_dict.get('wip_issues_in_progress'))
             })
         
         return burndown_data
