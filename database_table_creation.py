@@ -657,6 +657,50 @@ DEFAULT_REPORT_DEFINITIONS = [
             },
             "allowed_views": ["team-dashboard", "pi-dashboard"]
         }
+    },
+    {
+        "report_id": "wip-over-time",
+        "report_name": "WIP Over Time",
+        "chart_type": "line",
+        "data_source": "wip_over_time",
+        "description": "Displays work in progress metrics over time by issue type.",
+        "default_filters": {
+            "team_name": None,
+            "isGroup": False,
+            "months": 3
+        },
+        "meta_schema": {
+            "required_filters": [],
+            "optional_filters": ["team_name", "isGroup", "months"],
+            "parameters": {
+                "team_name": {"type": "string", "description": "Team identifier or group name (if isGroup=true)"},
+                "isGroup": {"type": "boolean", "description": "If true, team_name is treated as a group name"},
+                "months": {"type": "integer", "description": "Number of months to look back (default: 3, converts to days)"}
+            },
+            "allowed_views": ["pi-dashboard", "team-dashboard"]
+        }
+    },
+    {
+        "report_id": "cycle-time-over-time",
+        "report_name": "Cycle Time Over Time",
+        "chart_type": "line",
+        "data_source": "cycle_time_over_time",
+        "description": "Displays average cycle time and issue count over time by issue type.",
+        "default_filters": {
+            "team_name": None,
+            "isGroup": False,
+            "months": 3
+        },
+        "meta_schema": {
+            "required_filters": [],
+            "optional_filters": ["team_name", "isGroup", "months"],
+            "parameters": {
+                "team_name": {"type": "string", "description": "Team identifier or group name (if isGroup=true)"},
+                "isGroup": {"type": "boolean", "description": "If true, team_name is treated as a group name"},
+                "months": {"type": "integer", "description": "Number of months to look back (default: 3, converts to days)"}
+            },
+            "allowed_views": ["pi-dashboard", "team-dashboard"]
+        }
     }
 ]
 

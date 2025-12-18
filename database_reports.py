@@ -40,6 +40,7 @@ ReportDataResult = Dict[str, Any]
 ReportDataFetcher = Callable[[Dict[str, Any], Connection], ReportDataResult]
 
 MIN_DURATION_DAYS = 0.05
+MIN_CYCLE_TIME_DAYS = 0.2  # Minimum cycle time threshold (in days) - filters out unrealistic zero/very short cycle times
 VALID_DURATION_MONTHS = {1, 2, 3, 4, 6, 9}
 DEFAULT_HIERARCHY_LIMIT = 500
 
@@ -1900,6 +1901,216 @@ def _fetch_active_sprint_summary(filters: Dict[str, Any], conn: Connection) -> R
     }
 
 
+def _fetch_wip_over_time(filters: Dict[str, Any], conn: Connection) -> ReportDataResult:
+    """
+    Fetch WIP over time data from get_teams_wip_history database function.
+    Follows the same pattern as sprint burndown - dates are passed through as-is.
+    """
+    from database_team_metrics import resolve_team_names_from_filter
+    
+    # Extract filters
+    team_name = (filters.get("team_name") or "").strip() or None
+    is_group = filters.get("isGroup", False)
+    months_value = filters.get("months")
+    months = _parse_int(months_value, default=3)
+    if months <= 0:
+        months = 3
+    
+    # Convert months to days (approximate: months * 30)
+    days_back = months * 30
+    
+    # Resolve team names using shared helper function
+    team_names_list = resolve_team_names_from_filter(team_name, is_group, conn)
+    
+    # Fetch available teams from cache
+    from groups_teams_cache import get_cached_teams, set_cached_teams, load_team_names_from_db, load_all_teams_from_db
+    
+    cached = get_cached_teams()
+    if cached:
+        available_teams = [t["team_name"] for t in cached.get("teams", [])]
+    else:
+        available_teams = load_team_names_from_db(conn)
+        all_teams = load_all_teams_from_db(conn)
+        set_cached_teams({"teams": all_teams, "count": len(all_teams)})
+    
+    # Build query - pass team_names as array or NULL
+    if team_names_list:
+        params = {"days_back": days_back, "target_team_names": team_names_list}
+        query = text("""
+            SELECT * FROM public.get_teams_wip_history(
+                :days_back,
+                CAST(:target_team_names AS text[])
+            )
+        """)
+    else:
+        params = {"days_back": days_back}
+        query = text("""
+            SELECT * FROM public.get_teams_wip_history(
+                :days_back,
+                NULL
+            )
+        """)
+    
+    # Execute query
+    rows = conn.execute(query, params).fetchall()
+    data: List[Dict[str, Any]] = []
+    for row in rows:
+        # Use row._mapping to access columns by name (same pattern as sprint burndown)
+        row_dict = dict(row._mapping)
+        # Do NOT format dates - pass through as-is (same pattern as sprint burndown)
+        data.append(row_dict)
+    
+    # Filter out issue types that have all zeros
+    issue_types_with_data = {
+        row['issuetype'] 
+        for row in data 
+        if row['work_in_progress'] > 0
+    }
+    data = [row for row in data if row['issuetype'] in issue_types_with_data]
+    
+    # Build meta
+    available_issue_types = sorted(set(row['issuetype'] for row in data))
+    meta = {
+        "months": months,
+        "days_back": days_back,
+        "isGroup": is_group,
+        "count": len(data),
+        "available_teams": available_teams,
+        "available_issue_types": available_issue_types,
+    }
+    
+    if team_name:
+        if is_group:
+            meta["group_name"] = team_name
+            meta["teams_in_group"] = team_names_list
+        else:
+            meta["team_name"] = team_name
+    else:
+        meta["team_name"] = None
+    
+    return {
+        "data": data,
+        "meta": meta,
+    }
+
+
+def _fetch_cycle_time_over_time(filters: Dict[str, Any], conn: Connection) -> ReportDataResult:
+    """
+    Fetch cycle time over time data using direct SQL query.
+    Follows the same pattern as wip-over-time - dates are passed through as-is.
+    """
+    from database_team_metrics import resolve_team_names_from_filter
+    
+    # Extract filters
+    team_name = (filters.get("team_name") or "").strip() or None
+    is_group = filters.get("isGroup", False)
+    months_value = filters.get("months")
+    months = _parse_int(months_value, default=3)
+    if months <= 0:
+        months = 3
+    
+    # Convert months to days (approximate: months * 30)
+    days_back = months * 30
+    
+    # Resolve team names using shared helper function
+    team_names_list = resolve_team_names_from_filter(team_name, is_group, conn)
+    
+    # Fetch available teams from cache
+    from groups_teams_cache import get_cached_teams, set_cached_teams, load_team_names_from_db, load_all_teams_from_db
+    
+    cached = get_cached_teams()
+    if cached:
+        available_teams = [t["team_name"] for t in cached.get("teams", [])]
+    else:
+        available_teams = load_team_names_from_db(conn)
+        all_teams = load_all_teams_from_db(conn)
+        set_cached_teams({"teams": all_teams, "count": len(all_teams)})
+    
+    # Build SQL query with CTEs (direct SQL, no function)
+    # Build WHERE conditions for CompletedIssues CTE
+    completed_where_conditions = [
+        "status_category = 'Done'",
+        f"cycle_time_days >= {MIN_CYCLE_TIME_DAYS}",
+        "resolved_at IS NOT NULL",
+        "resolved_at >= CURRENT_DATE - (:days_back || ' days')::interval"
+    ]
+    
+    params = {"days_back": days_back}
+    
+    if team_names_list:
+        # Build parameterized IN clause for team names
+        team_placeholders = ", ".join([f":team_name_{i}" for i in range(len(team_names_list))])
+        completed_where_conditions.append(f"team_name IN ({team_placeholders})")
+        for i, name in enumerate(team_names_list):
+            params[f"team_name_{i}"] = name
+    
+    completed_where_clause = " AND ".join(completed_where_conditions)
+    
+    query = text(f"""
+        WITH CompletedIssues AS (
+            SELECT 
+                DATE(resolved_at) AS resolved_day,
+                issue_type,
+                cycle_time_days,
+                team_name
+            FROM {config.WORK_ITEMS_TABLE}
+            WHERE {completed_where_clause}
+        ),
+        DailyAggregated AS (
+            SELECT 
+                resolved_day AS snapshot_day,
+                issue_type,
+                AVG(cycle_time_days) AS avg_cycle_time,
+                COUNT(*)::integer AS issue_count
+            FROM CompletedIssues
+            GROUP BY resolved_day, issue_type
+            HAVING COUNT(*) > 0
+        )
+        SELECT 
+            da.snapshot_day,
+            da.issue_type::TEXT AS issuetype,
+            ROUND(da.avg_cycle_time, 2)::NUMERIC AS avg_cycle_time,
+            da.issue_count
+        FROM DailyAggregated da
+        ORDER BY da.snapshot_day, da.issue_type
+    """)
+    
+    # Execute query
+    rows = conn.execute(query, params).fetchall()
+    data: List[Dict[str, Any]] = []
+    for row in rows:
+        # Use row._mapping to access columns by name (same pattern as sprint burndown)
+        row_dict = dict(row._mapping)
+        # Do NOT format dates - pass through as-is (same pattern as sprint burndown)
+        # Only days with actual resolved issues are returned (no zero-filled days)
+        data.append(row_dict)
+    
+    # Build meta
+    available_issue_types = sorted(set(row['issuetype'] for row in data))
+    meta = {
+        "months": months,
+        "days_back": days_back,
+        "isGroup": is_group,
+        "count": len(data),
+        "available_teams": available_teams,
+        "available_issue_types": available_issue_types,
+    }
+    
+    if team_name:
+        if is_group:
+            meta["group_name"] = team_name
+            meta["teams_in_group"] = team_names_list
+        else:
+            meta["team_name"] = team_name
+    else:
+        meta["team_name"] = None
+    
+    return {
+        "data": data,
+        "meta": meta,
+    }
+
+
 _REPORT_DATA_FETCHERS: Dict[str, ReportDataFetcher] = {
     "team_sprint_burndown": _fetch_team_sprint_burndown,
     "team_current_sprint_progress": _fetch_team_current_sprint_progress,
@@ -1919,5 +2130,7 @@ _REPORT_DATA_FETCHERS: Dict[str, ReportDataFetcher] = {
     "pi_metrics_summary": _fetch_pi_metrics_summary,
     "pi_metrics_summary_by_team": _fetch_pi_metrics_summary_by_team,
     "active_sprint_summary": _fetch_active_sprint_summary,
+    "wip_over_time": _fetch_wip_over_time,
+    "cycle_time_over_time": _fetch_cycle_time_over_time,
 }
 

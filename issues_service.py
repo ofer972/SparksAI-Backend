@@ -5,14 +5,15 @@ This service provides endpoints for managing and retrieving issue information.
 Uses FastAPI dependencies for clean connection management and SQL injection protection.
 """
 
-from fastapi import APIRouter, HTTPException, Depends, Query
+from fastapi import APIRouter, HTTPException, Depends, Query, Request
 from sqlalchemy import text
 from sqlalchemy.engine import Connection
 from typing import List, Dict, Any, Optional
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, date
 import logging
 import re
 from database_connection import get_db_connection
+from database_reports import MIN_CYCLE_TIME_DAYS
 import config
 
 logger = logging.getLogger(__name__)
@@ -1762,6 +1763,181 @@ async def get_issue_types_hierarchy(
         )
 
 
+def _normalize_multi_value_issue_type(values: Optional[List[str] | str]) -> Optional[List[str]]:
+    """
+    Normalize multi-value issue_type parameter.
+    Handles comma-separated strings, lists, and single values.
+    """
+    if values is None:
+        return None
+    if isinstance(values, list):
+        normalized: List[str] = []
+        for value in values:
+            if value is None:
+                continue
+            if isinstance(value, str):
+                parts = [part.strip() for part in value.split(",") if part.strip()]
+                normalized.extend(parts)
+            else:
+                normalized.append(str(value))
+        return normalized if normalized else None
+    if isinstance(values, str):
+        parts = [part.strip() for part in values.split(",") if part.strip()]
+        return parts if parts else None
+    return [str(values)]
+
+
+@issues_router.get("/issues/cycle-time-with-issues-keys")
+async def get_cycle_time_with_issue_keys(
+    request: Request,
+    period_start: str = Query(..., description="Start date (YYYY-MM-DD) - filter by resolved_at >= period_start"),
+    period_end: str = Query(..., description="End date (YYYY-MM-DD) - filter by resolved_at <= period_end"),
+    team_name: Optional[str] = Query(None, description="Team name or group name (if isGroup=true)"),
+    isGroup: bool = Query(False, description="If true, team_name is treated as a group name"),
+    issue_type: Optional[str] = Query(None, description="Filter by issue type(s) - can be single value, comma-separated, or multiple params (e.g., 'Story,Bug' or ?issue_type=Story&issue_type=Bug)"),
+    conn: Connection = Depends(get_db_connection)
+):
+    """
+    Get issues with cycle time for a specific period.
+    
+    Returns issue keys, summaries, cycle times, resolved dates, issue types, and team names
+    for completed issues within the specified date range.
+    
+    Args:
+        period_start: Start date (YYYY-MM-DD) - required
+        period_end: End date (YYYY-MM-DD) - required
+        team_name: Optional team name or group name (if isGroup=true)
+        isGroup: If true, team_name is treated as a group name
+        issue_type: Optional filter by issue type(s) - supports multi-value (comma-separated or multiple params)
+    
+    Returns:
+        JSON response with list of issues (max 100) containing:
+        - issue_key
+        - summary
+        - cycle_time (rounded to 2 decimal places)
+        - resolved_at (date string)
+        - issue_type
+        - team_name
+    """
+    try:
+        from database_team_metrics import resolve_team_names_from_filter
+        
+        # Validate and parse dates
+        try:
+            start_date = datetime.strptime(period_start, "%Y-%m-%d").date()
+            end_date = datetime.strptime(period_end, "%Y-%m-%d").date()
+        except ValueError as e:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Invalid date format. Expected YYYY-MM-DD format. Error: {str(e)}"
+            )
+        
+        # Validate date range
+        if start_date > end_date:
+            raise HTTPException(
+                status_code=400,
+                detail="period_start must be less than or equal to period_end"
+            )
+        
+        # Normalize multi-value issue_type parameter
+        # Handle both single query param and multiple query params
+        issue_type_values = None
+        # Get all issue_type values from query params (handles multiple params like ?issue_type=Story&issue_type=Bug)
+        issue_type_params = request.query_params.getlist("issue_type")
+        if issue_type_params:
+            issue_type_values = _normalize_multi_value_issue_type(issue_type_params)
+        elif issue_type:
+            # Fallback to single parameter if not provided as multiple params
+            issue_type_values = _normalize_multi_value_issue_type(issue_type)
+        
+        # Resolve team names using shared helper function
+        team_names_list = resolve_team_names_from_filter(team_name, isGroup, conn)
+        
+        # Build WHERE clause conditions
+        where_conditions = [
+            "status_category = 'Done'",
+            f"cycle_time_days >= {MIN_CYCLE_TIME_DAYS}",
+            "resolved_at IS NOT NULL",
+            "DATE(resolved_at) >= :period_start",
+            "DATE(resolved_at) <= :period_end"
+        ]
+        
+        params = {
+            "period_start": start_date.strftime("%Y-%m-%d"),
+            "period_end": end_date.strftime("%Y-%m-%d"),
+            "limit": 100
+        }
+        
+        # Add team filter if provided
+        if team_names_list:
+            team_placeholders = ", ".join([f":team_name_{i}" for i in range(len(team_names_list))])
+            where_conditions.append(f"team_name IN ({team_placeholders})")
+            for i, name in enumerate(team_names_list):
+                params[f"team_name_{i}"] = name
+        
+        # Add issue_type filter if provided
+        if issue_type_values:
+            issue_type_placeholders = ", ".join([f":issue_type_{i}" for i in range(len(issue_type_values))])
+            where_conditions.append(f"issue_type IN ({issue_type_placeholders})")
+            for i, itype in enumerate(issue_type_values):
+                params[f"issue_type_{i}"] = itype
+        
+        # Build SQL query
+        where_clause = " AND ".join(where_conditions)
+        
+        query = text(f"""
+            SELECT 
+                issue_key,
+                summary,
+                ROUND(cycle_time_days, 2) AS cycle_time,
+                DATE(resolved_at) AS resolved_at,
+                issue_type,
+                team_name
+            FROM {config.WORK_ITEMS_TABLE}
+            WHERE {where_clause}
+            ORDER BY resolved_at DESC
+            LIMIT :limit
+        """)
+        
+        logger.info(f"Executing query to get cycle time with issue keys: period_start={period_start}, period_end={period_end}, team_name={team_name}, isGroup={isGroup}, issue_type={issue_type_values}")
+        
+        result = conn.execute(query, params)
+        rows = result.fetchall()
+        
+        # Convert rows to list of dictionaries
+        issues = []
+        for row in rows:
+            issue_dict = {
+                "issue_key": row[0],
+                "summary": row[1],
+                "cycle_time": float(row[2]) if row[2] is not None else None,
+                "resolved_at": row[3].strftime("%Y-%m-%d") if row[3] else None,
+                "issue_type": row[4],
+                "team_name": row[5]
+            }
+            issues.append(issue_dict)
+        
+        return {
+            "success": True,
+            "data": {
+                "issues": issues,
+                "count": len(issues),
+                "limit": 100
+            },
+            "message": f"Retrieved {len(issues)} issues"
+        }
+    
+    except HTTPException:
+        # Re-raise HTTP exceptions (validation errors)
+        raise
+    except Exception as e:
+        logger.error(f"Error fetching cycle time with issue keys: {e}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to fetch cycle time with issue keys: {str(e)}"
+        )
+
+
 @issues_router.get("/issues/{issue_id}")
 async def get_issue(
     issue_id: str,
@@ -1816,4 +1992,152 @@ async def get_issue(
         raise HTTPException(
             status_code=500,
             detail=f"Failed to fetch issue: {str(e)}"
+        )
+async def get_cycle_time_with_issue_keys(
+    request: Request,
+    period_start: str = Query(..., description="Start date (YYYY-MM-DD) - filter by resolved_at >= period_start"),
+    period_end: str = Query(..., description="End date (YYYY-MM-DD) - filter by resolved_at <= period_end"),
+    team_name: Optional[str] = Query(None, description="Team name or group name (if isGroup=true)"),
+    isGroup: bool = Query(False, description="If true, team_name is treated as a group name"),
+    issue_type: Optional[str] = Query(None, description="Filter by issue type(s) - can be single value, comma-separated, or multiple params (e.g., 'Story,Bug' or ?issue_type=Story&issue_type=Bug)"),
+    conn: Connection = Depends(get_db_connection)
+):
+    """
+    Get issues with cycle time for a specific period.
+    
+    Returns issue keys, summaries, cycle times, resolved dates, issue types, and team names
+    for completed issues within the specified date range.
+    
+    Args:
+        period_start: Start date (YYYY-MM-DD) - required
+        period_end: End date (YYYY-MM-DD) - required
+        team_name: Optional team name or group name (if isGroup=true)
+        isGroup: If true, team_name is treated as a group name
+        issue_type: Optional filter by issue type(s) - supports multi-value (comma-separated or multiple params)
+    
+    Returns:
+        JSON response with list of issues (max 100) containing:
+        - issue_key
+        - summary
+        - cycle_time (rounded to 2 decimal places)
+        - resolved_at (date string)
+        - issue_type
+        - team_name
+    """
+    try:
+        from database_team_metrics import resolve_team_names_from_filter
+        
+        # Validate and parse dates
+        try:
+            start_date = datetime.strptime(period_start, "%Y-%m-%d").date()
+            end_date = datetime.strptime(period_end, "%Y-%m-%d").date()
+        except ValueError as e:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Invalid date format. Expected YYYY-MM-DD format. Error: {str(e)}"
+            )
+        
+        # Validate date range
+        if start_date > end_date:
+            raise HTTPException(
+                status_code=400,
+                detail="period_start must be less than or equal to period_end"
+            )
+        
+        # Normalize multi-value issue_type parameter
+        # Handle both single query param and multiple query params
+        issue_type_values = None
+        # Get all issue_type values from query params (handles multiple params like ?issue_type=Story&issue_type=Bug)
+        issue_type_params = request.query_params.getlist("issue_type")
+        if issue_type_params:
+            issue_type_values = _normalize_multi_value_issue_type(issue_type_params)
+        elif issue_type:
+            # Fallback to single parameter if not provided as multiple params
+            issue_type_values = _normalize_multi_value_issue_type(issue_type)
+        
+        # Resolve team names using shared helper function
+        team_names_list = resolve_team_names_from_filter(team_name, isGroup, conn)
+        
+        # Build WHERE clause conditions
+        where_conditions = [
+            "status_category = 'Done'",
+            f"cycle_time_days >= {MIN_CYCLE_TIME_DAYS}",
+            "resolved_at IS NOT NULL",
+            "DATE(resolved_at) >= :period_start",
+            "DATE(resolved_at) <= :period_end"
+        ]
+        
+        params = {
+            "period_start": start_date.strftime("%Y-%m-%d"),
+            "period_end": end_date.strftime("%Y-%m-%d"),
+            "limit": 100
+        }
+        
+        # Add team filter if provided
+        if team_names_list:
+            team_placeholders = ", ".join([f":team_name_{i}" for i in range(len(team_names_list))])
+            where_conditions.append(f"team_name IN ({team_placeholders})")
+            for i, name in enumerate(team_names_list):
+                params[f"team_name_{i}"] = name
+        
+        # Add issue_type filter if provided
+        if issue_type_values:
+            issue_type_placeholders = ", ".join([f":issue_type_{i}" for i in range(len(issue_type_values))])
+            where_conditions.append(f"issue_type IN ({issue_type_placeholders})")
+            for i, itype in enumerate(issue_type_values):
+                params[f"issue_type_{i}"] = itype
+        
+        # Build SQL query
+        where_clause = " AND ".join(where_conditions)
+        
+        query = text(f"""
+            SELECT 
+                issue_key,
+                summary,
+                ROUND(cycle_time_days, 2) AS cycle_time,
+                DATE(resolved_at) AS resolved_at,
+                issue_type,
+                team_name
+            FROM {config.WORK_ITEMS_TABLE}
+            WHERE {where_clause}
+            ORDER BY resolved_at DESC
+            LIMIT :limit
+        """)
+        
+        logger.info(f"Executing query to get cycle time with issue keys: period_start={period_start}, period_end={period_end}, team_name={team_name}, isGroup={isGroup}, issue_type={issue_type_values}")
+        
+        result = conn.execute(query, params)
+        rows = result.fetchall()
+        
+        # Convert rows to list of dictionaries
+        issues = []
+        for row in rows:
+            issue_dict = {
+                "issue_key": row[0],
+                "summary": row[1],
+                "cycle_time": float(row[2]) if row[2] is not None else None,
+                "resolved_at": row[3].strftime("%Y-%m-%d") if row[3] else None,
+                "issue_type": row[4],
+                "team_name": row[5]
+            }
+            issues.append(issue_dict)
+        
+        return {
+            "success": True,
+            "data": {
+                "issues": issues,
+                "count": len(issues),
+                "limit": 100
+            },
+            "message": f"Retrieved {len(issues)} issues"
+        }
+    
+    except HTTPException:
+        # Re-raise HTTP exceptions (validation errors)
+        raise
+    except Exception as e:
+        logger.error(f"Error fetching cycle time with issue keys: {e}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to fetch cycle time with issue keys: {str(e)}"
         )

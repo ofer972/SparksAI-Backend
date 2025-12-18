@@ -207,6 +207,8 @@ async def get_report_instance(
     - pi-metrics-summary
     - pi-metrics-summary-by-team
     - active-sprint-summary
+    - wip-over-time
+    - cycle-time-over-time
     """
     definition = get_report_definition_by_id(report_id, conn)
     if not definition:
