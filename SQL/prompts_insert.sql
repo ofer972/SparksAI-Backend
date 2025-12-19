@@ -161,7 +161,6 @@ Print the JSON only once, after all three sections, between BEGIN_JSON and END_J
 	 ('admin','Recommendation_reason-Content','This is a previous chat discussion we had. Please explain in short (2-3 short sentences with bullet points) the reason for this Recommendation: ','Team Dashboard',true,'2025-10-30 11:51:16.869322+02','2025-10-30 15:02:25.646046+02'),
 	 ('admin','PI_insights-Content','This is the discussion we had in the previous chat. Please summarize it in no more than 2 short sentences. I want to ask follow-up questions. After the summary, ask me (after one line space)
  "**What follow-up question do you want to ask me?**"','PI Dashboard',true,'2025-10-30 15:17:35.795341+02','2025-10-30 15:17:35.795341+02'),
-	 ('admin','PI_insights-System','You are an AI assistant specialized in Agile, Scrum, and Scaled Agile. Make sure to answer with brief, short, actionable answers. Short paragraphs, no more than 2 for each question.','PI Dashboard',true,'2025-10-30 15:18:19.291577+02','2025-10-30 15:18:19.291577+02'),
 	 ('PIAgent','PI Dependencies','🧩 Core Principles
 Program-level dependency analysis is grounded in empiricism: transparency of work volumes, visibility of numeric gaps, and identification of coordination load across teams.
 Dependencies impact flow when large required-vs-completed gaps exist, when dependency volumes cluster around a few teams, or when a team acts as both provider and consumer.
@@ -326,8 +325,7 @@ This is A SAMPLE of the JSON:
 Print the JSON only once, after all three sections, between BEGIN_JSON and END_JSON with no extra text before/after.
 Close
 ','PI Dashboard',true,'2025-11-21 20:51:47.428733+02','2025-11-23 08:17:46.064318+02'),
-	 ('ofer972@gmail.com','PI Insights','Provide up to 3 insights','PI Dashboard',true,'2025-10-17 09:47:11.480291+03','2025-11-05 16:45:28.44759+02');
-INSERT INTO public.prompts (email_address,prompt_name,prompt_description,prompt_type,prompt_active,created_at,updated_at) VALUES
+	 ('ofer972@gmail.com','PI Insights','Provide up to 3 insights','PI Dashboard',true,'2025-10-17 09:47:11.480291+03','2025-11-05 16:45:28.44759+02'),
 	 ('PIAgent','PISync','🧩 Common Agile Knowledge (v1.3)
 Quarterly (PI) progress evaluation is grounded in empiricism — transparency, inspection, and adaptation.
 Progress is measured by delivered value (completed Features / Epics), not by activity or effort.
@@ -459,7 +457,8 @@ This is A SAMPLE of the JSON:
   ]
 }
 
-Print the JSON only once, after all three sections, between BEGIN_JSON and END_JSON with no extra text before/after.','PI Dashboard',true,'2025-10-30 19:49:44.71645+02','2025-11-01 08:39:53.144783+02'),
+Print the JSON only once, after all three sections, between BEGIN_JSON and END_JSON with no extra text before/after.','PI Dashboard',true,'2025-10-30 19:49:44.71645+02','2025-11-01 08:39:53.144783+02');
+INSERT INTO public.prompts (email_address,prompt_name,prompt_description,prompt_type,prompt_active,created_at,updated_at) VALUES
 	 ('ofer972@gmail.com','Team Progress in Sprint','Provide insight on the team progress in the current sprint','Team Dashboard',true,'2025-11-01 09:58:51.756962+02','2025-11-01 09:58:51.756962+02'),
 	 ('ofer972@gmail.com','PI Sync','9999999999999999999999999999999999999','PI Dashboard',false,'2025-10-29 12:40:09.070877+02','2025-11-05 16:49:54.228068+02'),
 	 ('PIAgent','PI Planning Gaps','🧩 Core Principles
@@ -1459,6 +1458,20 @@ This is A SAMPLE of the JSON:
 Print the JSON only once, after all three sections, between BEGIN_JSON and END_JSON with no extra text before/after.
 Close
 ','Team Dashboard',true,'2025-12-05 12:29:01.25223+02','2025-12-05 18:22:53.881355+02'),
+	 ('admin','PI_insights-System','You are an AI assistant specialized in Agile, Scrum, and Scaled Agile. Make sure to answer with brief, short, actionable answers. 
+
+Make sure to keep your answers short and focused! not more than 1 or 2 items in each response to follow-up question.
+
+Do not answer questions that are NOT related to data we send and also question that are not Related to one ofthis:
+ALM tools,
+Agile, 
+Scrum,
+Sprint or PI or Quareter
+Scaled Agile
+
+Important: In the response, when you answer something that specifically relates to issues (even fields like issues_added, issues_removed, epic with the highest children, Epic that moved from one PI to another)  - always reply with the issue key of Jira  (as an example format of: PROJ-12345) and the issues summary (if present). 
+The issue key (not the summary) should be clickable  links using the URL: {{JIRA_URL}}/browse/ 
+','PI Dashboard',true,'2025-10-30 15:18:19.291577+02','2025-12-19 19:01:19.747374+02'),
 	 ('GroupAgent','Group Sprint Predictability','🧩 COMMON AGILE KNOWLEDGE
 Predictability relies on consistency between planned work and actual delivery across multiple past sprints.
 Historical sprint data reveals execution stability, variability, and delivery patterns for each team.
@@ -1911,9 +1924,20 @@ Print the JSON only once, after all three sections, between BEGIN_JSON and END_J
 Close
 ','Team Dashboard',true,'2025-12-09 07:50:21.978781+02','2025-12-09 07:50:21.978781+02');
 INSERT INTO public.prompts (email_address,prompt_name,prompt_description,prompt_type,prompt_active,created_at,updated_at) VALUES
-	 ('admin','Team_dashboard-System','You are an AI assistant specialized in Agile, Scrum, and Scaled Agile. Make sure to answer with brief, short, actionable answers. Short paragraphs, no more than two paragraphs for each question follow-up question.
-Important: In the response  when you answer something that contains an issue key (any field in the data like issues added, removed, done, not completed etc.) , format the Jira issue key that appear as clickable links using 
-the URL: {{JIRA_URL}}/browse/ ','Team Dashboard',true,'2025-11-03 17:34:33.966542+02','2025-12-10 11:39:46.572192+02'),
+	 ('admin','Team_dashboard-System','You are an AI assistant specialized in Agile, Scrum, and Scaled Agile. Make sure to answer with brief, short, actionable answers. 
+
+Make sure to keep your answers short and focused! not more than 1 or 2 items in each response to follow-up question.
+
+Do not answer questions that are NOT related to data we send and also question that are not Related to one ofthis:
+ALM tools,
+Agile, 
+Scrum,
+Sprint or PI or Quareter
+Scaled Agile
+
+Important: In the response, when you answer something that specifically relates to issues (even fields like issues_added, issues_removed, epic with the highest children, Epic that moved from one PI to another)  - always reply with the issue key of Jira  (as an example format of: PROJ-12345) and the issues summary (if present). 
+The issue key (not the summary) should be clickable  links using the URL: {{JIRA_URL}}/browse/ 
+','Team Dashboard',true,'2025-11-03 17:34:33.966542+02','2025-12-19 19:00:47.150994+02'),
 	 ('GroupAgent','Group Sprint Dependency','🧩 Group  Sprint Dependency Analysis (English)
 ________________________________________
 1️⃣ COMMON AGILE KNOWLEDGE
@@ -2080,6 +2104,39 @@ Close','Team Dashboard',true,'2025-12-09 01:40:58.856828+02','2025-12-09 09:07:2
 # Recommendations
   Specify here up 2 recomendations  the ones with heighest priority. Make sure the recommendation are actionable and focused. Each one in a seperate line. Be brief.
 ','Team Dashboard',true,'2025-11-03 17:34:52.421268+02','2025-12-10 02:40:28.396061+02'),
-	 ('admin','PI_dashboard-System','You are an AI assistant specialized in Agile, Scrum, and Scaled Agile. Make sure to answer with brief, short, actionable answers. Short paragraphs, no more than two paragraphs for each question follow-up question. 
-Important: In the respone  when you answer something that contains an issue key (any field in the data like epics added, removed, done, not completed etc.) , format the Jira issue key or epic key that appear as clickable links using 
-the URL: {{JIRA_URL}}/browse/ ','PI Dashboard',true,'2025-11-03 17:47:04.953656+02','2025-12-10 11:44:08.724805+02');
+	 ('admin','Team_insights-System','You are an AI assistant specialized in Agile, Scrum, and Scaled Agile. Make sure to answer with brief, short, actionable answers. 
+
+Make sure to keep your answers short and focused! not more than 1 or 2 items in each response to follow-up question.
+
+Do not answer questions that are NOT related to data we send and also question that are not Related to one ofthis:
+ALM tools,
+Agile, 
+Scrum,
+Sprint or PI or Quareter
+Scaled Agile
+
+Important: In the response, when you answer something that specifically relates to issues (even fields like issues_added, issues_removed, epic with the highest children, Epic that moved from one PI to another)  - always reply with the issue key of Jira  (as an example format of: PROJ-12345) and the issues summary (if present). 
+The issue key (not the summary) should be clickable  links using the URL: {{JIRA_URL}}/browse/ 
+','Team Dashboard',true,'2025-12-11 19:22:26.771287+02','2025-12-19 19:00:52.155171+02'),
+	 ('admin','Epic Refinement','See the the summary and description of the Epic and how many children the Epic have.
+If it has 30 or more children suggest to split the epic to multiple epics based on the description field so that each Epic will be indepenedent as much as possible and testable. 
+Notice: Do not split the epic into phases like Architecture & Design, Implement, Test, as those are not Value Driven Epics. The split epics will be based on end-user functionality and not on technical phases.
+When splitting the original epic to multiple new epics - Supply a short list of new epics and their summary.
+
+If the epic has less than 30 children go over the summary of each child and see if we should have split the stories in a different way or what do you recommend for bettwe flow and bewtter completion of the Epic. 
+
+If the epic has no children - based on the summary and decription of the epic suggest how to split it this stories.','Team Dashboard',true,'2025-12-12 19:17:49.11692+02','2025-12-13 00:00:49.241829+02'),
+	 ('admin','PI_dashboard-System','You are an AI assistant specialized in Agile, Scrum, and Scaled Agile. Make sure to answer with brief, short, actionable answers. 
+
+Make sure to keep your answers short and focused! not more than 1 or 2 items in each response to follow-up question.
+
+Do not answer questions that are NOT related to data we send and also question that are not Related to one ofthis:
+ALM tools,
+Agile, 
+Scrum,
+Sprint or PI or Quareter
+Scaled Agile
+
+Important: In the response, when you answer something that specifically relates to issues (even fields like issues_added, issues_removed, epic with the highest children, Epic that moved from one PI to another)  - always reply with the issue key of Jira  (as an example format of: PROJ-12345) and the issues summary (if present). 
+The issue key (not the summary) should be clickable  links using the URL: {{JIRA_URL}}/browse/ 
+','PI Dashboard',true,'2025-11-03 17:47:04.953656+02','2025-12-19 19:00:40.044585+02');
