@@ -25,6 +25,7 @@ from cache_utils import (
     get_redis_client,
 )
 import config
+from config import get_jira_url
 
 reports_router = APIRouter()
 
@@ -267,6 +268,11 @@ async def get_report_instance(
     if not bypass_cache:
         cached_data = get_cached_report(cache_key)
         if cached_data:
+            # Add JIRA URL to cached response metadata (will retry if null)
+            jira_settings = get_jira_url(conn=conn)
+            if jira_settings.get("url") and "meta" in cached_data:
+                cached_data["meta"]["jira_url"] = jira_settings["url"]
+            
             return {
                 "success": True,
                 "data": cached_data,
@@ -310,6 +316,11 @@ async def get_report_instance(
         "result": resolved_payload.get("data"),
         "meta": resolved_payload.get("meta", {}),
     }
+
+    # Add JIRA URL to metadata (will retry from DB if null)
+    jira_settings = get_jira_url(conn=conn)
+    if jira_settings.get("url"):
+        response_payload["meta"]["jira_url"] = jira_settings["url"]
 
     # Determine TTL: use custom if provided, otherwise use smart default
     ttl = cache_ttl if cache_ttl is not None else get_report_cache_ttl(report_id)

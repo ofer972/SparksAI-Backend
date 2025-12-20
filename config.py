@@ -102,3 +102,159 @@ CACHE_TTL_AGGREGATE = int(os.getenv("CACHE_TTL_AGGREGATE") or "300")  # 5 minute
 CACHE_TTL_HISTORICAL = int(os.getenv("CACHE_TTL_HISTORICAL") or "1800")  # 30 minutes
 CACHE_TTL_DEFINITIONS = int(os.getenv("CACHE_TTL_DEFINITIONS") or "3600")  # 1 hour
 CACHE_TTL_GROUPS_TEAMS = int(os.getenv("CACHE_TTL_GROUPS_TEAMS") or "3600")  # 1 hour
+
+# --- JIRA URL Configuration ---
+from typing import Optional, Dict, Any
+from sqlalchemy.engine import Connection
+import logging
+
+_jira_url_logger = logging.getLogger(__name__)
+_jira_url: Optional[str] = None
+_jira_cloud: Optional[bool] = None
+
+def get_jira_url(conn: Optional[Connection] = None) -> Dict[str, Any]:
+    """
+    Get JIRA URL and Cloud flag from cache or database.
+    Returns both together since they're connected.
+    
+    - Returns cached values if available
+    - If null and connection provided, retries from database (loads both URL and cloud)
+    
+    Args:
+        conn: Optional database connection for retry
+        
+    Returns:
+        Dict with "url" and "is_cloud" keys, or {"url": None, "is_cloud": None} if not found
+    """
+    global _jira_url, _jira_cloud
+    
+    # Return cached values if available
+    if _jira_url is not None or _jira_cloud is not None:
+        return {"url": _jira_url, "is_cloud": _jira_cloud}
+    
+    # If null, retry if connection available - load both URL and cloud together
+    if conn is not None:
+        try:
+            from database_general import get_etl_setting_from_db
+            db_url = get_etl_setting_from_db(conn, "jira_url_from_startup", None)
+            _jira_url = db_url
+            if db_url:
+                _jira_url_logger.info(f"✅ JIRA URL loaded from ETL settings: {db_url}")
+            
+            # Also load cloud setting when loading URL (they're connected)
+            cloud_setting = get_etl_setting_from_db(conn, "jira_cloud", None)
+            if cloud_setting:
+                cloud_setting_lower = cloud_setting.lower().strip()
+                _jira_cloud = cloud_setting_lower in ("true", "cloud", "1", "yes")
+                if _jira_cloud is not None:
+                    _jira_url_logger.info(f"✅ JIRA Cloud setting loaded from ETL settings: {_jira_cloud}")
+            
+            return {"url": _jira_url, "is_cloud": _jira_cloud}
+        except Exception as e:
+            _jira_url_logger.warning(f"⚠️  Failed to load JIRA settings from database: {e}")
+            return {"url": None, "is_cloud": None}
+    
+    return {"url": None, "is_cloud": None}
+
+def set_jira_url(url: Optional[str], is_cloud: Optional[bool] = None) -> None:
+    """
+    Set JIRA URL and Cloud flag (called at startup).
+    They're set together since they're connected.
+    
+    Args:
+        url: JIRA URL to cache (can be None)
+        is_cloud: JIRA Cloud flag (True for Cloud, False for Data Center, None if not found)
+    """
+    global _jira_url, _jira_cloud
+    _jira_url = url
+    if is_cloud is not None:
+        _jira_cloud = is_cloud
+
+def get_jira_sprint_report_url(project_key: Optional[str], board_id: str, sprint_id: str, conn: Optional[Connection] = None) -> Optional[str]:
+    """
+    Construct JIRA sprint report URL.
+    
+    Args:
+        project_key: Project key (required for Cloud, not needed for Data Center)
+        board_id: Board ID (required for both)
+        sprint_id: Sprint ID (required for both - used in sprint parameter)
+        conn: Optional database connection for retry
+        
+    Returns:
+        Full sprint report URL or None
+    """
+    _jira_url_logger.info(f"🔍 DEBUG get_jira_sprint_report_url: project_key={project_key}, board_id={board_id}, sprint_id={sprint_id}")
+    
+    jira_settings = get_jira_url(conn)
+    jira_url = jira_settings.get("url")
+    is_cloud = jira_settings.get("is_cloud")
+    
+    _jira_url_logger.info(f"🔍 DEBUG get_jira_sprint_report_url: jira_url={jira_url}, is_cloud={is_cloud}")
+    
+    if not jira_url:
+        _jira_url_logger.warning(f"⚠️  DEBUG: No jira_url available")
+        return None
+    
+    if not board_id:
+        _jira_url_logger.warning(f"⚠️  DEBUG: No board_id provided")
+        return None
+    
+    if not sprint_id:
+        _jira_url_logger.warning(f"⚠️  DEBUG: No sprint_id provided")
+        return None
+    
+    # Auto-detect if is_cloud is None
+    if is_cloud is None:
+        is_cloud = "atlassian.net" in jira_url.lower()
+        _jira_url_logger.info(f"🔍 DEBUG: Auto-detected is_cloud={is_cloud}")
+    
+    if is_cloud:
+        # Cloud format: /jira/software/c/projects/[project_key]/boards/[board_id]/reports/sprint-retrospective?sprint=[sprint_id]
+        if not project_key:
+            _jira_url_logger.warning(f"⚠️  DEBUG: Cloud format requires project_key but it's None")
+            return None
+        domain = jira_url.replace("https://", "").replace("http://", "").rstrip("/")
+        url = f"{domain}/jira/software/c/projects/{project_key}/boards/{board_id}/reports/sprint-retrospective?sprint={sprint_id}"
+        _jira_url_logger.info(f"🔍 DEBUG: Generated Cloud URL: {url}")
+        return url
+    else:
+        # Data Center format: /secure/RapidBoard.jspa?rapidView=[board_id]&view=reporting&chart=sprintRetrospective&sprint=[sprint_id]
+        base_url = jira_url.rstrip("/")
+        url = f"{base_url}/secure/RapidBoard.jspa?rapidView={board_id}&view=reporting&chart=sprintRetrospective&sprint={sprint_id}"
+        _jira_url_logger.info(f"🔍 DEBUG: Generated Data Center URL: {url}")
+        return url
+
+def get_jira_closed_sprint_report_url(project_key: Optional[str], board_id: str, conn: Optional[Connection] = None) -> Optional[str]:
+    """
+    Construct JIRA closed sprint report URL (no sprint parameter).
+    
+    Args:
+        project_key: Project key (required for Cloud, not needed for Data Center)
+        board_id: Board ID (required for both)
+        conn: Optional database connection for retry
+        
+    Returns:
+        Full closed sprint report URL or None
+    """
+    jira_settings = get_jira_url(conn)
+    jira_url = jira_settings.get("url")
+    is_cloud = jira_settings.get("is_cloud")
+    
+    if not jira_url or not board_id:
+        return None
+    
+    # Auto-detect if is_cloud is None
+    if is_cloud is None:
+        is_cloud = "atlassian.net" in jira_url.lower()
+    
+    if is_cloud:
+        # Cloud format - needs project_key
+        if not project_key:
+            return None
+        domain = jira_url.replace("https://", "").replace("http://", "").rstrip("/")
+        return f"{domain}/jira/software/projects/{project_key}/boards/{board_id}/reports/sprint-report"
+    else:
+        # Data Center format - no project_key needed
+        base_url = jira_url.rstrip("/")
+        return f"{base_url}/secure/RapidBoard.jspa?rapidView={board_id}&view=reporting&chart=sprintRetrospective"
+

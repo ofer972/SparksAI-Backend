@@ -525,10 +525,25 @@ def _fetch_closed_sprints_flat_report(filters: Dict[str, Any], conn: Connection,
     # Fetch closed sprints with specified sort order
     closed_sprints = get_closed_sprints_data_db(team_names_list, months, issue_type, sort_by=sort_by, conn=conn)
 
+    # Add JIRA closed sprint URL to each sprint
+    from config import get_jira_closed_sprint_report_url, get_jira_url
+    for sprint in closed_sprints:
+        board_id = sprint.get("board_id") or sprint.get("boardId") or sprint.get("boardid")
+        project_key = sprint.get("project_key") or sprint.get("projectKey") or sprint.get("projectkey")
+        
+        if board_id:
+            sprint_url = get_jira_closed_sprint_report_url(project_key, str(board_id), conn)
+            if sprint_url:
+                sprint["closed_sprint_url"] = sprint_url
+
     # Calculate average velocity: sum of issues_done across all sprints / number of sprints
     sprint_count = len(closed_sprints)
     total_issues_done = sum(sprint.get('issues_done', 0) or 0 for sprint in closed_sprints)
     average_velocity = round(total_issues_done / sprint_count, 2) if sprint_count > 0 else 0.0
+
+    # Get JIRA URL for meta
+    jira_settings = get_jira_url(conn)
+    jira_url = jira_settings.get("url")
 
     return {
         "data": closed_sprints,
@@ -541,6 +556,7 @@ def _fetch_closed_sprints_flat_report(filters: Dict[str, Any], conn: Connection,
             "average_velocity": average_velocity,
             "available_teams": available_teams,
             "available_issue_types": available_issue_types,
+            "jira_url": jira_url,
         },
     }
 
@@ -1877,6 +1893,41 @@ def _fetch_active_sprint_summary(filters: Dict[str, Any], conn: Connection) -> R
     
     # Process data using existing function
     summaries = process_active_sprint_summary_data(raw_summaries)
+    
+    # Add JIRA sprint URL to each sprint
+    from config import get_jira_sprint_report_url
+    import logging
+    logger = logging.getLogger(__name__)
+    
+    logger.info(f"🔍 DEBUG: Processing {len(summaries)} sprints to add active_sprint_url")
+    
+    for idx, sprint in enumerate(summaries):
+        logger.info(f"🔍 DEBUG: Sprint {idx + 1} - Available keys: {list(sprint.keys())}")
+        
+        # Try different possible field name variations
+        board_id = sprint.get("board_id") or sprint.get("boardId") or sprint.get("boardid")
+        project_key = sprint.get("project_key") or sprint.get("projectKey") or sprint.get("projectkey")
+        sprint_id = sprint.get("sprint_id") or sprint.get("sprintId") or sprint.get("sprintid")
+        
+        logger.info(f"🔍 DEBUG: Sprint {idx + 1} - board_id={board_id}, project_key={project_key}, sprint_id={sprint_id}")
+        
+        if board_id and sprint_id:
+            logger.info(f"🔍 DEBUG: Sprint {idx + 1} - Calling get_jira_sprint_report_url with project_key={project_key}, board_id={board_id}, sprint_id={sprint_id}")
+            sprint_url = get_jira_sprint_report_url(project_key, str(board_id), str(sprint_id), conn)
+            logger.info(f"🔍 DEBUG: Sprint {idx + 1} - get_jira_sprint_report_url returned: {sprint_url}")
+            
+            if sprint_url:
+                sprint["active_sprint_url"] = sprint_url
+                logger.info(f"🔍 DEBUG: Sprint {idx + 1} - Added active_sprint_url={sprint_url}")
+            else:
+                logger.warning(f"⚠️  DEBUG: Sprint {idx + 1} - No sprint URL generated for board_id={board_id}, project_key={project_key}, sprint_id={sprint_id}")
+        else:
+            missing = []
+            if not board_id:
+                missing.append("board_id")
+            if not sprint_id:
+                missing.append("sprint_id")
+            logger.warning(f"⚠️  DEBUG: Sprint {idx + 1} - Missing fields: {missing}. Available keys: {list(sprint.keys())}")
     
     # Build metadata (following pattern from other reports)
     meta = {

@@ -217,25 +217,52 @@ app.include_router(etl_settings_router, prefix="/api/v1", tags=["etl-settings"])
 
 @app.on_event("startup")
 async def startup_event():
-    """Application startup - populate groups/teams cache"""
+    """Application startup - populate groups/teams cache and load JIRA URL"""
     try:
         from database_connection import get_db_engine
+        from database_general import get_etl_setting_from_db
+        from config import set_jira_url
         
         engine = get_db_engine()
         if not engine:
-            logger.warning("⚠️  Database engine not available. Cache will be built on first use.")
+            logger.warning("⚠️  Database engine not available. JIRA settings will be loaded on first use.")
+            set_jira_url(None, None)
             return
         
         with engine.connect() as conn:
+            # Populate groups/teams cache
             from groups_teams_cache import populate_groups_teams_cache
-            
             success, groups_count, teams_count = populate_groups_teams_cache(conn)
             if success:
                 logger.info(f"✅ Cache populated: {groups_count} groups, {teams_count} teams")
             else:
                 logger.warning("⚠️  Cache population failed (Redis unavailable).")
+            
+            # Read JIRA URL and Cloud from ETL settings (they're connected)
+            jira_url = get_etl_setting_from_db(conn, "jira_url_from_startup", None)
+            cloud_setting = get_etl_setting_from_db(conn, "jira_cloud", None)
+            
+            is_cloud = None
+            if cloud_setting:
+                cloud_setting_lower = cloud_setting.lower().strip()
+                is_cloud = cloud_setting_lower in ("true", "cloud", "1", "yes")
+            
+            set_jira_url(jira_url, is_cloud)
+            
+            if jira_url:
+                logger.info(f"✅ JIRA URL loaded from ETL settings at startup: {jira_url}")
+            else:
+                logger.info("ℹ️  JIRA URL not found in ETL settings at startup (will retry on first use)")
+            
+            if is_cloud is not None:
+                logger.info(f"✅ JIRA Cloud setting loaded from ETL settings at startup: {is_cloud}")
+            else:
+                logger.info("ℹ️  JIRA Cloud setting not found in ETL settings at startup (will retry on first use)")
+                
     except Exception as e:
-        logger.warning(f"⚠️  Startup cache population failed: {e}. Cache will be built on first use.")
+        logger.warning(f"⚠️  Startup failed: {e}. JIRA settings will be loaded on first use.")
+        from config import set_jira_url
+        set_jira_url(None, None)
 
 
 @app.get("/")

@@ -606,24 +606,27 @@ def get_team_ai_card_by_id(card_id: int, conn: Connection = None) -> Optional[Di
         raise e
 
 
-def replace_prompt_placeholders(prompt_text: str) -> str:
+def replace_prompt_placeholders(prompt_text: str, conn: Optional[Connection] = None) -> str:
     """
-    Replace placeholders in prompt text with values from environment variables.
+    Replace placeholders in prompt text with values from database.
     
     Currently replaces:
-    - {{JIRA_URL}} with the value from JIRA_URL environment variable
+    - {{JIRA_URL}} with the value from ETL settings
     
     Args:
         prompt_text: The prompt text that may contain placeholders
-        
+        conn: Optional database connection for lazy loading JIRA URL
+    
     Returns:
         str: Prompt text with placeholders replaced
     """
     if not prompt_text:
         return prompt_text
     
-    # Replace {{JIRA_URL}} with JIRA_URL environment variable
-    jira_url = os.getenv("JIRA_URL", "")
+    # Get JIRA URL (will retry from DB if null and conn provided)
+    from config import get_jira_url
+    jira_settings = get_jira_url(conn=conn)
+    jira_url = jira_settings.get("url") or ""
     prompt_text = prompt_text.replace("{{JIRA_URL}}", jira_url)
     
     return prompt_text
@@ -645,7 +648,7 @@ def get_prompt_by_email_and_name(
         prompt_name: Prompt name (chat type string)
         conn: Database connection
         active: If True, require prompt_active=TRUE; if False, require prompt_active=FALSE; if None, no filter
-        replace_placeholders: If True, replace {{JIRA_URL}} with value from JIRA_URL env var (default: False)
+        replace_placeholders: If True, replace {{JIRA_URL}} with value from ETL settings (default: False)
 
     Returns:
         dict: Prompt row as dictionary or None if not found
@@ -687,7 +690,8 @@ def get_prompt_by_email_and_name(
         # Replace placeholders in prompt_description only if requested
         prompt_description = row[2]
         if prompt_description and replace_placeholders:
-            prompt_description = replace_prompt_placeholders(str(prompt_description))
+            # Pass conn for lazy loading if needed
+            prompt_description = replace_prompt_placeholders(str(prompt_description), conn=conn)
         elif prompt_description:
             prompt_description = str(prompt_description)
 

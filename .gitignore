@@ -173,3 +173,7 @@ llm_context_debug*.txt
 # Combined backend files
 combined_backend.txt
 combined_backend.*
+ACTIVE_SPRINT_JIRA_URL_PLAN.md
+ACTIVE_SPRINT_REPORT_URL_PLAN.md
+ACTIVE_SPRINT_URL_PLAN.md
+CLOSED_SPRINT_URL_PLAN.md
