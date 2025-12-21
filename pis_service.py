@@ -718,54 +718,94 @@ async def get_pi_burndown(
 
 @pis_router.get("/pis/scope-changes")
 async def get_scope_changes(
-    quarter: Union[str, List[str]] = Query(..., description="Quarter/PI name(s) to get scope changes for (can be single or multiple)"),
+    pi_names: Optional[Union[str, List[str]]] = Query(None, description="Optional: Single PI name or array of PI names (comma-separated). If not provided, returns data for all PIs."),
+    team_name: str = Query(None, description="Team name filter (or group name if isGroup=true)"),
+    isGroup: bool = Query(False, description="If true, team_name is treated as a group name"),
     conn: Connection = Depends(get_db_connection)
 ):
     """
-    Get scope changes data for specified quarters/PIs.
+    Get scope changes data for specified PIs.
     
     Parameters:
-        quarter: Quarter/PI name(s) - can be a single value or multiple (e.g., quarter=2025-Q1&quarter=2025-Q2)
+        pi_names: Optional single PI name or array of PI names (comma-separated). If None, returns all PIs.
+        team_name: Team name filter (optional, or group name if isGroup=true)
+        isGroup: If true, team_name parameter is treated as a group name (default: false)
     
     Returns:
         JSON response with scope changes data
     """
     try:
-        # Validate quarter parameter (mandatory)
-        if not quarter:
+        from database_team_metrics import resolve_team_names_from_filter
+        
+        # If pi_names is not provided, fetch all PIs from database
+        if pi_names is None:
+            pis_query = text(f"""
+                SELECT DISTINCT pi_name
+                FROM {config.PIS_TABLE}
+                WHERE pi_name IS NOT NULL
+            """)
+            pis_rows = conn.execute(pis_query).fetchall()
+            pi_names = [row[0] for row in pis_rows if row[0]]
+            logger.info(f"No pi_names provided, fetching all PIs: {pi_names}")
+        
+        # Handle pi_names parameter - can be comma-separated string or already a list
+        if not pi_names:
             raise HTTPException(
-                status_code=400,
-                detail="quarter parameter is required"
+                status_code=404,
+                detail="No PIs found in database"
             )
         
-        # Normalize quarter to a list
-        if isinstance(quarter, str):
-            quarters = [quarter]
-        else:
-            quarters = quarter
+        # Convert to list if it's a string
+        if isinstance(pi_names, str):
+            # Check if it's comma-separated
+            if ',' in pi_names:
+                pi_names = [name.strip() for name in pi_names.split(',')]
+            else:
+                pi_names = [pi_names]
         
-        # Validate we have at least one quarter
-        if not quarters or len(quarters) == 0:
+        # Validate we have at least one PI
+        if not pi_names or len(pi_names) == 0:
             raise HTTPException(
                 status_code=400,
-                detail="At least one quarter must be provided"
+                detail="At least one PI name must be provided"
             )
         
-        logger.info(f"Fetching scope changes data for quarters: {quarters}")
+        # Resolve team names using shared helper function (handles single team, group, or None)
+        team_names_list = resolve_team_names_from_filter(team_name, isGroup, conn)
         
-        # Call database function (logic copied from old project)
+        logger.info(f"Fetching scope changes data for PIs: {pi_names}")
+        logger.info(f"Filters: team_name={team_name}, isGroup={isGroup}")
+        if team_names_list:
+            logger.info(f"Resolved team names: {team_names_list}")
+        
+        # Call database function
         scope_data = fetch_scope_changes_data(
-            quarters=quarters,
+            pi_names=pi_names,
+            team_names=team_names_list,
             conn=conn
         )
         
+        # Build response metadata
+        response_data = {
+            "scope_data": scope_data,
+            "count": len(scope_data),
+            "pi_names": pi_names,
+            "isGroup": isGroup
+        }
+        
+        # Add team/group information to response
+        if team_name:
+            if isGroup:
+                response_data["group_name"] = team_name
+                response_data["teams_in_group"] = team_names_list
+            else:
+                response_data["team_name"] = team_name
+        else:
+            response_data["team_name"] = None
+        
         return {
             "success": True,
-            "data": {
-                "scope_data": scope_data,
-                "count": len(scope_data),
-                "quarters": quarters
-            },
+            "data": response_data,
             "message": f"Retrieved scope changes data for {len(scope_data)} records"
         }
     

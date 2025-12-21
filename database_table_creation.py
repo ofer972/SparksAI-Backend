@@ -302,18 +302,18 @@ DEFAULT_REPORT_DEFINITIONS = [
         "description": "Displays program increment burndown for epics and features.",
         "default_filters": {
             "pi": None,
+            "team_name": None,
             "issue_type": "Epic",
-            "project": None,
-            "team": None
+            "project": None
         },
         "meta_schema": {
             "required_filters": [],
-            "optional_filters": ["pi", "issue_type", "project", "team"],
+            "optional_filters": ["pi", "issue_type", "project", "team_name"],
             "parameters": {
                 "pi": {"type": "string", "description": "Program increment name"},
                 "issue_type": {"type": "string", "description": "Issue type filter (default 'Epic')"},
                 "project": {"type": "string", "description": "Project key filter"},
-                "team": {"type": "string", "description": "Team filter"}
+                "team_name": {"type": "string", "description": "Team name filter"}
             },
             "allowed_views": ["pi-dashboard", "team-dashboard"]
         }
@@ -411,13 +411,15 @@ DEFAULT_REPORT_DEFINITIONS = [
         "data_source": "epic_scope_changes",
         "description": "Compares epic scope adjustments across selected PI quarters.",
         "default_filters": {
-            "quarters": []
+            "pi_names": [],
+            "team_name": None
         },
         "meta_schema": {
             "required_filters": [],
-            "optional_filters": ["quarters"],
+            "optional_filters": ["pi_names", "team_name"],
             "parameters": {
-                "quarters": {"type": "array", "description": "List of PI or quarter names (e.g., '2025-Q1')"}
+                "pi_names": {"type": "array", "description": "List of PI names to include"},
+                "team_name": {"type": "string", "description": "Team name filter"}
             },
             "allowed_views": ["every-dashboard"]
         }
@@ -498,6 +500,7 @@ DEFAULT_REPORT_DEFINITIONS = [
         "chart_type": "table",
         "data_source": "issues_hierarchy",
         "description": "Displays the hierarchy of issues with status and dependency information.",
+        "max_records_for_llm": 50,
         "default_filters": {
             "pi": None,
             "hierarchy_level": None,

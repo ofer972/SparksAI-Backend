@@ -176,7 +176,6 @@ async def get_report_instance(
     team: Optional[str] = Query(None),
     months: Optional[int] = Query(None),
     pi_names: Optional[List[str]] = Query(None),
-    quarters: Optional[List[str]] = Query(None),
     status_category: Optional[str] = Query(None), # New filter
     include_done: Optional[bool] = Query(None), # New filter
     view_mode: Optional[str] = Query(None), # New filter
@@ -244,7 +243,6 @@ async def get_report_instance(
         if normalized:
             override_filters[target_key] = normalized
 
-    _assign_multi("quarters", "quarters", "quarter")
     _assign_multi("pi_names", "pi_names", "pi_name")
 
     # Remaining parameters: collapse repeated values, trim whitespace

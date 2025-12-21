@@ -287,46 +287,64 @@ def fetch_pi_burndown_data(pi_name: str, project_keys: str = None, issue_type: s
         raise e
 
 
-def fetch_scope_changes_data(quarters: List[str], conn: Connection = None) -> List[Dict[str, Any]]:
+def fetch_scope_changes_data(pi_names: List[str], team_names: Optional[List[str]] = None, conn: Connection = None) -> List[Dict[str, Any]]:
     """
-    Fetch scope changes data for specified quarters.
+    Fetch scope changes data for specified PIs.
     
-    Uses the view: public.epic_pi_scope_changes_long_with_issues
-    Columns: "Quarter Name" (as quarter), "Metric Name" (as metric_name), "Value" (as value)
-    The view orders results by PI end date (chronological order).
+    Uses the function: public.get_epic_pi_scope_changes
+    Columns: "Quarter Name", "Stack Group", "Metric Name", "Value", "Issue Keys"
+    Results are ordered by PI end date (chronological order).
     
     Args:
-        quarters (List[str]): List of quarter/PI names to filter by (mandatory)
+        pi_names (List[str]): List of PI names to filter by (mandatory)
+        team_names (Optional[List[str]]): List of team names filter, or None for all teams
         conn (Connection): Database connection from FastAPI dependency
     
     Returns:
-        list: List of dictionaries with scope changes data (all columns from view)
+        list: List of dictionaries with scope changes data (all columns from function)
     """
     try:
-        if not quarters:
+        if not pi_names:
             return []
         
-        logger.info(f"Executing scope changes query for quarters: {quarters}")
+        logger.info(f"Executing scope changes query for PIs: {pi_names}, Teams: {team_names if team_names else 'all'}")
         
-        # SECURITY: Use parameterized query with PostgreSQL array handling for IN clause
-        # Note: View already orders by PI end date, so no additional ORDER BY needed
-        sql_query_text = text("""
-            SELECT * FROM public.epic_pi_scope_changes_long_with_issues
-            WHERE "Quarter Name" = ANY(:quarters)
-        """)
+        # Build parameters for the function call
+        params = {}
         
-        logger.info(f"Executing SQL for scope changes")
+        # Build query - pass team_names as array or NULL (following pattern from fetch_pi_burndown_data)
+        if team_names:
+            # Pass array of team names to function
+            params['team_names'] = team_names
+            sql_query_text = text("""
+                SELECT * FROM public.get_epic_pi_scope_changes(
+                    CAST(:team_names AS text[])
+                )
+            """)
+            
+            logger.info(f"Executing SQL for scope changes: PIs={pi_names} with teams: {team_names}")
+        else:
+            # Pass NULL for all teams
+            sql_query_text = text("""
+                SELECT * FROM public.get_epic_pi_scope_changes(
+                    NULL
+                )
+            """)
+            
+            logger.info(f"Executing SQL for scope changes: PIs={pi_names} for all teams")
         
         # Execute query with parameters (SECURE: prevents SQL injection)
-        # PostgreSQL handles the array properly with = ANY()
-        result = conn.execute(sql_query_text, {
-            'quarters': quarters
-        })
+        result = conn.execute(sql_query_text, params)
         
         # Convert rows to list of dictionaries
         scope_data = []
         for row in result:
             row_dict = dict(row._mapping)
+            
+            # Filter by pi_names if specific PIs requested (function returns all PIs)
+            row_pi_name = row_dict.get('Quarter Name')
+            if row_pi_name not in pi_names:
+                continue
             
             # Format array/list columns if present
             for col in row_dict.keys():

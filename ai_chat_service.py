@@ -513,13 +513,13 @@ def build_pi_dashboard_context(
             except Exception as e:
                 logger.warning(f"Failed to fetch PI predictability for PI_dashboard: {e}")
             
-            # 3. Fetch scope changes (normalize pi_name to list for quarters)
+            # 3. Fetch scope changes (normalize pi_name to list for pi_names)
             scope_data = []
             try:
                 # Normalize to list (same logic as endpoint)
-                quarters_list = [pi_name]  # Single PI/quarter for dashboard
+                pi_names_list = [pi_name] if pi_name else []  # Single PI for dashboard
                 scope_data = fetch_scope_changes_data(
-                    quarters=quarters_list,
+                    pi_names=pi_names_list,
                     conn=conn
                 )
                 logger.info(f"Fetched {len(scope_data)} scope changes records for PI_dashboard")
@@ -1394,7 +1394,7 @@ async def fetch_dashboard_reports_data(
         - selectedTeam -> team_name
         - selectedTreeType ('team' or 'group') -> isGroup (boolean)
         - selectedSprint -> sprint_name
-        - selectedPI -> pi
+        - selectedPI -> pi and pi_names (for reports that use pi_names array)
         """
         normalized = {}
         for key, value in filters.items():
@@ -1407,6 +1407,7 @@ async def fetch_dashboard_reports_data(
                 normalized['sprint_name'] = value
             elif key == 'selectedPI':
                 normalized['pi'] = value
+                normalized['pi_names'] = [value] if value else []  # Also set pi_names for reports that use it
             else:
                 # Keep other filters as-is
                 normalized[key] = value
@@ -1501,6 +1502,13 @@ async def fetch_dashboard_reports_data(
             report_name = report_data["definition"]["report_name"]
             report_desc = report_data["definition"].get("description", "")
             report_result = report_data.get("result", [])
+            
+            # Truncate data if max_records_for_llm is set (to limit LLM context size)
+            max_records = definition.get("max_records_for_llm")
+            if max_records and isinstance(report_result, list) and len(report_result) > max_records:
+                original_count = len(report_result)
+                report_result = report_result[:max_records]
+                logger.info(f"  Truncated report '{report_id}' data from {original_count} to {max_records} records for LLM")
             
             formatted_report = f"\n## {report_name}\n"
             if report_desc:

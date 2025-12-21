@@ -695,8 +695,27 @@ def _fetch_pi_predictability(filters: Dict[str, Any], conn: Connection) -> Repor
 
 
 def _fetch_epic_scope_changes(filters: Dict[str, Any], conn: Connection) -> ReportDataResult:
-    quarters_value = filters.get("quarters") or filters.get("quarter")
-    quarters = _parse_list(quarters_value)
+    from database_team_metrics import resolve_team_names_from_filter
+    
+    pi_values = filters.get("pi_names") or filters.get("pi_name") or filters.get("pi")
+    pi_list = _parse_list(pi_values)
+    
+    # Standardize on team_name: check team_name first, then fall back to team for backward compatibility
+    team = (filters.get("team_name") or filters.get("team") or "").strip() or None
+    is_group = filters.get("isGroup", False)
+    
+    # Fetch available teams from cache
+    from groups_teams_cache import get_cached_teams, set_cached_teams, load_team_names_from_db, load_all_teams_from_db
+    
+    cached = get_cached_teams()
+    if cached:
+        available_teams = [t["team_name"] for t in cached.get("teams", [])]
+    else:
+        # Cache miss - load from DB
+        available_teams = load_team_names_from_db(conn)
+        # Also build full teams cache for future use
+        all_teams = load_all_teams_from_db(conn)
+        set_cached_teams({"teams": all_teams, "count": len(all_teams)})
 
     # Fetch available PIs (always)
     pis_query = text(
@@ -710,19 +729,39 @@ def _fetch_epic_scope_changes(filters: Dict[str, Any], conn: Connection) -> Repo
     pis_rows = conn.execute(pis_query).fetchall()
     available_pis = [row[0] for row in pis_rows if row[0]]
 
-    # Only fetch scope data if quarters are selected
-    if quarters:
-        scope_data = fetch_scope_changes_data(quarters, conn=conn)
+    # Resolve team names using shared helper function (handles single team, group, or None)
+    team_names_list = resolve_team_names_from_filter(team, is_group, conn)
+
+    # Only fetch scope data if PIs are selected
+    if pi_list:
+        scope_data = fetch_scope_changes_data(pi_names=pi_list, team_names=team_names_list, conn=conn)
     else:
         scope_data = []
 
+    # Build meta with appropriate fields
+    meta = {
+        "pi_names": pi_list,
+        "isGroup": is_group,
+        "count": len(scope_data),
+        "available_teams": available_teams,
+        "available_pis": available_pis,
+    }
+    
+    # Add team/group information to meta (standardize on team_name)
+    if team:
+        if is_group:
+            meta["group_name"] = team
+            meta["teams_in_group"] = team_names_list
+        else:
+            meta["team_name"] = team
+            meta["team"] = team  # Keep for backward compatibility
+    else:
+        meta["team_name"] = None
+        meta["team"] = None
+
     return {
         "data": scope_data,
-        "meta": {
-            "quarters": quarters,
-            "count": len(scope_data),
-            "available_pis": available_pis,
-        },
+        "meta": meta,
     }
 
 
