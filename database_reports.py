@@ -525,22 +525,22 @@ def _fetch_closed_sprints_flat_report(filters: Dict[str, Any], conn: Connection,
     # Fetch closed sprints with specified sort order
     closed_sprints = get_closed_sprints_data_db(team_names_list, months, issue_type, sort_by=sort_by, conn=conn)
 
-    # Check if all sprints have the same sprint_id and add x_axis_name
+    # Check if all sprints have the same team_name and add x_axis_name
     if closed_sprints:
-        unique_sprint_ids = set(sprint.get("sprint_id") for sprint in closed_sprints if sprint.get("sprint_id") is not None)
-        is_same_sprint = len(unique_sprint_ids) == 1
+        unique_team_names = set(sprint.get("team_name") for sprint in closed_sprints if sprint.get("team_name") is not None)
+        is_same_team = len(unique_team_names) == 1
         
         # Add x_axis_name to each sprint
         for sprint in closed_sprints:
             sprint_name = sprint.get("sprint_name", "")
             team_name_sprint = sprint.get("team_name", "")
             
-            if is_same_sprint:
-                # Same sprint for all teams - use only sprint name
+            if is_same_team:
+                # Same team for all sprints - use only sprint name
                 sprint["x_axis_name"] = sprint_name
             else:
-                # Different sprints - concatenate sprint name and team name
-                sprint["x_axis_name"] = f"{sprint_name} - {team_name_sprint}" if sprint_name and team_name_sprint else (sprint_name or team_name_sprint)
+                # Different teams - format: sprint_name-team_name
+                sprint["x_axis_name"] = f"{sprint_name}-{team_name_sprint}" if sprint_name and team_name_sprint else (sprint_name or team_name_sprint)
 
     # Add JIRA closed sprint URL to each sprint
     from config import get_jira_closed_sprint_report_url, get_jira_url
