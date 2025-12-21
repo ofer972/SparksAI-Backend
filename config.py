@@ -183,45 +183,28 @@ def get_jira_sprint_report_url(project_key: Optional[str], board_id: str, sprint
     Returns:
         Full sprint report URL or None
     """
-    _jira_url_logger.info(f"🔍 DEBUG get_jira_sprint_report_url: project_key={project_key}, board_id={board_id}, sprint_id={sprint_id}")
-    
     jira_settings = get_jira_url(conn)
     jira_url = jira_settings.get("url")
     is_cloud = jira_settings.get("is_cloud")
     
-    _jira_url_logger.info(f"🔍 DEBUG get_jira_sprint_report_url: jira_url={jira_url}, is_cloud={is_cloud}")
-    
-    if not jira_url:
-        _jira_url_logger.warning(f"⚠️  DEBUG: No jira_url available")
-        return None
-    
-    if not board_id:
-        _jira_url_logger.warning(f"⚠️  DEBUG: No board_id provided")
-        return None
-    
-    if not sprint_id:
-        _jira_url_logger.warning(f"⚠️  DEBUG: No sprint_id provided")
+    if not jira_url or not board_id or not sprint_id:
         return None
     
     # Auto-detect if is_cloud is None
     if is_cloud is None:
         is_cloud = "atlassian.net" in jira_url.lower()
-        _jira_url_logger.info(f"🔍 DEBUG: Auto-detected is_cloud={is_cloud}")
     
     if is_cloud:
         # Cloud format: /jira/software/c/projects/[project_key]/boards/[board_id]/reports/sprint-retrospective?sprint=[sprint_id]
         if not project_key:
-            _jira_url_logger.warning(f"⚠️  DEBUG: Cloud format requires project_key but it's None")
             return None
-        domain = jira_url.replace("https://", "").replace("http://", "").rstrip("/")
-        url = f"{domain}/jira/software/c/projects/{project_key}/boards/{board_id}/reports/sprint-retrospective?sprint={sprint_id}"
-        _jira_url_logger.info(f"🔍 DEBUG: Generated Cloud URL: {url}")
+        base_url = jira_url.rstrip("/")
+        url = f"{base_url}/jira/software/c/projects/{project_key}/boards/{board_id}/reports/sprint-retrospective?sprint={sprint_id}"
         return url
     else:
         # Data Center format: /secure/RapidBoard.jspa?rapidView=[board_id]&view=reporting&chart=sprintRetrospective&sprint=[sprint_id]
         base_url = jira_url.rstrip("/")
         url = f"{base_url}/secure/RapidBoard.jspa?rapidView={board_id}&view=reporting&chart=sprintRetrospective&sprint={sprint_id}"
-        _jira_url_logger.info(f"🔍 DEBUG: Generated Data Center URL: {url}")
         return url
 
 def get_jira_closed_sprint_report_url(project_key: Optional[str], board_id: str, conn: Optional[Connection] = None) -> Optional[str]:
@@ -251,8 +234,8 @@ def get_jira_closed_sprint_report_url(project_key: Optional[str], board_id: str,
         # Cloud format - needs project_key
         if not project_key:
             return None
-        domain = jira_url.replace("https://", "").replace("http://", "").rstrip("/")
-        return f"{domain}/jira/software/projects/{project_key}/boards/{board_id}/reports/sprint-report"
+        base_url = jira_url.rstrip("/")
+        return f"{base_url}/jira/software/projects/{project_key}/boards/{board_id}/reports/sprint-report"
     else:
         # Data Center format - no project_key needed
         base_url = jira_url.rstrip("/")

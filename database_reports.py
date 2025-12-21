@@ -1916,35 +1916,16 @@ def _fetch_active_sprint_summary(filters: Dict[str, Any], conn: Connection) -> R
     import logging
     logger = logging.getLogger(__name__)
     
-    logger.info(f"🔍 DEBUG: Processing {len(summaries)} sprints to add active_sprint_url")
-    
-    for idx, sprint in enumerate(summaries):
-        logger.info(f"🔍 DEBUG: Sprint {idx + 1} - Available keys: {list(sprint.keys())}")
-        
+    for sprint in summaries:
         # Try different possible field name variations
         board_id = sprint.get("board_id") or sprint.get("boardId") or sprint.get("boardid")
         project_key = sprint.get("project_key") or sprint.get("projectKey") or sprint.get("projectkey")
         sprint_id = sprint.get("sprint_id") or sprint.get("sprintId") or sprint.get("sprintid")
         
-        logger.info(f"🔍 DEBUG: Sprint {idx + 1} - board_id={board_id}, project_key={project_key}, sprint_id={sprint_id}")
-        
         if board_id and sprint_id:
-            logger.info(f"🔍 DEBUG: Sprint {idx + 1} - Calling get_jira_sprint_report_url with project_key={project_key}, board_id={board_id}, sprint_id={sprint_id}")
             sprint_url = get_jira_sprint_report_url(project_key, str(board_id), str(sprint_id), conn)
-            logger.info(f"🔍 DEBUG: Sprint {idx + 1} - get_jira_sprint_report_url returned: {sprint_url}")
-            
             if sprint_url:
                 sprint["active_sprint_url"] = sprint_url
-                logger.info(f"🔍 DEBUG: Sprint {idx + 1} - Added active_sprint_url={sprint_url}")
-            else:
-                logger.warning(f"⚠️  DEBUG: Sprint {idx + 1} - No sprint URL generated for board_id={board_id}, project_key={project_key}, sprint_id={sprint_id}")
-        else:
-            missing = []
-            if not board_id:
-                missing.append("board_id")
-            if not sprint_id:
-                missing.append("sprint_id")
-            logger.warning(f"⚠️  DEBUG: Sprint {idx + 1} - Missing fields: {missing}. Available keys: {list(sprint.keys())}")
     
     # Build metadata (following pattern from other reports)
     meta = {
