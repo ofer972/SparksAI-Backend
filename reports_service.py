@@ -195,6 +195,7 @@ async def get_report_instance(
     - team-current-sprint-progress
     - pi-burndown
     - team-closed-sprints
+    - sprint-velocity-advanced
     - team-issues-trend
     - pi-predictability
     - epic-scope-changes
