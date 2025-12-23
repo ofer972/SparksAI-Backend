@@ -1044,9 +1044,13 @@ def _fetch_issue_status_duration_summary(
     rows = conn.execute(query, params).fetchall()
     summary: List[Dict[str, Any]] = []
     for row in rows:
+        status_name = row[0]
+        # TODO: Remove temporarily - filter out "High-Level Design" status
+        if status_name == "High-Level Design":
+            continue
         summary.append(
             {
-                "status_name": row[0],
+                "status_name": status_name,
                 "avg_duration_days": float(row[1]) if row[1] is not None else 0.0,
             }
         )
@@ -1145,6 +1149,9 @@ def _fetch_issue_status_duration_monthly(
 
     datasets: List[Dict[str, Any]] = []
     for status_name in sorted(status_data.keys(), key=status_priority):
+        # TODO: Remove temporarily - filter out "High-Level Design" status
+        if status_name == "High-Level Design":
+            continue
         data_values = [status_data[status_name].get(month, 0.0) for month in month_labels]
         datasets.append(
             {
