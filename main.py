@@ -239,7 +239,7 @@ async def startup_event():
                 logger.warning("⚠️  Cache population failed (Redis unavailable).")
             
             # Read JIRA URL and Cloud from ETL settings (they're connected)
-            jira_url = get_etl_setting_from_db(conn, "jira_url_from_startup", None)
+            jira_url = get_etl_setting_from_db(conn, "jira_url", None)
             cloud_setting = get_etl_setting_from_db(conn, "jira_cloud", None)
             
             is_cloud = None

@@ -136,7 +136,7 @@ def get_jira_url(conn: Optional[Connection] = None) -> Dict[str, Any]:
     if conn is not None:
         try:
             from database_general import get_etl_setting_from_db
-            db_url = get_etl_setting_from_db(conn, "jira_url_from_startup", None)
+            db_url = get_etl_setting_from_db(conn, "jira_url", None)
             _jira_url = db_url
             if db_url:
                 _jira_url_logger.info(f"✅ JIRA URL loaded from ETL settings: {db_url}")
