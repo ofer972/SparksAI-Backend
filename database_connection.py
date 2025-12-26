@@ -67,7 +67,8 @@ def get_db_engine() -> Optional[create_engine]:
     connection_string = None
     db_url_env = os.getenv('DATABASE_URL')
     
-    if db_url_env:
+    # Check if DATABASE_URL exists and doesn't have unexpanded variables
+    if db_url_env and '$(POSTGRES_PASSWORD)' not in db_url_env and '${POSTGRES_PASSWORD}' not in db_url_env:
         connection_string = db_url_env
         if connection_string.startswith('postgres://'):
             connection_string = connection_string.replace('postgres://', 'postgresql://', 1)
@@ -78,6 +79,7 @@ def get_db_engine() -> Optional[create_engine]:
             else:
                 connection_string += '?sslmode=require'
     else:
+        # Try config.ini first
         cfg_parser = configparser.ConfigParser()
         try:
             cfg_parser.read('config.ini')
@@ -90,12 +92,20 @@ def get_db_engine() -> Optional[create_engine]:
                     connection_string += '&sslmode=require'
                 else:
                     connection_string += '?sslmode=require'
-        except FileNotFoundError:
-            logger.error("Error: config.ini not found.")
-            return None
-        except KeyError:
-            logger.error("Error: 'database' section or 'connection_string' not found in config.ini.")
-            return None
+        except (FileNotFoundError, KeyError):
+            # Fallback: Build from individual POSTGRES_* environment variables (Kubernetes)
+            pg_host = os.getenv('POSTGRES_HOST')
+            pg_port = os.getenv('POSTGRES_PORT', '5432')
+            pg_user = os.getenv('POSTGRES_USER')
+            pg_password = os.getenv('POSTGRES_PASSWORD')
+            pg_db = os.getenv('POSTGRES_DB')
+            
+            if all([pg_host, pg_user, pg_password, pg_db]):
+                connection_string = f"postgresql://{pg_user}:{pg_password}@{pg_host}:{pg_port}/{pg_db}"
+                logger.info(f"🔧 Built DATABASE_URL from POSTGRES_* variables: postgresql://{pg_user}:****@{pg_host}:{pg_port}/{pg_db}")
+            else:
+                logger.error("Error: Neither DATABASE_URL nor complete POSTGRES_* variables are configured.")
+                return None
 
     if not connection_string:
         logger.error("Error: No database connection string configured.")
