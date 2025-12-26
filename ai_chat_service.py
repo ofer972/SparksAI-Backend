@@ -5,7 +5,8 @@ This service provides endpoints for AI chat functionality that connects
 to the LLM service for OpenAI/Gemini API calls.
 """
 
-from fastapi import APIRouter, HTTPException, Depends
+from fastapi import APIRouter, HTTPException, Depends, Request
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 from sqlalchemy.engine import Connection
 from sqlalchemy import text
@@ -1539,6 +1540,7 @@ async def fetch_dashboard_reports_data(
 @ai_chat_router.post("/ai-chat")
 async def ai_chat(
     request: AIChatRequest,
+    http_request: Request,
     conn: Connection = Depends(get_db_connection)
 ):
     """
@@ -2285,7 +2287,10 @@ Results ({row_count} row{'s' if row_count != 1 else ''}):
         
         logger.info(f"AI chat request processed successfully - Conversation ID: {conversation_id}")
         
-        return {
+        tokens_used = llm_response.get("tokens_used")
+        
+        # Prepare response data
+        response_data = {
             "success": True,
             "data": {
                 "conversation_id": conversation_id,
@@ -2293,10 +2298,36 @@ Results ({row_count} row{'s' if row_count != 1 else ''}):
                 "input_parameters": input_params,
                 "provider": llm_response.get("provider"),
                 "model": llm_response.get("model"),
-                "tokens_used": llm_response.get("tokens_used")
+                "tokens_used": tokens_used
             },
             "message": "AI chat response generated successfully"
         }
+        
+        # Add response headers for gateway audit logging
+        headers = {}
+        
+        # Extract tokens_used value (handle dict or int)
+        tokens_value = None
+        if isinstance(tokens_used, dict):
+            tokens_value = tokens_used.get("total_tokens")
+        elif isinstance(tokens_used, int):
+            tokens_value = tokens_used
+        
+        if tokens_value is not None:
+            headers["SA-Token"] = str(tokens_value)
+        
+        if request.insights_id:
+            headers["SA-InsightID"] = str(request.insights_id)
+        
+        if conversation_id:
+            headers["SA-ChatID"] = str(conversation_id)
+        
+        # Add user question to metadata header (JSON format)
+        if request.question:
+            metadata = {"user_question": request.question}
+            headers["SA-Metadata"] = json.dumps(metadata)
+        
+        return JSONResponse(content=response_data, headers=headers)
     
     except HTTPException:
         # Re-raise HTTP exceptions (validation errors)

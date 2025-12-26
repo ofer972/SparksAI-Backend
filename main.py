@@ -151,7 +151,7 @@ async def timing_middleware(request: Request, call_next):
         response = await call_next(request)
         
         end_time = time.time()
-        duration = end_time - start_time
+        duration_seconds = end_time - start_time
         status_code = response.status_code
         
         # Always log errors (4xx, 5xx) even for suppressed paths
@@ -183,7 +183,7 @@ async def timing_middleware(request: Request, call_next):
             
             logger.info(
                 f"{log_line_color}{bold_prefix}{emoji} REQUEST: {request.method} {request_path} - "
-                f"END (Duration: {duration:.3f}s) - Status: {status_color}{status_bold}{status_code}{Colors.RESET}"
+                f"END (Duration: {duration_seconds:.3f}s) - Status: {status_color}{status_bold}{status_code}{Colors.RESET}"
             )
         
         return response
