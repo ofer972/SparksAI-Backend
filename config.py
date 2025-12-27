@@ -12,7 +12,7 @@ API_PREFIX = f"/api/{API_VERSION}"
 
 # --- Database Configuration ---
 # Database connection is handled in database_connection.py
-# Uses config.ini with fallback to DATABASE_URL environment variable
+# Uses POSTGRES_* environment variables or DATABASE_URL environment variable
 
 # --- Table Names Configuration ---
 WORK_ITEMS_TABLE = "jira_issues"  # Main table name - can be changed here

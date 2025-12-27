@@ -16,7 +16,6 @@ from team_metrics_service import team_metrics_router
 from settings_service import settings_router
 from pis_service import pis_router
 from agent_jobs_service import agent_jobs_router
-from security_logs_service import security_logs_router
 from pi_ai_cards_service import pi_ai_cards_router
 from transcripts_service import transcripts_router
 from prompts_service import prompts_router
@@ -200,7 +199,6 @@ app.include_router(team_metrics_router, prefix="/api/v1", tags=["team-metrics"])
 app.include_router(settings_router, prefix="/api/v1", tags=["settings"])
 app.include_router(pis_router, prefix="/api/v1", tags=["pis"])
 app.include_router(agent_jobs_router, prefix="/api/v1", tags=["agent-jobs"])
-app.include_router(security_logs_router, prefix="/api/v1", tags=["security-logs"])
 app.include_router(pi_ai_cards_router, prefix="/api/v1", tags=["pi-ai-cards"])
 app.include_router(transcripts_router, prefix="/api/v1", tags=["transcripts"])
 app.include_router(prompts_router, prefix="/api/v1", tags=["prompts"])
@@ -215,18 +213,39 @@ app.include_router(etl_settings_router, prefix="/api/v1", tags=["etl-settings"])
 
 @app.on_event("startup")
 async def startup_event():
-    """Application startup - populate groups/teams cache and load JIRA URL"""
+    """Application startup - ensure database exists, create engine, initialize tables, populate cache and load JIRA URL"""
     try:
-        from database_connection import get_db_engine
-        from database_general import get_etl_setting_from_db
-        from config import set_jira_url
+        # Step 1: Ensure database exists
+        from database_connection import get_connection_string, ensure_database_exists, get_db_engine
+        from database_table_creation import initialize_database_tables_with_engine
         
+        logger.info("🚀 Starting application initialization...")
+        
+        connection_string = get_connection_string()
+        if not connection_string:
+            logger.error("❌ No database connection string configured. Application cannot start.")
+            raise Exception("Database connection string not configured")
+        
+        logger.info("📦 Step 1/4: Ensuring database exists...")
+        ensure_database_exists(connection_string)
+        
+        # Step 2: Create database engine
+        logger.info("🔧 Step 2/4: Creating database engine...")
         engine = get_db_engine()
         if not engine:
-            logger.warning("⚠️  Database engine not available. JIRA settings will be loaded on first use.")
-            set_jira_url(None, None)
-            return
+            logger.error("❌ Failed to create database engine. Application cannot start.")
+            raise Exception("Database engine creation failed")
         
+        # Set the global engine variable so get_db_connection() can use it
+        import database_connection
+        database_connection.engine = engine
+        
+        # Step 3: Initialize database tables
+        logger.info("📊 Step 3/4: Initializing database tables...")
+        initialize_database_tables_with_engine(engine)
+        
+        # Step 4: Continue with other startup tasks
+        logger.info("⚙️  Step 4/4: Loading application settings...")
         with engine.connect() as conn:
             # Populate groups/teams cache
             from groups_teams_cache import populate_groups_teams_cache
@@ -236,31 +255,10 @@ async def startup_event():
             else:
                 logger.warning("⚠️  Cache population failed (Redis unavailable).")
             
-            # Read JIRA URL and Cloud from ETL settings (they're connected)
-            jira_url = get_etl_setting_from_db(conn, "jira_url", None)
-            cloud_setting = get_etl_setting_from_db(conn, "jira_cloud", None)
-            
-            is_cloud = None
-            if cloud_setting:
-                cloud_setting_lower = cloud_setting.lower().strip()
-                is_cloud = cloud_setting_lower in ("true", "cloud", "1", "yes")
-            
-            set_jira_url(jira_url, is_cloud)
-            
-            if jira_url:
-                logger.info(f"✅ JIRA URL loaded from ETL settings at startup: {jira_url}")
-            else:
-                logger.info("ℹ️  JIRA URL not found in ETL settings at startup (will retry on first use)")
-            
-            if is_cloud is not None:
-                logger.info(f"✅ JIRA Cloud setting loaded from ETL settings at startup: {is_cloud}")
-            else:
-                logger.info("ℹ️  JIRA Cloud setting not found in ETL settings at startup (will retry on first use)")
+            # Note: JIRA settings will be loaded on first use via get_jira_url(conn) retry mechanism
                 
     except Exception as e:
-        logger.warning(f"⚠️  Startup failed: {e}. JIRA settings will be loaded on first use.")
-        from config import set_jira_url
-        set_jira_url(None, None)
+        logger.warning(f"⚠️  Startup failed: {e}")
 
 
 @app.get("/")
@@ -345,9 +343,13 @@ if __name__ == "__main__":
     if port is None:
         port = int(os.getenv("PORT", 8000))
     
+    # Read host from environment variable, default to 0.0.0.0 for production (Docker/Kubernetes)
+    # For local development, set HOST=localhost in .env file
+    host = os.getenv("HOST", "0.0.0.0")
+    
     # Use 1 worker by default (can override with WORKERS env var)
     # Note: Multiple workers require app as import string (use: workers=1 for development)
     workers = int(os.getenv("WORKERS", 1))
     
-    print(f"Starting server on port {port} with {workers} worker(s)")
-    uvicorn.run(app, host="0.0.0.0", port=port, workers=workers, access_log=False)
+    print(f"Starting server on {host}:{port} with {workers} worker(s)")
+    uvicorn.run(app, host=host, port=port, workers=workers, access_log=False)

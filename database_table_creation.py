@@ -839,69 +839,6 @@ def create_prompts_table_if_not_exists(engine=None) -> bool:
         return False
 
 
-def create_security_logs_table_if_not_exists(engine=None) -> bool:
-    """Create security_logs table if it doesn't exist"""
-    # Skip if tables are already initialized (no need to check again)
-    global _tables_initialized
-    if _tables_initialized:
-        return True
-    
-    import database_connection
-    
-    if engine is None:
-        engine = database_connection.get_db_engine()
-    if engine is None:
-        print("Warning: Database engine not available, cannot create security_logs table")
-        return False
-    
-    try:
-        with engine.connect() as conn:
-            # Check if table exists
-            check_table_sql = """
-            SELECT EXISTS (
-                SELECT FROM information_schema.tables 
-                WHERE table_schema = 'public' 
-                AND table_name = 'security_logs'
-            );
-            """
-            result = conn.execute(text(check_table_sql))
-            table_exists = result.scalar()
-            
-            if not table_exists:
-                print("Creating security_logs table...")
-                create_table_sql = """
-                CREATE TABLE public.security_logs (
-                    id SERIAL PRIMARY KEY,
-                    user_email VARCHAR(255),
-                    action VARCHAR(255) NOT NULL,
-                    resource VARCHAR(255),
-                    ip_address INET,
-                    user_agent TEXT,
-                    success BOOLEAN NOT NULL,
-                    error_message TEXT,
-                    created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
-                    FOREIGN KEY (user_email) REFERENCES public.users(email_address)
-                );
-                
-                CREATE INDEX idx_security_logs_user ON public.security_logs(user_email);
-                CREATE INDEX idx_security_logs_action ON public.security_logs(action);
-                CREATE INDEX idx_security_logs_created ON public.security_logs(created_at DESC);
-                CREATE INDEX idx_security_logs_success ON public.security_logs(success);
-                """
-                conn.execute(text(create_table_sql))
-                conn.commit()
-                print("Security logs table created successfully")
-            else:
-                print("Security logs table already exists")
-            
-            return True
-            
-    except Exception as e:
-        print(f"Error creating security_logs table: {e}")
-        traceback.print_exc()
-        return False
-
-
 def create_global_settings_table_if_not_exists(engine=None) -> bool:
     """Create global_settings table if it doesn't exist"""
     # Skip if tables are already initialized (no need to check again)
@@ -1039,7 +976,7 @@ def insert_default_llm_settings(engine=None):
                 ('ai_chatgpt_model', 'gpt-4o', 'admin'),
                 ('ai_gemini_model', 'gemini-2.5-flash', 'admin'),
                 ('ai_gemini_temperature', '0', 'admin'),
-                ('ai_chatgpt_temperature', '0.7', 'admin')
+                ('ai_chatgpt_temperature', '0.3', 'admin')
             ON CONFLICT (setting_key) DO NOTHING;
             """
             conn.execute(text(insert_sql))
@@ -1172,9 +1109,6 @@ def create_team_ai_summary_cards_table_if_not_exists(engine=None) -> bool:
                 conn.execute(text(create_table_sql))
                 conn.commit()
                 print("team_ai_summary_cards table created successfully")
-                
-                # Insert test data
-                insert_test_data_for_team_ai_summary_cards()
             else:
                 print("team_ai_summary_cards table already exists")
             
@@ -1936,29 +1870,6 @@ def insert_prompts_from_sql_file(engine=None):
         traceback.print_exc()
 
 
-def insert_test_data_for_team_ai_summary_cards():
-    """Insert test data for team_ai_summary_cards table"""
-    import database_connection
-    
-    engine = database_connection.get_db_engine()
-    if engine is None:
-        print("Warning: Database engine not available, cannot insert test AI card data")
-        return
-    
-    try:
-        with engine.connect() as conn:
-            insert_sql = """
-            INSERT INTO public.team_ai_summary_cards (date, team_name, card_name, card_type, priority, description) 
-            VALUES (CURRENT_DATE, 'TestTeam', 'Test Card', 'performance', 'High', 'This is a test AI card')
-            ON CONFLICT (date, team_name, card_name) DO NOTHING;
-            """
-            conn.execute(text(insert_sql))
-            conn.commit()
-            print("Test AI card data inserted")
-    except Exception as e:
-        print(f"Error inserting test AI card data: {e}")
-
-
 def insert_default_global_settings():
     """Insert default global settings"""
     import database_connection
@@ -1973,7 +1884,6 @@ def insert_default_global_settings():
             insert_sql = """
             INSERT INTO public.global_settings (setting_key, setting_value, setting_type, description) 
             VALUES 
-                ('default_ai_model', 'gemini-2.5-flash', 'string', 'Default AI model to use'),
                 ('max_ai_cards_per_team', '10', 'integer', 'Maximum AI cards per team'),
                 ('enable_ai_insights', 'true', 'boolean', 'Enable AI insights feature')
             ON CONFLICT (setting_key) DO NOTHING;
@@ -2145,9 +2055,7 @@ def initialize_database_tables_with_engine(engine) -> None:
         return
     
     print("=== INITIALIZING DATABASE TABLES ===")
-    create_users_table_if_not_exists(engine)
     create_prompts_table_if_not_exists(engine)
-    create_security_logs_table_if_not_exists(engine)
     create_global_settings_table_if_not_exists(engine)
     create_llm_settings_table_if_not_exists(engine)
     create_teams_and_team_groups_tables_if_not_exists(engine)
@@ -2165,28 +2073,3 @@ def initialize_database_tables_with_engine(engine) -> None:
     print("=== DATABASE TABLES INITIALIZATION COMPLETE ===")
 
 
-def initialize_database_tables() -> None:
-    """Initialize all database tables - should be called only once on startup"""
-    global _tables_initialized
-    if _tables_initialized:
-        return
-    
-    print("=== INITIALIZING DATABASE TABLES ===")
-    create_users_table_if_not_exists()
-    create_prompts_table_if_not_exists()
-    create_security_logs_table_if_not_exists()
-    create_global_settings_table_if_not_exists()
-    create_llm_settings_table_if_not_exists()
-    create_teams_and_team_groups_tables_if_not_exists()
-    create_team_ai_summary_cards_table_if_not_exists()
-    create_pi_ai_summary_cards_table_if_not_exists()
-    create_ai_summary_table_if_not_exists()
-    create_agent_jobs_table_if_not_exists()
-    add_input_sent_column_to_agent_jobs()  # Temporary function to add input_sent column
-    create_transcripts_table_if_not_exists()
-    create_recommendations_table_if_not_exists()
-    create_chat_history_table_if_not_exists()
-    create_insight_types_table_if_not_exists()
-    create_report_definitions_table_if_not_exists()
-    _tables_initialized = True
-    print("=== DATABASE TABLES INITIALIZATION COMPLETE ===")
