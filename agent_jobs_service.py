@@ -13,6 +13,7 @@ import logging
 import time
 from pydantic import BaseModel
 from database_connection import get_db_connection
+from database_general import get_insight_types
 import config
 
 logger = logging.getLogger(__name__)
@@ -40,6 +41,13 @@ class PIJobForTeamCreateRequest(BaseModel):
 class GroupJobCreateRequest(BaseModel):
     job_type: str
     group_name: str
+
+
+class AgentJobCreateRequest(BaseModel):
+    job_type: str
+    team_name: Optional[str] = None
+    pi: Optional[str] = None
+    group_name: Optional[str] = None
 
 
 class ClaimNextJobRequest(BaseModel):
@@ -154,6 +162,48 @@ def validate_group_job_request(job_type: str, group_name: str, conn: Connection)
     
     # Validate group exists in database
     validate_group_exists(group_name, conn)
+
+
+def validate_agent_job_request(job_type: str, team_name: Optional[str], pi: Optional[str], group_name: Optional[str], conn: Connection):
+    """Validate unified agent job creation request based on insight type flags"""
+    # Normalize job_type
+    if job_type == "Daily Agent":
+        job_type = "Daily Progress"
+    
+    if not job_type or not job_type.strip():
+        raise HTTPException(status_code=400, detail="job_type is required")
+    
+    # Get insight type from database
+    insight_types = get_insight_types(insight_type=job_type, conn=conn)
+    if not insight_types or len(insight_types) == 0:
+        raise HTTPException(status_code=404, detail=f"Insight type '{job_type}' not found")
+    
+    insight_type = insight_types[0]
+    pi_insight = insight_type.get('pi_insight', False)
+    team_insight = insight_type.get('team_insight', False)
+    group_insight = insight_type.get('group_insight', False)
+    
+    # Validate that parameters not allowed by flags are not provided
+    if not pi_insight and pi:
+        raise HTTPException(status_code=400, detail=f"PI should not be provided for insight type '{job_type}'")
+    if not team_insight and team_name:
+        raise HTTPException(status_code=400, detail=f"Team name should not be provided for insight type '{job_type}'")
+    if not group_insight and group_name:
+        raise HTTPException(status_code=400, detail=f"Group name should not be provided for insight type '{job_type}'")
+    
+    # Validate team_name + group_name combination is not allowed
+    if team_name and group_name:
+        raise HTTPException(status_code=400, detail="Cannot specify both team_name and group_name")
+    
+    # Validate entities exist if provided
+    if team_name:
+        validate_team_exists(team_name, conn)
+    if pi:
+        validate_pi_exists(pi, conn)
+    if group_name:
+        validate_group_exists(group_name, conn)
+    
+    return job_type  # Return normalized job_type
 
 @agent_jobs_router.get("/agent-jobs")
 async def get_agent_jobs(conn: Connection = Depends(get_db_connection)):
@@ -351,157 +401,31 @@ async def get_agent_job(job_id: int, conn: Connection = Depends(get_db_connectio
         )
 
 
-@agent_jobs_router.post("/agent-jobs/create-team-job")
-async def create_team_job(
-    request: TeamJobCreateRequest,
+@agent_jobs_router.post("/agent-jobs/create")
+async def create_agent_job(
+    request: AgentJobCreateRequest,
     conn: Connection = Depends(get_db_connection)
 ):
     """
-    Create a new team-based agent job.
+    Create a new agent job with unified endpoint.
+    Validates parameters based on insight type flags.
     
     Args:
-        request: TeamJobCreateRequest containing job_type and team_name
+        request: AgentJobCreateRequest containing job_type and optional identifiers
         conn: Database connection from FastAPI dependency
     
     Returns:
         JSON response with created job information
     """
     try:
-        # Normalize job_type: convert "Daily Agent" to "Daily Progress"
-        job_type = request.job_type
-        if job_type == "Daily Agent":
-            job_type = "Daily Progress"
-        
-        # Validate request
-        validate_team_job_request(job_type, request.team_name, conn)
-        
-        # Create the job
-        insert_query = text(f"""
-            INSERT INTO {config.AGENT_JOBS_TABLE} 
-            (job_type, team_name, group_name, pi, status, created_at, updated_at)
-            VALUES (:job_type, :team_name, NULL, NULL, 'Pending', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
-            RETURNING job_id, job_type, team_name, group_name, pi, status, created_at
-        """)
-        
-        logger.info(f"Creating team job: {job_type} for team: {request.team_name}")
-        
-        result = conn.execute(insert_query, {
-            "job_type": job_type,
-            "team_name": request.team_name
-        })
-        
-        row = result.fetchone()
-        conn.commit()
-        
-        # Convert row to dictionary
-        job = dict(row._mapping)
-        
-        return {
-            "success": True,
-            "data": {
-                "job": job
-            },
-            "message": "Team job created successfully"
-        }
-    
-    except HTTPException:
-        # Re-raise HTTP exceptions (validation errors)
-        raise
-    except Exception as e:
-        logger.error(f"Error creating team job: {e}")
-        raise HTTPException(
-            status_code=500,
-            detail=f"Failed to create team job: {str(e)}"
+        # Validate request and get normalized job_type
+        normalized_job_type = validate_agent_job_request(
+            request.job_type,
+            request.team_name,
+            request.pi,
+            request.group_name,
+            conn
         )
-
-
-@agent_jobs_router.post("/agent-jobs/create-pi-job")
-async def create_pi_job(
-    request: PIJobCreateRequest,
-    conn: Connection = Depends(get_db_connection)
-):
-    """
-    Create a new PI-based agent job.
-    
-    Args:
-        request: PIJobCreateRequest containing job_type and pi
-        conn: Database connection from FastAPI dependency
-    
-    Returns:
-        JSON response with created job information
-    """
-    try:
-        # Normalize job_type: convert "Daily Agent" to "Daily Progress"
-        job_type = request.job_type
-        if job_type == "Daily Agent":
-            job_type = "Daily Progress"
-        
-        # Validate request
-        validate_pi_job_request(job_type, request.pi, conn)
-        
-        # Create the job
-        insert_query = text(f"""
-            INSERT INTO {config.AGENT_JOBS_TABLE} 
-            (job_type, team_name, pi, status, created_at, updated_at)
-            VALUES (:job_type, NULL, :pi, 'Pending', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
-            RETURNING job_id, job_type, team_name, pi, status, created_at
-        """)
-        
-        logger.info(f"Creating PI job: {job_type} for PI: {request.pi}")
-        
-        result = conn.execute(insert_query, {
-            "job_type": job_type,
-            "pi": request.pi
-        })
-        
-        row = result.fetchone()
-        conn.commit()
-        
-        # Convert row to dictionary
-        job = dict(row._mapping)
-        
-        return {
-            "success": True,
-            "data": {
-                "job": job
-            },
-            "message": "PI job created successfully"
-        }
-    
-    except HTTPException:
-        # Re-raise HTTP exceptions (validation errors)
-        raise
-    except Exception as e:
-        logger.error(f"Error creating PI job: {e}")
-        raise HTTPException(
-            status_code=500,
-            detail=f"Failed to create PI job: {str(e)}"
-        )
-
-
-@agent_jobs_router.post("/agent-jobs/create-pi-job-for-team")
-async def create_pi_job_for_team(
-    request: PIJobForTeamCreateRequest,
-    conn: Connection = Depends(get_db_connection)
-):
-    """
-    Create a new PI-based agent job for a specific team.
-    
-    Args:
-        request: PIJobForTeamCreateRequest containing job_type, pi, and team_name
-        conn: Database connection from FastAPI dependency
-    
-    Returns:
-        JSON response with created job information
-    """
-    try:
-        # Normalize job_type: convert "Daily Agent" to "Daily Progress"
-        job_type = request.job_type
-        if job_type == "Daily Agent":
-            job_type = "Daily Progress"
-        
-        # Validate request
-        validate_pi_job_for_team_request(job_type, request.pi, request.team_name, conn)
         
         # Create the job
         insert_query = text(f"""
@@ -511,10 +435,10 @@ async def create_pi_job_for_team(
             RETURNING job_id, job_type, team_name, group_name, pi, status, created_at
         """)
         
-        logger.info(f"Creating PI job: {job_type} for PI: {request.pi} and team: {request.team_name}")
+        logger.info(f"Creating agent job: {normalized_job_type} with team={request.team_name}, pi={request.pi}, group={request.group_name}")
         
         result = conn.execute(insert_query, {
-            "job_type": job_type,
+            "job_type": normalized_job_type,
             "team_name": request.team_name,
             "group_name": request.group_name,
             "pi": request.pi
@@ -531,81 +455,17 @@ async def create_pi_job_for_team(
             "data": {
                 "job": job
             },
-            "message": "PI job for team created successfully"
+            "message": "Agent job created successfully"
         }
     
     except HTTPException:
         # Re-raise HTTP exceptions (validation errors)
         raise
     except Exception as e:
-        logger.error(f"Error creating PI job for team: {e}")
+        logger.error(f"Error creating agent job: {e}")
         raise HTTPException(
             status_code=500,
-            detail=f"Failed to create PI job for team: {str(e)}"
-        )
-
-
-@agent_jobs_router.post("/agent-jobs/create-group-job")
-async def create_group_job(
-    request: GroupJobCreateRequest,
-    conn: Connection = Depends(get_db_connection)
-):
-    """
-    Create a new group-based agent job.
-    
-    Args:
-        request: GroupJobCreateRequest containing job_type and group_name
-        conn: Database connection from FastAPI dependency
-    
-    Returns:
-        JSON response with created job information
-    """
-    try:
-        # Normalize job_type: convert "Daily Agent" to "Daily Progress"
-        job_type = request.job_type
-        if job_type == "Daily Agent":
-            job_type = "Daily Progress"
-        
-        # Validate request
-        validate_group_job_request(job_type, request.group_name, conn)
-        
-        # Create the job
-        insert_query = text(f"""
-            INSERT INTO {config.AGENT_JOBS_TABLE} 
-            (job_type, team_name, group_name, pi, status, created_at, updated_at)
-            VALUES (:job_type, NULL, :group_name, NULL, 'Pending', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
-            RETURNING job_id, job_type, team_name, group_name, pi, status, created_at
-        """)
-        
-        logger.info(f"Creating group job: {job_type} for group: {request.group_name}")
-        
-        result = conn.execute(insert_query, {
-            "job_type": job_type,
-            "group_name": request.group_name
-        })
-        
-        row = result.fetchone()
-        conn.commit()
-        
-        # Convert row to dictionary
-        job = dict(row._mapping)
-        
-        return {
-            "success": True,
-            "data": {
-                "job": job
-            },
-            "message": "Group job created successfully"
-        }
-    
-    except HTTPException:
-        # Re-raise HTTP exceptions (validation errors)
-        raise
-    except Exception as e:
-        logger.error(f"Error creating group job: {e}")
-        raise HTTPException(
-            status_code=500,
-            detail=f"Failed to create group job: {str(e)}"
+            detail=f"Failed to create agent job: {str(e)}"
         )
 
 

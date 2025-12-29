@@ -1119,31 +1119,13 @@ def create_ai_summary_table_if_not_exists(engine=None) -> bool:
                     updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
                 );
                 
-                -- Partial unique indexes for different card types
-                -- Team cards without PI
-                CREATE UNIQUE INDEX idx_ai_summary_unique_team_no_pi 
-                ON public.ai_summary(date, team_name, card_name) 
-                WHERE team_name IS NOT NULL AND pi IS NULL;
-                
-                -- Team cards with PI
-                CREATE UNIQUE INDEX idx_ai_summary_unique_team_with_pi 
-                ON public.ai_summary(date, team_name, card_name, pi) 
-                WHERE team_name IS NOT NULL AND pi IS NOT NULL;
-                
-                -- Group cards without PI
-                CREATE UNIQUE INDEX idx_ai_summary_unique_group_no_pi 
-                ON public.ai_summary(date, group_name, card_name) 
-                WHERE group_name IS NOT NULL AND pi IS NULL;
-                
-                -- Group cards with PI
-                CREATE UNIQUE INDEX idx_ai_summary_unique_group_with_pi 
-                ON public.ai_summary(date, group_name, card_name, pi) 
-                WHERE group_name IS NOT NULL AND pi IS NOT NULL;
-                
-                -- PI-only cards
-                CREATE UNIQUE INDEX idx_ai_summary_unique_pi_only 
-                ON public.ai_summary(date, card_name, pi) 
-                WHERE team_name IS NULL AND group_name IS NULL AND pi IS NOT NULL;
+                -- Single unique index for all card types (handles NULLs with COALESCE)
+                CREATE UNIQUE INDEX idx_ai_summary_unique_all 
+                ON public.ai_summary(date, 
+                                     insight_type,
+                                     COALESCE(team_name, ''), 
+                                     COALESCE(pi, ''), 
+                                     COALESCE(group_name, ''));
                 
                 -- Performance indexes
                 CREATE INDEX idx_ai_summary_team_date ON public.ai_summary(team_name, date DESC) WHERE team_name IS NOT NULL;
