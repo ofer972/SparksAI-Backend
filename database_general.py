@@ -140,7 +140,7 @@ def get_top_ai_cards_filtered(filter_column: str, filter_value: str, limit: int 
         filter_column (str): Column to filter by (must be 'team_name', 'pi', or 'group_name' for security)
         filter_value (str): Value to filter by
         limit (int): Number of AI cards to return (default: 4)
-        categories (Optional[List[str]]): Optional category filter - only return cards with card_type matching insight types for any of these categories
+        categories (Optional[List[str]]): Optional category filter - only return cards with insight_type matching insight types for any of these categories
         conn (Connection): Database connection from FastAPI dependency
     
     Returns:
@@ -175,13 +175,13 @@ def get_top_ai_cards_filtered(filter_column: str, filter_value: str, limit: int 
         
         # Build SQL query with optional category filter
         if categories and insight_types_list:
-            # Build IN clause for card_type filtering
+            # Build IN clause for insight_type filtering
             # Use parameterized query with array
             sql_query = f"""
                 WITH ranked_cards AS (
                     SELECT *,
                         ROW_NUMBER() OVER (
-                            PARTITION BY card_type 
+                            PARTITION BY insight_type 
                             ORDER BY 
                                 CASE priority 
                                     WHEN 'Critical' THEN 1 
@@ -193,7 +193,7 @@ def get_top_ai_cards_filtered(filter_column: str, filter_value: str, limit: int 
                         ) as rn
                     FROM public.ai_summary
                     WHERE {filter_column} = :filter_value
-                      AND card_type = ANY(:card_types)
+                      AND insight_type = ANY(:insight_types)
                       {additional_filter}
                 )
                 SELECT *
@@ -212,7 +212,7 @@ def get_top_ai_cards_filtered(filter_column: str, filter_value: str, limit: int 
             
             params = {
                 'filter_value': filter_value,
-                'card_types': insight_types_list,
+                'insight_types': insight_types_list,
                 'limit': limit
             }
         else:
@@ -221,7 +221,7 @@ def get_top_ai_cards_filtered(filter_column: str, filter_value: str, limit: int 
                 WITH ranked_cards AS (
                     SELECT *,
                         ROW_NUMBER() OVER (
-                            PARTITION BY card_type 
+                            PARTITION BY insight_type 
                             ORDER BY 
                                 CASE priority 
                                     WHEN 'Critical' THEN 1 
@@ -371,7 +371,7 @@ def get_top_ai_cards_with_recommendations_from_json(
         filter_value (str): Value to filter by (team name, group name, or PI name)
         limit (int): Number of AI cards to return (default: 4)
         recommendations_limit (int): Maximum recommendations per card (default: 3, max: 3)
-        categories (Optional[List[str]]): Optional category filter - only return cards with card_type matching insight types for any of these categories
+        categories (Optional[List[str]]): Optional category filter - only return cards with insight_type matching insight types for any of these categories
         conn (Connection): Database connection from FastAPI dependency
     
     Returns:
@@ -466,7 +466,7 @@ def get_top_ai_cards_with_recommendations_filtered(
         filter_value (str): Value to filter by
         limit (int): Number of AI cards to return (default: 4)
         recommendations_limit (int): Maximum recommendations per card (default: 5)
-        categories (Optional[List[str]]): Optional category filter - only return cards with card_type matching insight types for any of these categories
+        categories (Optional[List[str]]): Optional category filter - only return cards with insight_type matching insight types for any of these categories
         conn (Connection): Database connection from FastAPI dependency
     
     Returns:
@@ -878,7 +878,7 @@ def create_ai_card(data: Dict[str, Any], conn: Connection = None) -> Dict[str, A
     """
     try:
         allowed_columns = {
-            "date", "team_name", "group_name", "card_name", "card_type", "priority", "source",
+            "date", "team_name", "group_name", "card_name", "insight_type", "priority", "source",
             "source_job_id", "description", "full_information", "information_json", "pi"
         }
 
@@ -918,7 +918,7 @@ def update_ai_card_by_id(card_id: int, updates: Dict[str, Any], conn: Connection
     """
     try:
         allowed_columns = {
-            "date", "team_name", "group_name", "card_name", "card_type", "priority", "source",
+            "date", "team_name", "group_name", "card_name", "insight_type", "priority", "source",
             "source_job_id", "description", "full_information", "information_json", "pi"
         }
         filtered = {k: v for k, v in updates.items() if k in allowed_columns}
@@ -1540,7 +1540,7 @@ def create_insight_type(data: Dict[str, Any], conn: Connection = None) -> Dict[s
     try:
         import json
         allowed_columns = {
-            "insight_type", "insight_description", "insight_categories", "active", "requires_pi", "requires_team", "requires_group", "cron_config"
+            "insight_type", "insight_description", "insight_categories", "active", "pi_insight", "team_insight", "group_insight", "sprint_insight", "cron_config"
         }
         
         filtered = {k: v for k, v in data.items() if k in allowed_columns}
@@ -1620,7 +1620,7 @@ def update_insight_type_by_id(insight_type_id: int, updates: Dict[str, Any], con
     try:
         import json
         allowed_columns = {
-            "insight_type", "insight_description", "insight_categories", "active", "requires_pi", "requires_team", "requires_group", "cron_config"
+            "insight_type", "insight_description", "insight_categories", "active", "pi_insight", "team_insight", "group_insight", "sprint_insight", "cron_config"
         }
         filtered = {k: v for k, v in updates.items() if k in allowed_columns}
         if not filtered:

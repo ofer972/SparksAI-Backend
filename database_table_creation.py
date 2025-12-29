@@ -21,119 +21,133 @@ DEFAULT_INSIGHT_TYPES = [
     {
         "insight_type": "PI Sync",
         "insight_description": "Insights from the PI Sync (data + transcipts)",
-        "insight_categories": ["PI Sync"],
+        "insight_categories": ["PI Events"],
         "active": True,
-        "requires_pi": True,
-        "requires_team": False,
-        "requires_group": False,
+        "pi_insight": True,
+        "team_insight": False,
+        "group_insight": False,
+        "sprint_insight": False,
         "cron_config": {"day_of_week": "sun,mon,tue,wed,thu", "hour": 6, "minute": 0}
     },
     {
         "insight_type": "PI Dependencies",
         "insight_description": "Analysis of Epic dependencies (inward and outward)",
-        "insight_categories": ["PI Dependencies"],
+        "insight_categories": ["PI Status"],
         "active": True,
-        "requires_pi": True,
-        "requires_team": False,
-        "requires_group": False,
+        "pi_insight": True,
+        "team_insight": False,
+        "group_insight": False,
+        "sprint_insight": False,
         "cron_config": {"hour": 5, "minute": 40}
     },
     {
         "insight_type": "PI Planning Gaps",
         "insight_description": "Identifies gaps and issues in PI planning",
-        "insight_categories": ["PI Planning Gaps"],
+        "insight_categories": ["PI Status"],
         "active": True,
-        "requires_pi": True,
-        "requires_team": False,
-        "requires_group": False,
+        "pi_insight": True,
+        "team_insight": False,
+        "group_insight": False,
+        "sprint_insight": False,
         "cron_config": {"hour": 5, "minute": 40}
     },
     {
         "insight_type": "Daily Progress",
         "insight_description": "Analysis of team progress in the sprint",
-        "insight_categories": ["Daily"],
+        "insight_categories": ["Sprint Events"],
         "active": True,
-        "requires_pi": False,
-        "requires_team": True,
-        "requires_group": False,
+        "pi_insight": False,
+        "team_insight": True,
+        "group_insight": False,
+        "sprint_insight": True,
         "cron_config": {"hour": 5, "minute": 30}
     },
     {
         "insight_type": "Sprint Goal",
         "insight_description": "Assesses the team progress towards the defined sprint goal",
-        "insight_categories": ["Daily", "Planning", "Retrospective", "Sprint Review", "Backlog Refinement", "PI Sync"],
+        "insight_categories": ["Sprint Events"],
         "active": True,
-        "requires_pi": False,
-        "requires_team": True,
-        "requires_group": False,
+        "pi_insight": False,
+        "team_insight": True,
+        "group_insight": False,
+        "sprint_insight": True,
         "cron_config": {"hour": 5, "minute": 30}
     },
     {
         "insight_type": "Team Retro Topics",
         "insight_description": "Suggests focus topics for the next retrospective",
-        "insight_categories": ["Retrospective"],
+        "insight_categories": ["Sprint Events"],
         "active": True,
-        "requires_pi": False,
-        "requires_team": True,
-        "requires_group": False,
+        "pi_insight": False,
+        "team_insight": True,
+        "group_insight": False,
+        "sprint_insight": True,
         "cron_config": {"hour": 5, "minute": 30}
     },
     {
         "insight_type": "Team PI Insight",
         "insight_description": "Evaluates progress toward sprint goals",
-        "insight_categories": ["Daily", "Planning", "Retrospective", "Sprint Review", "Backlog Refinement", "PI Sync"],
+        "insight_categories": ["PI Events", "PI Status"],
         "active": True,
-        "requires_pi": True,
-        "requires_team": True,
-        "requires_group": False,
+        "pi_insight": True,
+        "team_insight": True,
+        "group_insight": False,
+        "sprint_insight": False,
         "cron_config": {"hour": 5, "minute": 30}
     },
     {
         "insight_type": "Group Sprint Flow",
         "insight_description": "Analyzes GROUP progress in the active sprint",
-        "insight_categories": ["Daily", "Retrospective"],
+        "insight_categories": ["Sprint Events"],
         "active": True,
-        "requires_pi": False,
-        "requires_team": False,
-        "requires_group": True,
+        "pi_insight": False,
+        "team_insight": False,
+        "group_insight": True,
+        "sprint_insight": False,
         "cron_config": {"hour": 5, "minute": 45}
     },
     {
         "insight_type": "Group Sprint Predictability",
         "insight_description": "Evaluates GROUP forecast stability",
-        "insight_categories": [ "Retrospective"],
+        "insight_categories": ["Sprint Events"],
         "active": True,
-        "requires_pi": False,
-        "requires_team": False,
-        "requires_group": True,
+        "pi_insight": False,
+        "team_insight": False,
+        "group_insight": True,
+        "sprint_insight": False,
         "cron_config": {"hour": 5, "minute": 45}
     },
     {
         "insight_type": "Group Sprint Dependency",
         "insight_description": "Current sprint - cross-team dependency analysis",
-        "insight_categories": ["Daily", "Planning"],
+        "insight_categories": ["Sprint Events"],
         "active": True,
-        "requires_pi": False,
-        "requires_team": False,
-        "requires_group": True,
+        "pi_insight": False,
+        "team_insight": False,
+        "group_insight": True,
+        "sprint_insight": False,
         "cron_config": {"hour": 5, "minute": 45}
     },
     {
         "insight_type": "Group Epic Dependencies",
         "insight_description": "Analysis of EPIC dependencies for the GROUP (inward and outward)",
-        "insight_categories": ["Planning"],
+        "insight_categories": ["Sprint Status"],
         "active": True,
-        "requires_pi": False,
-        "requires_team": False,
-        "requires_group": True,
+        "pi_insight": False,
+        "team_insight": False,
+        "group_insight": True,
+        "sprint_insight": False,
         "cron_config": {"hour": 5, "minute": 45}
     },
     {
         "insight_type": "WIP Level",
         "insight_description": "Monitors active work items",
-        "insight_categories": ["Daily"],
+        "insight_categories": ["Sprint Status"],
         "active": False,
-        "requires_pi": False,
+        "pi_insight": False,
+        "team_insight": False,
+        "group_insight": False,
+        "sprint_insight": False,
         "requires_team": True,
         "requires_group": False,
         "cron_config": {"hour": 5, "minute": 50}
@@ -242,11 +256,12 @@ DEFAULT_INSIGHT_TYPES = [
     {
         "insight_type": "Dependency Radar",
         "insight_description": "Highlights critical delivery dependencies",
-        "insight_categories": ["Planning", "Retrospective", "Sprint Review", "Backlog Refinement", "PI Sync"],
+        "insight_categories": ["Sprint Events"],
         "active": False,
-        "requires_pi": False,
-        "requires_team": True,
-        "requires_group": False,
+        "pi_insight": False,
+        "team_insight": True,
+        "group_insight": False,
+        "sprint_insight": True,
         "cron_config": {"day_of_week": "sun,tue,thu", "hour": 6, "minute": 0}
     }
 
@@ -1089,17 +1104,17 @@ def create_ai_summary_table_if_not_exists(engine=None) -> bool:
                 CREATE TABLE public.ai_summary (
                     id SERIAL PRIMARY KEY,
                     date DATE NOT NULL,
+                    pi VARCHAR(255),
                     team_name VARCHAR(255),
                     group_name VARCHAR(255),
                     card_name VARCHAR(255) NOT NULL,
-                    card_type VARCHAR(100) NOT NULL,
+                    insight_type VARCHAR(100) NOT NULL,
                     priority VARCHAR(50) NOT NULL,
                     source VARCHAR(255),
                     source_job_id INTEGER,
                     description TEXT NOT NULL,
                     full_information TEXT,
                     information_json TEXT,
-                    pi VARCHAR(255),
                     created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
                     updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
                 );
@@ -1567,9 +1582,10 @@ def create_insight_types_table_if_not_exists(engine=None) -> bool:
                     insight_description TEXT,
                     insight_categories JSONB NOT NULL DEFAULT '[]'::jsonb,
                     active BOOLEAN DEFAULT TRUE NOT NULL,
-                    requires_pi BOOLEAN DEFAULT FALSE NOT NULL,
-                    requires_team BOOLEAN DEFAULT TRUE NOT NULL,
-                    requires_group BOOLEAN DEFAULT FALSE NOT NULL,
+                    pi_insight BOOLEAN DEFAULT FALSE NOT NULL,
+                    team_insight BOOLEAN DEFAULT TRUE NOT NULL,
+                    group_insight BOOLEAN DEFAULT FALSE NOT NULL,
+                    sprint_insight BOOLEAN DEFAULT FALSE NOT NULL,
                     cron_config JSONB DEFAULT NULL,
                     created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP NOT NULL,
                     updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP NOT NULL
@@ -1792,9 +1808,10 @@ def insert_default_insight_types(engine=None):
                     insight_description = insight_type_data.get("insight_description")
                     insight_categories = insight_type_data.get("insight_categories", [])
                     active = insight_type_data.get("active", True)
-                    requires_pi = insight_type_data.get("requires_pi", False)
-                    requires_team = insight_type_data.get("requires_team", True)
-                    requires_group = insight_type_data.get("requires_group", False)
+                    pi_insight = insight_type_data.get("pi_insight", False)
+                    team_insight = insight_type_data.get("team_insight", True)
+                    group_insight = insight_type_data.get("group_insight", False)
+                    sprint_insight = insight_type_data.get("sprint_insight", False)
                     cron_config = insight_type_data.get("cron_config")
                     
                     # Validate categories is a list
@@ -1817,17 +1834,18 @@ def insert_default_insight_types(engine=None):
                         # Convert list to JSON string for JSONB column
                         insert_sql = """
                         INSERT INTO public.insight_types 
-                        (insight_type, insight_description, insight_categories, active, requires_pi, requires_team, requires_group, cron_config) 
-                        VALUES (:insight_type, :insight_description, CAST(:insight_categories AS jsonb), :active, :requires_pi, :requires_team, :requires_group, CAST(:cron_config AS jsonb))
+                        (insight_type, insight_description, insight_categories, active, pi_insight, team_insight, group_insight, sprint_insight, cron_config) 
+                        VALUES (:insight_type, :insight_description, CAST(:insight_categories AS jsonb), :active, :pi_insight, :team_insight, :group_insight, :sprint_insight, CAST(:cron_config AS jsonb))
                         """
                         conn.execute(text(insert_sql), {
                             "insight_type": insight_type,
                             "insight_description": insight_description,
                             "insight_categories": json.dumps(insight_categories),
                             "active": active,
-                            "requires_pi": requires_pi,
-                            "requires_team": requires_team,
-                            "requires_group": requires_group,
+                            "pi_insight": pi_insight,
+                            "team_insight": team_insight,
+                            "group_insight": group_insight,
+                            "sprint_insight": sprint_insight,
                             "cron_config": json.dumps(cron_config) if cron_config else None
                         })
                         inserted_count += 1

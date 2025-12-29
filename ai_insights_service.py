@@ -238,7 +238,7 @@ async def get_ai_insights_with_recommendations(
         pi: PI name (required if insight_type='pi')
         limit: Number of AI cards to return (default: 4)
         recommendations_limit: Maximum recommendations per card (default: 5)
-        category: Optional category filter(s) - only return cards with card_type matching insight types for any of these categories.
+        category: Optional category filter(s) - only return cards with insight_type matching insight types for any of these categories.
                  Can specify multiple: ?category=Daily&category=Planning
     
     Returns:
@@ -418,7 +418,7 @@ async def get_ai_insights_collection(
             where_clause = "WHERE " + " AND ".join(where_conditions)
         
         # SECURE: Parameterized query prevents SQL injection
-        # Only return selected fields for the collection endpoint
+        # Return all fields including updated_at, created_at, and insight_type
         query = text(f"""
             SELECT 
                 id,
@@ -429,7 +429,10 @@ async def get_ai_insights_collection(
                 priority,
                 description,
                 source_job_id,
-                pi
+                pi,
+                insight_type,
+                updated_at,
+                created_at
             FROM {config.AI_INSIGHTS_TABLE}
             {where_clause}
             ORDER BY id DESC 
@@ -475,7 +478,10 @@ async def get_ai_insights_collection(
                 "priority": row[5],
                 "description": description_text,
                 "source_job_id": row[7],
-                "pi": row[8] if len(row) > 8 else None
+                "pi": row[8] if len(row) > 8 else None,
+                "insight_type": row[9] if len(row) > 9 else None,
+                "updated_at": row[10] if len(row) > 10 else None,
+                "created_at": row[11] if len(row) > 11 else None
             }
             cards.append(card_dict)
         
@@ -702,12 +708,11 @@ async def get_ai_insight(id: int, conn: Connection = Depends(get_db_connection))
 # -----------------------
 
 class AIInsightCreateRequest(BaseModel):
-    insight_type: str
+    insight_type: str  # Insight type name (e.g., "Daily Progress", "PI Sync") - matches insight_types.insight_type
     team_name: Optional[str] = None
     group_name: Optional[str] = None
     pi: Optional[str] = None
     card_name: str
-    card_type: str
     description: str
     date: Optional[str] = None
     priority: Optional[str] = None
@@ -722,7 +727,7 @@ class AIInsightUpdateRequest(BaseModel):
     group_name: Optional[str] = None
     pi: Optional[str] = None
     card_name: Optional[str] = None
-    card_type: Optional[str] = None
+    insight_type: Optional[str] = None
     description: Optional[str] = None
     date: Optional[str] = None
     priority: Optional[str] = None
@@ -739,31 +744,24 @@ async def create_ai_insight(
 ):
     """Create a new AI insight card."""
     try:
-        # Validate insight_type
-        if request.insight_type not in [InsightType.TEAM, InsightType.GROUP, InsightType.PI]:
-            raise HTTPException(status_code=400, detail=f"Invalid insight_type: {request.insight_type}. Must be 'team', 'group', or 'pi'")
+        # Validate that team_name and group_name are not both set
+        if request.team_name and request.group_name:
+            raise HTTPException(status_code=400, detail="team_name and group_name cannot both be set. Only one identifier can be used.")
         
-        payload = request.model_dump(exclude={'insight_type'})
+        # Validate that at least one identifier is provided
+        if not request.team_name and not request.group_name and not request.pi:
+            raise HTTPException(status_code=400, detail="At least one identifier (team_name, group_name, or pi) must be provided")
         
-        # Validate and set identifier based on insight_type
-        if request.insight_type == InsightType.TEAM:
-            if not request.team_name:
-                raise HTTPException(status_code=400, detail="team_name is required when insight_type='team'")
+        # Create payload from request
+        payload = request.model_dump()
+        
+        # Validate and normalize identifier fields
+        if request.team_name:
             payload["team_name"] = validate_team_name(request.team_name)
-            payload["group_name"] = None
-            payload["pi"] = None
-        elif request.insight_type == InsightType.GROUP:
-            if not request.group_name:
-                raise HTTPException(status_code=400, detail="group_name is required when insight_type='group'")
+        if request.group_name:
             payload["group_name"] = validate_group_name(request.group_name, conn)
-            payload["team_name"] = None
-            payload["pi"] = None
-        else:  # PI
-            if not request.pi:
-                raise HTTPException(status_code=400, detail="pi is required when insight_type='pi'")
+        if request.pi:
             payload["pi"] = validate_pi_name(request.pi)
-            payload["team_name"] = None if not payload.get("team_name") else payload["team_name"].strip() if payload.get("team_name") else None
-            payload["group_name"] = None
         
         # Normalize empty strings to None
         if payload.get("team_name") == "":
@@ -816,12 +814,11 @@ async def update_ai_insight(
         if "pi" in updates and updates["pi"] == "":
             updates["pi"] = None
         
-        # Ensure at most one of team_name, group_name, or pi is set
-        name_fields = [k for k in ["team_name", "group_name", "pi"] if k in updates and updates[k] is not None]
-        if len(name_fields) > 1:
+        # Validate that team_name and group_name are not both set (same as CREATE endpoint)
+        if updates.get("team_name") and updates.get("group_name"):
             raise HTTPException(
                 status_code=400,
-                detail="Cannot set multiple name fields. Provide exactly one of team_name, group_name, or pi."
+                detail="team_name and group_name cannot both be set. Only one identifier can be used."
             )
         
         updated = update_ai_card_by_id(id, updates, conn)

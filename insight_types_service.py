@@ -27,20 +27,12 @@ logger = logging.getLogger(__name__)
 insight_types_router = APIRouter()
 
 # Fixed list of insight categories - available for import by other services
-# Each category has a name and a class (Team or PI)
+# Each category has a name and a class (PI or Sprint)
 INSIGHT_CATEGORIES = [
-    {"name": "Daily", "class": "Team"},
-    {"name": "Planning", "class": "Team"},
-    {"name": "Retrospective", "class": "Team"},
-    {"name": "Sprint Review", "class": "Team"},
-    {"name": "Backlog Refinement", "class": "Team"},
-    {"name": "PI Sync", "class": "Team"},
-    {"name": "PI Retrospective-Train", "class": "PI"},
-    {"name": "PI Sync-Train", "class": "PI"},
-    {"name": "PI Planning-Train", "class": "PI"},
-    {"name": "PI Preparation-Train", "class": "PI"},
-    {"name": "PI Dependencies", "class": "PI"},
-    {"name": "PI Planning Gaps", "class": "PI"},
+    {"name": "PI Events", "class": "PI"},
+    {"name": "PI Status", "class": "PI"},
+    {"name": "Sprint Status", "class": "Sprint"},
+    {"name": "Sprint Events", "class": "Sprint"},
 ]
 
 
@@ -246,9 +238,10 @@ class InsightTypeCreateRequest(BaseModel):
     insight_description: Optional[str] = None
     insight_categories: List[str]  # Now a list instead of single string
     active: bool = True
-    requires_pi: bool = False
-    requires_team: bool = True
-    requires_group: bool = False
+    pi_insight: bool = False
+    team_insight: bool = True
+    group_insight: bool = False
+    sprint_insight: bool = False
     cron_config: Optional[CronConfig] = None
 
 
@@ -257,9 +250,10 @@ class InsightTypeUpdateRequest(BaseModel):
     insight_description: Optional[str] = None
     insight_categories: Optional[List[str]] = None  # Now a list instead of single string
     active: Optional[bool] = None
-    requires_pi: Optional[bool] = None
-    requires_team: Optional[bool] = None
-    requires_group: Optional[bool] = None
+    pi_insight: Optional[bool] = None
+    team_insight: Optional[bool] = None
+    group_insight: Optional[bool] = None
+    sprint_insight: Optional[bool] = None
     cron_config: Optional[CronConfig] = None
 
 
@@ -290,9 +284,10 @@ async def create_insight_type_endpoint(
             "insight_type": validated_insight_type,
             "insight_categories": validated_categories,
             "active": request.active,
-            "requires_pi": request.requires_pi,
-            "requires_team": request.requires_team,
-            "requires_group": request.requires_group
+            "pi_insight": request.pi_insight,
+            "team_insight": request.team_insight,
+            "group_insight": request.group_insight,
+            "sprint_insight": request.sprint_insight
         }
         
         if request.insight_description is not None:
@@ -352,9 +347,10 @@ async def update_insight_type_full(
             "insight_type": validated_insight_type,
             "insight_categories": validated_categories,
             "active": request.active,
-            "requires_pi": request.requires_pi,
-            "requires_team": request.requires_team,
-            "requires_group": request.requires_group
+            "pi_insight": request.pi_insight,
+            "team_insight": request.team_insight,
+            "group_insight": request.group_insight,
+            "sprint_insight": request.sprint_insight
         }
         
         if request.insight_description is not None:
