@@ -17,12 +17,11 @@ API_PREFIX = f"/api/{API_VERSION}"
 # --- Table Names Configuration ---
 WORK_ITEMS_TABLE = "jira_issues"  # Main table name - can be changed here
 RECOMMENDATIONS_TABLE = "recommendations"  # Recommendations table
-TEAM_AI_CARDS_TABLE = "ai_summary"  # Team AI cards table (uses ai_summary)
 PIS_TABLE = "pis"  # PIs table
 CLOSED_SPRINT_VIEW = "closed_sprint_summary"  # Closed sprint summary view
 AGENT_JOBS_TABLE = "agent_jobs"  # Agent jobs table
 SECURITY_LOGS_TABLE = "security_logs"  # Security logs table
-PI_AI_CARDS_TABLE = "ai_summary"  # PI AI cards table
+AI_INSIGHTS_TABLE = "ai_summary"  # Unified AI insights table (team, group, PI)
 TRANSCRIPTS_TABLE = "transcripts"  # Transcripts table
 AI_SUMMARY_TABLE = "ai_summary"  # AI summary table
 PROMPTS_TABLE = "prompts"  # Prompts table
@@ -36,8 +35,6 @@ REPORT_DEFINITIONS_TABLE = "report_definitions"  # Report definitions metadata t
 TEAMS_SERVICE_PREFIX = "/teams"
 # Recommendations Service
 RECOMMENDATIONS_SERVICE_PREFIX = "/recommendations"
-# Team AI Cards Service
-TEAM_AI_CARDS_SERVICE_PREFIX = "/team-ai-cards"
 # Team Metrics Service
 TEAM_METRICS_SERVICE_PREFIX = "/team-metrics"
 # Settings Service
@@ -48,8 +45,8 @@ PIS_SERVICE_PREFIX = "/pis"
 AGENT_JOBS_SERVICE_PREFIX = "/agent-jobs"
 # Security Logs Service
 SECURITY_LOGS_SERVICE_PREFIX = "/security-logs"
-# PI AI Cards Service
-PI_AI_CARDS_SERVICE_PREFIX = "/pi-ai-cards"
+# AI Insights Service (unified)
+AI_INSIGHTS_SERVICE_PREFIX = "/ai-insights"
 # Transcripts Service
 TRANSCRIPTS_SERVICE_PREFIX = "/transcripts"
 # Prompts Service

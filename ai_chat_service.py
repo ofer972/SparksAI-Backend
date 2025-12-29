@@ -19,7 +19,7 @@ import os
 import re
 from datetime import datetime, date
 from database_connection import get_db_connection
-from database_general import get_team_ai_card_by_id, get_recommendation_by_id, get_prompt_by_email_and_name, get_pi_ai_card_by_id, get_formatted_job_data_for_llm_followup_insight, get_formatted_job_data_for_llm_followup_recommendation
+from database_general import get_ai_card_by_id, get_recommendation_by_id, get_prompt_by_email_and_name, get_formatted_job_data_for_llm_followup_insight, get_formatted_job_data_for_llm_followup_recommendation
 from database_team_metrics import (
     get_closed_sprints_data_db,
     get_sprint_burndown_data_db,
@@ -1610,9 +1610,9 @@ async def ai_chat(
             try:
                 # Convert insights_id to int
                 insights_id_int = int(request.insights_id)
-                # Fetch team AI card using shared helper function
-                logger.info(f"Fetching team AI card with ID: {insights_id_int}")
-                card = get_team_ai_card_by_id(insights_id_int, conn)
+                # Fetch AI card using unified helper function
+                logger.info(f"Fetching AI card with ID: {insights_id_int}")
+                card = get_ai_card_by_id(insights_id_int, conn)
                 if not card:
                     raise HTTPException(
                         status_code=404,
@@ -1674,8 +1674,8 @@ async def ai_chat(
                 )
             try:
                 insights_id_int = int(request.insights_id)
-                logger.info(f"Fetching PI AI card with ID: {insights_id_int}")
-                card = get_pi_ai_card_by_id(insights_id_int, conn)
+                logger.info(f"Fetching AI card with ID: {insights_id_int}")
+                card = get_ai_card_by_id(insights_id_int, conn)
                 if not card:
                     raise HTTPException(
                         status_code=404,
@@ -1906,7 +1906,7 @@ async def ai_chat(
                         if chat_type_str == "Team_insights" and request.insights_id:
                             try:
                                 insights_id_int = int(request.insights_id)
-                                card = get_team_ai_card_by_id(insights_id_int, conn)
+                                card = get_ai_card_by_id(insights_id_int, conn)
                                 full_information = card.get('full_information', '')
                                 source_job_id = card.get('source_job_id')
                                 formatted_job_data = get_formatted_job_data_for_llm_followup_insight(insights_id_int, source_job_id, conn)
@@ -1918,7 +1918,7 @@ async def ai_chat(
                         elif chat_type_str == "PI_insights" and request.insights_id:
                             try:
                                 insights_id_int = int(request.insights_id)
-                                card = get_pi_ai_card_by_id(insights_id_int, conn)
+                                card = get_ai_card_by_id(insights_id_int, conn)
                                 full_information = card.get('full_information', '')
                                 source_job_id = card.get('source_job_id')
                                 formatted_job_data = get_formatted_job_data_for_llm_followup_insight(insights_id_int, source_job_id, conn)

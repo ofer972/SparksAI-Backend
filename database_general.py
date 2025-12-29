@@ -351,8 +351,8 @@ def get_recommendations_by_ai_summary_id(
         raise e
 
 
-def get_top_team_ai_cards_with_recommendations_from_json(
-    filter_column: str,
+def get_top_ai_cards_with_recommendations_from_json(
+    insight_type: str,
     filter_value: str,
     limit: int = 4,
     recommendations_limit: int = 3,
@@ -360,14 +360,15 @@ def get_top_team_ai_cards_with_recommendations_from_json(
     conn: Connection = None
 ) -> List[Dict[str, Any]]:
     """
-    Get top Team AI cards with recommendations extracted from information_json field.
+    Get top AI cards with recommendations extracted from information_json field.
+    Unified function for team, group, and PI insights.
     
     Returns the most recent + highest priority card for each type (max 1 per type),
     with recommendations parsed from the card's information_json field.
     
     Args:
-        filter_column (str): Column to filter by ('team_name' or 'group_name')
-        filter_value (str): Value to filter by
+        insight_type (str): Type of insight - 'team', 'group', or 'pi'
+        filter_value (str): Value to filter by (team name, group name, or PI name)
         limit (int): Number of AI cards to return (default: 4)
         recommendations_limit (int): Maximum recommendations per card (default: 3, max: 3)
         categories (Optional[List[str]]): Optional category filter - only return cards with card_type matching insight types for any of these categories
@@ -377,6 +378,18 @@ def get_top_team_ai_cards_with_recommendations_from_json(
         list: List of AI card dictionaries, each with 'recommendations' array and 'recommendations_count'
     """
     import json
+    
+    # Map insight_type to filter column
+    filter_column_map = {
+        'team': 'team_name',
+        'group': 'group_name',
+        'pi': 'pi'
+    }
+    
+    if insight_type not in filter_column_map:
+        raise ValueError(f"Invalid insight_type: {insight_type}. Must be 'team', 'group', or 'pi'")
+    
+    filter_column = filter_column_map[insight_type]
     
     try:
         # Get top AI cards using existing function
@@ -399,7 +412,7 @@ def get_top_team_ai_cards_with_recommendations_from_json(
                         json_recommendations = information_json['Recommendations']
                         
                         if isinstance(json_recommendations, list):
-                            # Take first 3 recommendations (no sorting, as they appear in JSON)
+                            # Take first N recommendations (no sorting, as they appear in JSON)
                             for index, json_rec in enumerate(json_recommendations[:recommendations_limit]):
                                 if isinstance(json_rec, dict):
                                     # Map fields from JSON to recommendation structure
@@ -428,89 +441,10 @@ def get_top_team_ai_cards_with_recommendations_from_json(
         return ai_cards
             
     except Exception as e:
-        logger.error(f"Error fetching top team AI cards with recommendations from JSON filtered by {filter_column}={filter_value}: {e}")
+        logger.error(f"Error fetching top AI cards with recommendations from JSON filtered by {filter_column}={filter_value} (insight_type={insight_type}): {e}")
         raise e
 
 
-def get_top_pi_ai_cards_with_recommendations_from_json(
-    filter_column: str,
-    filter_value: str,
-    limit: int = 4,
-    recommendations_limit: int = 3,
-    categories: Optional[List[str]] = None,
-    conn: Connection = None
-) -> List[Dict[str, Any]]:
-    """
-    Get top PI AI cards with recommendations extracted from information_json field.
-    
-    Returns the most recent + highest priority card for each type (max 1 per type),
-    with recommendations parsed from the card's information_json field.
-    
-    Args:
-        filter_column (str): Column to filter by ('pi')
-        filter_value (str): Value to filter by
-        limit (int): Number of AI cards to return (default: 4)
-        recommendations_limit (int): Maximum recommendations per card (default: 3, max: 3)
-        categories (Optional[List[str]]): Optional category filter - only return cards with card_type matching insight types for any of these categories
-        conn (Connection): Database connection from FastAPI dependency
-    
-    Returns:
-        list: List of AI card dictionaries, each with 'recommendations' array and 'recommendations_count'
-    """
-    import json
-    
-    try:
-        # Get top AI cards using existing function
-        ai_cards = get_top_ai_cards_filtered(filter_column, filter_value, limit, categories=categories, conn=conn)
-        
-        # For each card, parse recommendations from information_json
-        for card in ai_cards:
-            card_id = card.get('id')
-            information_json_str = card.get('information_json')
-            
-            recommendations = []
-            
-            if card_id and information_json_str:
-                try:
-                    # Parse the JSON string
-                    information_json = json.loads(information_json_str) if isinstance(information_json_str, str) else information_json_str
-                    
-                    # Extract Recommendations array
-                    if isinstance(information_json, dict) and 'Recommendations' in information_json:
-                        json_recommendations = information_json['Recommendations']
-                        
-                        if isinstance(json_recommendations, list):
-                            # Take first 3 recommendations (no sorting, as they appear in JSON)
-                            for index, json_rec in enumerate(json_recommendations[:recommendations_limit]):
-                                if isinstance(json_rec, dict):
-                                    # Map fields from JSON to recommendation structure
-                                    recommendation = {
-                                        'id': f"{card_id}_{index + 1}",  # Format: {card_id}_{index} starting from 1
-                                        'team_name': card.get('team_name'),
-                                        'date': card.get('date'),
-                                        'action_text': json_rec.get('text', ''),  # text -> action_text
-                                        'rational': json_rec.get('header', ''),  # header -> rational
-                                        'priority': 'Important',  # Always "Important"
-                                        'status': 'Pending',  # Always "Pending"
-                                        'source_job_id': card.get('source_job_id'),
-                                        'source_ai_summary_id': card_id,  # Same as card ID
-                                        'created_at': card.get('created_at'),
-                                        'updated_at': card.get('updated_at')
-                                    }
-                                    recommendations.append(recommendation)
-                    
-                except (json.JSONDecodeError, TypeError, KeyError) as e:
-                    # Log error but continue - return empty recommendations array
-                    logger.warning(f"Error parsing information_json for card {card_id}: {e}")
-            
-            card['recommendations'] = recommendations
-            card['recommendations_count'] = len(recommendations)
-        
-        return ai_cards
-            
-    except Exception as e:
-        logger.error(f"Error fetching top PI AI cards with recommendations from JSON filtered by {filter_column}={filter_value}: {e}")
-        raise e
 
 
 def get_top_ai_cards_with_recommendations_filtered(
@@ -569,28 +503,29 @@ def get_top_ai_cards_with_recommendations_filtered(
         raise e
 
 
-def get_team_ai_card_by_id(card_id: int, conn: Connection = None) -> Optional[Dict[str, Any]]:
+def get_ai_card_by_id(card_id: int, conn: Connection = None) -> Optional[Dict[str, Any]]:
     """
-    Get a single team AI summary card by ID from ai_summary table.
+    Get a single AI summary card by ID from ai_summary table.
+    Unified function for team, group, and PI AI cards.
     Uses parameterized queries to prevent SQL injection.
     Returns all fields including source_job_id.
     
     Args:
-        card_id (int): The ID of the team AI card to retrieve
+        card_id (int): The ID of the AI card to retrieve
         conn (Connection): Database connection from FastAPI dependency
         
     Returns:
-        dict: Team AI card dictionary (includes source_job_id) or None if not found
+        dict: AI card dictionary (includes source_job_id) or None if not found
     """
     try:
         # SECURE: Parameterized query prevents SQL injection
         query = text(f"""
             SELECT * 
-            FROM {config.TEAM_AI_CARDS_TABLE} 
+            FROM {config.AI_INSIGHTS_TABLE} 
             WHERE id = :id
         """)
         
-        logger.info(f"Executing query to get team AI card with ID {card_id} from {config.TEAM_AI_CARDS_TABLE}")
+        logger.info(f"Executing query to get AI card with ID {card_id} from ai_summary")
         
         result = conn.execute(query, {"id": card_id})
         row = result.fetchone()
@@ -602,8 +537,10 @@ def get_team_ai_card_by_id(card_id: int, conn: Connection = None) -> Optional[Di
         return dict(row._mapping)
         
     except Exception as e:
-        logger.error(f"Error fetching team AI card {card_id}: {e}")
+        logger.error(f"Error fetching AI card {card_id}: {e}")
         raise e
+
+
 
 
 def replace_prompt_placeholders(prompt_text: str, conn: Optional[Connection] = None) -> str:
@@ -745,37 +682,6 @@ def get_recommendation_by_id(recommendation_id: int, conn: Connection = None) ->
         raise e
 
 
-def get_pi_ai_card_by_id(card_id: int, conn: Connection = None) -> Optional[Dict[str, Any]]:
-    """
-    Get a single PI AI summary card by ID from ai_summary table.
-    Uses parameterized queries to prevent SQL injection.
-    Returns all fields including source_job_id.
-
-    Args:
-        card_id (int): The ID of the PI AI card to retrieve
-        conn (Connection): Database connection from FastAPI dependency
-
-    Returns:
-        dict: PI AI card dictionary (includes source_job_id) or None if not found
-    """
-    try:
-        query = text(f"""
-            SELECT *
-            FROM {config.PI_AI_CARDS_TABLE}
-            WHERE id = :id
-        """)
-
-        logger.info(f"Executing query to get PI AI card with ID {card_id} from {config.PI_AI_CARDS_TABLE}")
-
-        result = conn.execute(query, {"id": card_id})
-        row = result.fetchone()
-        if not row:
-            return None
-
-        return dict(row._mapping)
-    except Exception as e:
-        logger.error(f"Error fetching PI AI card {card_id}: {e}")
-        raise e
 
 
 def _format_job_data_for_llm(row_dict: Dict[str, Any], entity_type: str, entity_id: int, job_id: int) -> str:

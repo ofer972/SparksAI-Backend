@@ -11,12 +11,11 @@ from database_connection import _current_request_path
 from teams_service import teams_router
 from groups_service import groups_router
 from recommendations_service import recommendations_router
-from team_ai_cards_service import team_ai_cards_router
 from team_metrics_service import team_metrics_router
 from settings_service import settings_router
 from pis_service import pis_router
 from agent_jobs_service import agent_jobs_router
-from pi_ai_cards_service import pi_ai_cards_router
+from ai_insights_service import ai_insights_router
 from transcripts_service import transcripts_router
 from prompts_service import prompts_router
 from reports_service import reports_router
@@ -194,12 +193,11 @@ async def timing_middleware(request: Request, call_next):
 app.include_router(teams_router, prefix="/api/v1", tags=["teams"])
 app.include_router(groups_router, prefix="/api/v1", tags=["groups"])
 app.include_router(recommendations_router, prefix="/api/v1", tags=["recommendations"])
-app.include_router(team_ai_cards_router, prefix="/api/v1", tags=["team-ai-cards"])
 app.include_router(team_metrics_router, prefix="/api/v1", tags=["team-metrics"])
 app.include_router(settings_router, prefix="/api/v1", tags=["settings"])
 app.include_router(pis_router, prefix="/api/v1", tags=["pis"])
 app.include_router(agent_jobs_router, prefix="/api/v1", tags=["agent-jobs"])
-app.include_router(pi_ai_cards_router, prefix="/api/v1", tags=["pi-ai-cards"])
+app.include_router(ai_insights_router, prefix="/api/v1", tags=["ai-insights"])
 app.include_router(transcripts_router, prefix="/api/v1", tags=["transcripts"])
 app.include_router(prompts_router, prefix="/api/v1", tags=["prompts"])
 app.include_router(ai_chat_router, prefix="/api/v1", tags=["ai-chat"])
