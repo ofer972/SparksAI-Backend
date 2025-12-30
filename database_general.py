@@ -15,65 +15,6 @@ import config
 logger = logging.getLogger(__name__)
 
 
-def get_top_ai_recommendations(team_name: str, limit: int = 4, source_ai_summary_id: Optional[int] = None, conn: Connection = None) -> List[Dict[str, Any]]:
-    """
-    Get top AI recommendations for a specific team.
-    
-    Returns recommendations ordered by:
-    1. Date (newest first)
-    2. Priority (Critical > High > Important)
-    3. ID (descending)
-    
-    Args:
-        team_name (str): Team name
-        limit (int): Number of recommendations to return (default: 4)
-        source_ai_summary_id (Optional[int]): Optional filter by source AI summary ID
-        conn (Connection): Database connection from FastAPI dependency
-    
-    Returns:
-        list: List of recommendation dictionaries
-    """
-    try:
-        # SECURE: Parameterized query prevents SQL injection
-        sql_query = """
-            SELECT *
-            FROM public.recommendations
-            WHERE team_name = :team_name
-              AND (:source_ai_summary_id IS NULL OR source_ai_summary_id = :source_ai_summary_id)
-            ORDER BY 
-                DATE(date) DESC,
-                CASE priority 
-                    WHEN 'Critical' THEN 1
-                    WHEN 'High' THEN 2
-                    WHEN 'Important' THEN 3
-                    ELSE 4
-                END,
-                id DESC
-            LIMIT :limit
-        """
-        
-        logger.info(f"Executing query to get top AI recommendations for team: {team_name}")
-        logger.info(f"Parameters: team_name={team_name}, limit={limit}, source_ai_summary_id={source_ai_summary_id}")
-        
-        result = conn.execute(text(sql_query), {
-            'team_name': team_name, 
-            'limit': limit,
-            'source_ai_summary_id': source_ai_summary_id
-        })
-        
-        # Convert rows to list of dictionaries
-        recommendations = []
-        for row in result:
-            # Convert row to dictionary dynamically since we're using SELECT *
-            recommendations.append(dict(row._mapping))
-        
-        return recommendations
-            
-    except Exception as e:
-        logger.error(f"Error fetching top AI recommendations for team {team_name}: {e}")
-        raise e
-
-
 def get_insight_types_by_categories(categories: List[str], conn: Connection = None) -> List[str]:
     """
     Get all insight type names that match ANY of the specified categories.
@@ -351,9 +292,162 @@ def get_recommendations_by_ai_summary_id(
         raise e
 
 
+def get_top_ai_cards_multi_filtered(
+    pi: Optional[str] = None,
+    team_name: Optional[str] = None,
+    group_name: Optional[str] = None,
+    limit: int = 4,
+    categories: Optional[List[str]] = None,
+    conn: Connection = None
+) -> List[Dict[str, Any]]:
+    """
+    Get top AI cards filtered by multiple criteria (PI, team, group).
+    
+    Supports combinations:
+    - PI only: Returns insights with exact PI match
+    - PI + Team: Returns insights for the team where PI matches OR PI is NULL/empty
+    - PI + Group: Returns insights for the group where PI matches OR PI is NULL/empty
+    - Team only: Returns insights for the team (any PI)
+    - Group only: Returns insights for the group (any PI)
+    
+    Special behavior: When both PI and (team_name OR group_name) are provided,
+    the query returns insights that either match the specified PI or have no PI
+    assigned (NULL or empty string). This allows viewing all insights for a
+    team/group regardless of PI assignment.
+    
+    Returns the most recent + highest priority card for each type (max 1 per type).
+    Cards are ordered by:
+    1. Priority (Critical > High > Important)
+    2. Created_at (newest first)
+    """
+    from sqlalchemy import text
+    import json
+    
+    # Build WHERE conditions dynamically
+    where_conditions = []
+    params = {'limit': limit}
+    
+    # Check if team_name or group_name is provided along with pi
+    has_team_or_group = team_name is not None or group_name is not None
+    
+    if pi:
+        # If pi is provided along with team_name or group_name, include NULL/empty PI values
+        # Otherwise, use exact match
+        if has_team_or_group:
+            where_conditions.append('(pi = :pi OR pi IS NULL OR pi = \'\')')
+        else:
+            where_conditions.append('pi = :pi')
+        params['pi'] = pi
+    
+    if team_name:
+        where_conditions.append('team_name = :team_name')
+        params['team_name'] = team_name
+    
+    if group_name:
+        where_conditions.append('group_name = :group_name')
+        params['group_name'] = group_name
+    
+    # Validate at least one filter is provided
+    if not where_conditions:
+        raise ValueError("At least one filter (pi, team_name, or group_name) must be provided")
+    
+    # Build additional filter for data integrity
+    if team_name or group_name:
+        additional_filter = "AND (team_name IS NOT NULL OR group_name IS NOT NULL)"
+    elif pi:
+        additional_filter = "AND pi IS NOT NULL"
+    else:
+        additional_filter = ""
+    
+    # Handle categories
+    insight_types_list = []
+    if categories:
+        # get_insight_types_by_categories is defined in this same file (database_general.py)
+        insight_types_list = get_insight_types_by_categories(categories, conn)
+        if not insight_types_list:
+            return []
+    
+    # Build SQL query
+    where_clause = " AND ".join(where_conditions)
+    
+    if categories and insight_types_list:
+        sql_query = f"""
+            WITH ranked_cards AS (
+                SELECT *,
+                    ROW_NUMBER() OVER (
+                        PARTITION BY insight_type 
+                        ORDER BY 
+                            CASE priority 
+                                WHEN 'Critical' THEN 1 
+                                WHEN 'High' THEN 2 
+                                WHEN 'Important' THEN 3 
+                                ELSE 4 
+                            END,
+                            created_at DESC
+                    ) as rn
+                FROM public.ai_summary
+                WHERE {where_clause}
+                  AND insight_type = ANY(:insight_types)
+                  {additional_filter}
+            )
+            SELECT *
+            FROM ranked_cards
+            WHERE rn = 1
+            ORDER BY 
+                CASE priority 
+                    WHEN 'Critical' THEN 1 
+                    WHEN 'High' THEN 2 
+                    WHEN 'Important' THEN 3 
+                    ELSE 4 
+                END,
+                created_at DESC
+            LIMIT :limit
+        """
+        params['insight_types'] = insight_types_list
+    else:
+        sql_query = f"""
+            WITH ranked_cards AS (
+                SELECT *,
+                    ROW_NUMBER() OVER (
+                        PARTITION BY insight_type 
+                        ORDER BY 
+                            CASE priority 
+                                WHEN 'Critical' THEN 1 
+                                WHEN 'High' THEN 2 
+                                WHEN 'Important' THEN 3 
+                                ELSE 4 
+                            END,
+                            created_at DESC
+                    ) as rn
+                FROM public.ai_summary
+                WHERE {where_clause}
+                  {additional_filter}
+            )
+            SELECT *
+            FROM ranked_cards
+            WHERE rn = 1
+            ORDER BY 
+                CASE priority 
+                    WHEN 'Critical' THEN 1 
+                    WHEN 'High' THEN 2 
+                    WHEN 'Important' THEN 3 
+                    ELSE 4 
+                END,
+                created_at DESC
+            LIMIT :limit
+        """
+    
+    logger.info(f"Executing multi-filter query: pi={pi}, team_name={team_name}, group_name={group_name}, categories={categories}")
+    result = conn.execute(text(sql_query), params)
+    return [dict(row._mapping) for row in result]
+
+
 def get_top_ai_cards_with_recommendations_from_json(
-    insight_type: str,
-    filter_value: str,
+    insight_type: Optional[str] = None,
+    filter_value: Optional[str] = None,
+    pi: Optional[str] = None,
+    team_name: Optional[str] = None,
+    group_name: Optional[str] = None,
     limit: int = 4,
     recommendations_limit: int = 3,
     categories: Optional[List[str]] = None,
@@ -361,17 +455,20 @@ def get_top_ai_cards_with_recommendations_from_json(
 ) -> List[Dict[str, Any]]:
     """
     Get top AI cards with recommendations extracted from information_json field.
-    Unified function for team, group, and PI insights.
+    Supports both legacy single-filter mode and new multi-filter mode.
     
     Returns the most recent + highest priority card for each type (max 1 per type),
     with recommendations parsed from the card's information_json field.
     
     Args:
-        insight_type (str): Type of insight - 'team', 'group', or 'pi'
-        filter_value (str): Value to filter by (team name, group name, or PI name)
+        insight_type (Optional[str]): Type of insight - 'team', 'group', or 'pi' (legacy mode)
+        filter_value (Optional[str]): Value to filter by (legacy mode)
+        pi (Optional[str]): PI name (new multi-filter mode)
+        team_name (Optional[str]): Team name (new multi-filter mode)
+        group_name (Optional[str]): Group name (new multi-filter mode)
         limit (int): Number of AI cards to return (default: 4)
         recommendations_limit (int): Maximum recommendations per card (default: 3, max: 3)
-        categories (Optional[List[str]]): Optional category filter - only return cards with insight_type matching insight types for any of these categories
+        categories (Optional[List[str]]): Optional category filter
         conn (Connection): Database connection from FastAPI dependency
     
     Returns:
@@ -379,21 +476,33 @@ def get_top_ai_cards_with_recommendations_from_json(
     """
     import json
     
-    # Map insight_type to filter column
-    filter_column_map = {
-        'team': 'team_name',
-        'group': 'group_name',
-        'pi': 'pi'
-    }
-    
-    if insight_type not in filter_column_map:
-        raise ValueError(f"Invalid insight_type: {insight_type}. Must be 'team', 'group', or 'pi'")
-    
-    filter_column = filter_column_map[insight_type]
-    
     try:
-        # Get top AI cards using existing function
-        ai_cards = get_top_ai_cards_filtered(filter_column, filter_value, limit, categories=categories, conn=conn)
+        # Determine which mode to use
+        if pi is not None or team_name is not None or group_name is not None:
+            # New multi-filter mode
+            ai_cards = get_top_ai_cards_multi_filtered(
+                pi=pi,
+                team_name=team_name,
+                group_name=group_name,
+                limit=limit,
+                categories=categories,
+                conn=conn
+            )
+        elif insight_type and filter_value:
+            # Legacy single-filter mode (backward compatibility)
+            filter_column_map = {
+                'team': 'team_name',
+                'group': 'group_name',
+                'pi': 'pi'
+            }
+            
+            if insight_type not in filter_column_map:
+                raise ValueError(f"Invalid insight_type: {insight_type}. Must be 'team', 'group', or 'pi'")
+            
+            filter_column = filter_column_map[insight_type]
+            ai_cards = get_top_ai_cards_filtered(filter_column, filter_value, limit, categories=categories, conn=conn)
+        else:
+            raise ValueError("Either (insight_type and filter_value) or (pi/team_name/group_name) must be provided")
         
         # For each card, parse recommendations from information_json
         for card in ai_cards:
@@ -441,7 +550,7 @@ def get_top_ai_cards_with_recommendations_from_json(
         return ai_cards
             
     except Exception as e:
-        logger.error(f"Error fetching top AI cards with recommendations from JSON filtered by {filter_column}={filter_value} (insight_type={insight_type}): {e}")
+        logger.error(f"Error fetching top AI cards with recommendations: {e}")
         raise e
 
 

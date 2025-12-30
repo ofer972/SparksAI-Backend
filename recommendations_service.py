@@ -12,7 +12,6 @@ import logging
 import re
 from database_connection import get_db_connection
 from database_general import (
-    get_top_ai_recommendations,
     get_recommendation_by_id,
     create_recommendation,
     update_recommendation_by_id,
@@ -52,110 +51,6 @@ def validate_limit(limit: int) -> int:
         raise HTTPException(status_code=400, detail="Limit cannot exceed 50")
     
     return limit
-
-@recommendations_router.get("/recommendations/getTeamTop")
-async def get_top_recommendations(
-    team_name: str = Query(..., description="Team name to get recommendations for"),
-    limit: int = Query(4, description="Number of recommendations to return (default: 4, max: 50)"),
-    source_ai_summary_id: Optional[int] = Query(None, description="Optional: Filter by source AI summary ID"),
-    conn: Connection = Depends(get_db_connection)
-):
-    """
-    Get top recommendations for a specific team.
-    
-    Returns recommendations ordered by:
-    1. Date (newest first)
-    2. Priority (High > Medium > Low)
-    3. ID (descending)
-    
-    Args:
-        team_name: Name of the team
-        limit: Number of recommendations to return (default: 4)
-        source_ai_summary_id: Optional filter by source AI summary ID
-    
-    Returns:
-        JSON response with recommendations list and metadata
-    """
-    try:
-        # Validate inputs
-        validated_team_name = validate_team_name(team_name)
-        validated_limit = validate_limit(limit)
-        
-        # Get recommendations from database function
-        recommendations = get_top_ai_recommendations(validated_team_name, validated_limit, source_ai_summary_id, conn)
-        
-        return {
-            "success": True,
-            "data": {
-                "recommendations": recommendations,
-                "count": len(recommendations),
-                "team_name": validated_team_name,
-                "limit": validated_limit
-            },
-            "message": f"Retrieved {len(recommendations)} recommendations for team '{validated_team_name}'"
-        }
-    
-    except HTTPException:
-        # Re-raise HTTP exceptions (validation errors)
-        raise
-    except Exception as e:
-        logger.error(f"Error fetching recommendations for team {team_name}: {e}")
-        raise HTTPException(
-            status_code=500,
-            detail=f"Failed to fetch recommendations: {str(e)}"
-        )
-
-@recommendations_router.get("/recommendations/getPITop")
-async def get_top_pi_recommendations(
-    pi: str = Query(..., description="PI name to get recommendations for"),
-    limit: int = Query(4, description="Number of recommendations to return (default: 4, max: 50)"),
-    source_ai_summary_id: Optional[int] = Query(None, description="Optional: Filter by source AI summary ID"),
-    conn: Connection = Depends(get_db_connection)
-):
-    """
-    Get top recommendations for a specific PI.
-    
-    Returns recommendations ordered by:
-    1. Date (newest first)
-    2. Priority (High > Medium > Low)
-    3. ID (descending)
-    
-    Args:
-        pi: Name of the PI
-        limit: Number of recommendations to return (default: 4)
-        source_ai_summary_id: Optional filter by source AI summary ID
-    
-    Returns:
-        JSON response with recommendations list and metadata
-    """
-    try:
-        # Validate inputs
-        validated_pi_name = validate_team_name(pi)  # Reuse team_name validation for PI name
-        validated_limit = validate_limit(limit)
-        
-        # Get recommendations from database function using PI name as team_name
-        recommendations = get_top_ai_recommendations(validated_pi_name, validated_limit, source_ai_summary_id, conn)
-        
-        return {
-            "success": True,
-            "data": {
-                "recommendations": recommendations,
-                "count": len(recommendations),
-                "pi": validated_pi_name,
-                "limit": validated_limit
-            },
-            "message": f"Retrieved {len(recommendations)} recommendations for PI '{validated_pi_name}'"
-        }
-    
-    except HTTPException:
-        # Re-raise HTTP exceptions (validation errors)
-        raise
-    except Exception as e:
-        logger.error(f"Error fetching recommendations for PI {pi}: {e}")
-        raise HTTPException(
-            status_code=500,
-            detail=f"Failed to fetch recommendations: {str(e)}"
-        )
 
 @recommendations_router.get("/recommendations/collection")
 async def get_recommendations_collection(

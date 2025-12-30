@@ -213,17 +213,27 @@ async def get_ai_insights(
 
 @ai_insights_router.get("/ai-insights/getTopCardsWithRecommendations")
 async def get_ai_insights_with_recommendations(
-    insight_type: str = Query(..., description="Type of insight: 'team', 'group', or 'pi'"),
-    team_name: Optional[str] = Query(None, description="Team name (required if insight_type='team')"),
-    group_name: Optional[str] = Query(None, description="Group name (required if insight_type='group')"),
-    pi: Optional[str] = Query(None, description="PI name (required if insight_type='pi')"),
+        insight_type: Optional[str] = Query(None, description="Type of insight: 'team', 'group', or 'pi'. Optional - mode is determined from parameters. Only used for backward compatibility."),
+    team_name: Optional[str] = Query(None, description="Team name"),
+    group_name: Optional[str] = Query(None, description="Group name"),
+    pi: Optional[str] = Query(None, description="PI name (quarter)"),
     limit: int = Query(4, description="Number of AI cards to return (default: 4, max: 50)"),
     recommendations_limit: int = Query(5, description="Max recommendations per card (default: 5)"),
-    category: Optional[List[str]] = Query(None, description="Filter by insight category/categories (e.g., 'Daily', 'Planning'). Can specify multiple: ?category=Daily&category=Planning"),
+    category: Optional[List[str]] = Query(None, description="Filter by insight category/categories (e.g., 'PI Events', 'Sprint Status'). Can specify multiple: ?category=PI Events&category=Sprint Status"),
     conn: Connection = Depends(get_db_connection)
 ):
     """
-    Get AI summary cards for a specific team, group, or PI with their recommendations.
+    Get AI summary cards with their recommendations.
+    
+    Supports multiple filter combinations:
+    - PI only: pi=<PI_NAME>
+    - PI + Team: pi=<PI_NAME>&team_name=<TEAM_NAME>
+    - PI + Group: pi=<PI_NAME>&group_name=<GROUP_NAME>
+    - Team only: team_name=<TEAM_NAME>
+    - Group only: group_name=<GROUP_NAME>
+    
+    Note: insight_type parameter is optional and only used for backward compatibility.
+    The mode is automatically determined from the provided parameters.
     
     Returns the most recent + highest priority card for each type (max 1 per type),
     with recommendations parsed from the card's information_json field.
@@ -232,36 +242,61 @@ async def get_ai_insights_with_recommendations(
     2. Date (newest first)
     
     Args:
-        insight_type: Type of insight - 'team', 'group', or 'pi'
-        team_name: Team name (required if insight_type='team')
-        group_name: Group name (required if insight_type='group')
-        pi: PI name (required if insight_type='pi')
+        insight_type: Type of insight - 'team', 'group', or 'pi' (optional if pi is provided)
+        team_name: Team name
+        group_name: Group name
+        pi: PI name (quarter)
         limit: Number of AI cards to return (default: 4)
         recommendations_limit: Maximum recommendations per card (default: 5)
-        category: Optional category filter(s) - only return cards with insight_type matching insight types for any of these categories.
-                 Can specify multiple: ?category=Daily&category=Planning
+        category: Optional category filter(s) - PI Events, PI Status, Sprint Status, Sprint Events
     
     Returns:
         JSON response with AI cards list (each with recommendations) and metadata
     """
     try:
-        # Validate insight_type
-        if insight_type not in [InsightType.TEAM, InsightType.GROUP, InsightType.PI]:
-            raise HTTPException(status_code=400, detail=f"Invalid insight_type: {insight_type}. Must be 'team', 'group', or 'pi'")
+        # Determine mode from parameters (insight_type is optional and only used for backward compatibility)
+        # Priority: If pi is provided, use multi-filter mode; otherwise infer from team_name/group_name
         
-        # Determine identifier based on insight_type
-        if insight_type == InsightType.TEAM:
-            if not team_name:
-                raise HTTPException(status_code=400, detail="team_name is required when insight_type='team'")
-            identifier = validate_team_name(team_name)
-        elif insight_type == InsightType.GROUP:
-            if not group_name:
-                raise HTTPException(status_code=400, detail="group_name is required when insight_type='group'")
-            identifier = validate_group_name(group_name, conn)
-        else:  # PI
-            if not pi:
-                raise HTTPException(status_code=400, detail="pi is required when insight_type='pi'")
-            identifier = validate_pi_name(pi)
+        validated_pi = None
+        validated_team_name = None
+        validated_group_name = None
+        
+        # Validate and set PI if provided
+        if pi:
+            validated_pi = validate_pi_name(pi)
+        
+        # Validate and set team_name if provided
+        if team_name:
+            validated_team_name = validate_team_name(team_name)
+        
+        # Validate and set group_name if provided
+        if group_name:
+            validated_group_name = validate_group_name(group_name, conn)
+        
+        # Validate that we don't have both team and group
+        if validated_team_name and validated_group_name:
+            raise HTTPException(status_code=400, detail="Cannot specify both team_name and group_name")
+        
+        # Ensure at least one filter is provided
+        if not validated_pi and not validated_team_name and not validated_group_name:
+            raise HTTPException(
+                status_code=400, 
+                detail="At least one filter must be provided: pi, team_name, or group_name"
+            )
+        
+        # Handle legacy insight_type parameter for backward compatibility
+        # If insight_type is provided, it should match the parameters (but we don't require it)
+        if insight_type:
+            if insight_type not in [InsightType.TEAM, InsightType.GROUP, InsightType.PI]:
+                raise HTTPException(status_code=400, detail=f"Invalid insight_type: {insight_type}. Must be 'team', 'group', or 'pi'")
+            
+            # Validate that insight_type matches the provided parameters
+            if insight_type == InsightType.TEAM and not validated_team_name:
+                raise HTTPException(status_code=400, detail="insight_type='team' requires team_name parameter")
+            if insight_type == InsightType.GROUP and not validated_group_name:
+                raise HTTPException(status_code=400, detail="insight_type='group' requires group_name parameter")
+            if insight_type == InsightType.PI and not validated_pi:
+                raise HTTPException(status_code=400, detail="insight_type='pi' requires pi parameter")
         
         validated_limit = validate_limit(limit)
         validated_recommendations_limit = validate_limit(recommendations_limit)
@@ -288,34 +323,58 @@ async def get_ai_insights_with_recommendations(
         # Get AI cards with recommendations from JSON
         # Limit recommendations to max 3 as per requirements
         recommendations_limit = min(validated_recommendations_limit, 3)
+        
+        # Always use multi-filter mode (supports all combinations)
         ai_cards = get_top_ai_cards_with_recommendations_from_json(
-            insight_type,
-            identifier,
-            validated_limit,
-            recommendations_limit,
-            validated_categories,
-            conn
+            pi=validated_pi,
+            team_name=validated_team_name,
+            group_name=validated_group_name,
+            limit=validated_limit,
+            recommendations_limit=recommendations_limit,
+            categories=validated_categories,
+            conn=conn
         )
         
-        # Build response identifier name
-        identifier_key = 'team_name' if insight_type == InsightType.TEAM else ('group_name' if insight_type == InsightType.GROUP else 'pi')
+        # Build response with all provided filters
+        response_data = {
+            "ai_cards": ai_cards,
+            "count": len(ai_cards),
+            "limit": validated_limit
+        }
+        if validated_pi:
+            response_data["pi"] = validated_pi
+        if validated_team_name:
+            response_data["team_name"] = validated_team_name
+        if validated_group_name:
+            response_data["group_name"] = validated_group_name
+        
+        # Build message
+        message_parts = []
+        if validated_pi:
+            message_parts.append(f"PI '{validated_pi}'")
+        if validated_team_name:
+            message_parts.append(f"team '{validated_team_name}'")
+        if validated_group_name:
+            message_parts.append(f"group '{validated_group_name}'")
+        message = f"Retrieved {len(ai_cards)} AI cards with recommendations for {', '.join(message_parts)}"
+        
+        # For backward compatibility, also include insight_type in response if it was provided
+        if insight_type:
+            identifier = validated_pi or validated_team_name or validated_group_name
+            identifier_key = 'team_name' if insight_type == InsightType.TEAM else ('group_name' if insight_type == InsightType.GROUP else 'pi')
+            response_data[insight_type] = identifier
+            response_data[identifier_key] = identifier
         
         return {
             "success": True,
-            "data": {
-                "ai_cards": ai_cards,
-                "count": len(ai_cards),
-                insight_type: identifier,
-                identifier_key: identifier,
-                "limit": validated_limit
-            },
-            "message": f"Retrieved {len(ai_cards)} AI cards with recommendations for {insight_type} '{identifier}'"
+            "data": response_data,
+            "message": message
         }
     
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"Error fetching AI cards with recommendations for {insight_type}: {e}")
+        logger.error(f"Error fetching AI cards with recommendations: {e}")
         raise HTTPException(
             status_code=500,
             detail=f"Failed to fetch AI cards with recommendations: {str(e)}"
