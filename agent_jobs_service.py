@@ -240,26 +240,16 @@ async def get_agent_jobs(conn: Connection = Depends(get_db_connection)):
         result = conn.execute(query)
         rows = result.fetchall()
         
-        # Convert rows to list of dictionaries
+        # Convert rows to list of dictionaries using column-name access
         jobs = []
         for row in rows:
+            job_dict = dict(row._mapping)
+            
             # Truncate result to first 200 characters with ellipsis when longer
-            result_text = row[7]
+            result_text = job_dict.get('result')
             if isinstance(result_text, str) and len(result_text) > 200:
-                result_text = result_text[:200] + "..."
-
-            job_dict = {
-                "job_id": row[0],
-                "job_type": row[1],
-                "team_name": row[2],
-                "group_name": row[3],
-                "pi": row[4],
-                "status": row[5],
-                "claimed_by": row[6],
-                "claimed_at": row[7],
-                "result": result_text,
-                "error": row[9]
-            }
+                job_dict['result'] = result_text[:200] + "..."
+            
             jobs.append(job_dict)
         
         return {
