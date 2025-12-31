@@ -25,7 +25,7 @@ DEFAULT_INSIGHT_TYPES = [
         "active": True,
         "pi_insight": True,
         "team_insight": False,
-        "group_insight": False,
+        "group_insight": True,
         "sprint_insight": False,
         "cron_config": {"day_of_week": "sun,mon,tue,wed,thu", "hour": 6, "minute": 0}
     },
@@ -36,7 +36,7 @@ DEFAULT_INSIGHT_TYPES = [
         "active": True,
         "pi_insight": True,
         "team_insight": False,
-        "group_insight": False,
+        "group_insight": True,
         "sprint_insight": False,
         "cron_config": {"hour": 5, "minute": 40}
     },
@@ -47,7 +47,7 @@ DEFAULT_INSIGHT_TYPES = [
         "active": True,
         "pi_insight": True,
         "team_insight": False,
-        "group_insight": False,
+        "group_insight": True,
         "sprint_insight": False,
         "cron_config": {"hour": 5, "minute": 40}
     },
@@ -152,120 +152,6 @@ DEFAULT_INSIGHT_TYPES = [
         "requires_group": False,
         "cron_config": {"hour": 5, "minute": 50}
     },
-
-#    {
-#        "insight_type": "Stories Aging (In Progress)",
-#        "insight_description": "Tracks story age in progress",
-#       "insight_categories": ["Daily"],
-#        "active": False,
-#        "requires_pi": False,
-#        "requires_team": True,
-#        "cron_config": {"hour": 5, "minute": 30}
-#    },
-#    {
-#        "insight_type": "Defects Trend",
-#        "insight_description": "Shows trend of bugs and quality issues",
-#        "insight_categories": ["Retrospective", "Sprint Review"],
-#        "active": False,
- #      "requires_pi": False,
- #       "requires_team": True,
- #       "cron_config": {"hour": 5, "minute": 30}
- #   },
-#    {
-#        "insight_type": "Team Metrics Insight",
-#        "insight_description": "Summarizes key velocity and flow metrics",
- #       "insight_categories": ["Retrospective"],
-#        "active": False,
-#        "requires_pi": False,
-#        "requires_team": True,
-#        "cron_config": {"hour": 5, "minute": 30}
-#    },
-#    {
-#        "insight_type": "DORA Lite",
-#        "insight_description": "Displays core DORA metrics for the sprint",
-#        "insight_categories": ["Retrospective"],
-#        "active": False,
-#        "requires_pi": False,
-#        "requires_team": True,
-#        "requires_group": False,
-#        "cron_config": {"hour": 5, "minute": 30}
-#    },
- #   {
- #       "insight_type": "Sprint Summary",
- #       "insight_description": "Provides overall sprint summary and outcomes",
-#        "insight_categories": ["Retrospective", "Sprint Review", "Planning", "PI Sync"],
-#        "active": False,
-#        "requires_pi": False,
-#        "requires_team": True,
-#        "cron_config": {"hour": 5, "minute": 30}
-#    },
- #   {
-#        "insight_type": "Stories Readiness Gaps",
-#        "insight_description": "Lists stories not ready for execution",
-#        "insight_categories": ["Planning", "Backlog Refinement"],
-#        "active": False,
-#        "requires_pi": False,
-#        "requires_team": True,
-#        "cron_config": {"hour": 5, "minute": 30}
-#    },
-#    {
-#        "insight_type": "Forecast (Velocity-Based)",
-#        "insight_description": "Compares planned vs. forecasted work",
-#        "insight_categories": ["Planning", "Backlog Refinement", "PI Sync"],
-#        "active": False,
-#        "requires_pi": False,
-  #      "requires_team": True,
-  #      "cron_config": {"hour": 5, "minute": 30}
- #   },
- #   {
- #       "insight_type": "Epic Risk Scanner",
- #       "insight_description": "Detects epics at delivery risk",
- #       "insight_categories": ["Planning", "Backlog Refinement", "Sprint Review", "PI Sync"],
- #       "active": False,
- #       "requires_pi": False,
-#        "requires_team": True,
- #       "cron_config": {"hour#": 5, "minute": 30}
-#    },
-#    {
-#        "insight_type": "Sprint planning Suggestions Coaching",
-#        "insight_description": "Provides AI-driven planning tips",
-#        "insight_categories": ["Planning"],
-#        "active": False,
-#        "requires_pi": False,
-#        "requires_team": True,
-#        "cron_config": {"hour": 5, "minute": 30}
-#    },
-#    {
-#        "insight_type": "Sprint Goal Suggestions",
-#        "insight_description": "Suggests possible sprint goals from stories",
-#        "insight_categories": ["Planning", "Backlog Refinement"],
-#        "active": False,
-#        "requires_pi": False,
-#        "requires_team": True,
-#        "cron_config": {"hour": 5, "minute": 30}
-#    },
-#    {
-#        "insight_type": "Demo Suggestions",
-#        "insight_description": "Suggests highlights for the sprint demo",
-#        "insight_categories": ["Sprint Review"],
-#        "active": False,
-#        "requires_pi": False,
-#       "requires_team": True,
-#        "cron_config": {"day_of_week": "mon", "hour": 6, "minute": 0}
-#    },
-    {
-        "insight_type": "Dependency Radar",
-        "insight_description": "Highlights critical delivery dependencies",
-        "insight_categories": ["Sprint Events"],
-        "active": False,
-        "pi_insight": False,
-        "team_insight": True,
-        "group_insight": False,
-        "sprint_insight": True,
-        "cron_config": {"day_of_week": "sun,tue,thu", "hour": 6, "minute": 0}
-    }
-
-
 ]
 
 DEFAULT_REPORT_DEFINITIONS = [

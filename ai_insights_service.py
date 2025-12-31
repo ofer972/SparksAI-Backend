@@ -383,7 +383,7 @@ async def get_ai_insights_with_recommendations(
 
 @ai_insights_router.get("/ai-insights")
 async def get_ai_insights_collection(
-    insight_type: Optional[str] = Query(None, description="Filter by insight type: 'team', 'group', or 'pi'"),
+    insight_type: Optional[str] = Query(None, description="Filter by insight type (e.g., 'PI Dependencies', 'Daily Progress')"),
     date: Optional[str] = Query(None, description="Filter by date in YYYY-MM-DD format (e.g., '2025-12-05')"),
     card_name: Optional[str] = Query(None, description="Filter by exact card name"),
     team_name: Optional[str] = Query(None, description="Filter by team name"),
@@ -398,7 +398,7 @@ async def get_ai_insights_collection(
     Uses parameterized queries to prevent SQL injection.
     
     Args:
-        insight_type: Optional filter by type ('team', 'group', or 'pi')
+        insight_type: Optional filter by insight type (e.g., 'PI Dependencies', 'Daily Progress')
         date: Optional date filter in YYYY-MM-DD format (e.g., '2025-12-05')
         card_name: Optional card name filter (exact match)
         team_name: Optional team name filter
@@ -427,23 +427,16 @@ async def get_ai_insights_collection(
                     detail=f"Invalid date: '{date}'. Date must be in YYYY-MM-DD format and be a valid date."
                 )
         
-        # Validate insight_type if provided
-        if insight_type and insight_type not in [InsightType.TEAM, InsightType.GROUP, InsightType.PI]:
-            raise HTTPException(status_code=400, detail=f"Invalid insight_type: {insight_type}. Must be 'team', 'group', or 'pi'")
-        
         validated_limit = validate_limit_large(limit)
         
         # Build WHERE clause dynamically
         where_conditions = []
         params = {}
         
-        # Filter by insight_type
-        if insight_type == InsightType.TEAM:
-            where_conditions.append("(team_name IS NOT NULL AND (group_name IS NULL OR group_name = '') AND (pi IS NULL OR pi = ''))")
-        elif insight_type == InsightType.GROUP:
-            where_conditions.append("(group_name IS NOT NULL AND group_name != '')")
-        elif insight_type == InsightType.PI:
-            where_conditions.append("(pi IS NOT NULL AND pi != '')")
+        # Filter by insight_type column value if provided
+        if insight_type:
+            where_conditions.append("insight_type = :insight_type")
+            params["insight_type"] = insight_type
         else:
             # No insight_type filter - return all cards (but exclude cards with all NULL)
             where_conditions.append("(team_name IS NOT NULL OR group_name IS NOT NULL OR pi IS NOT NULL)")
@@ -853,25 +846,25 @@ async def update_ai_insight(
     try:
         updates = request.model_dump(exclude_unset=True)
         
-        # Validate team_name if provided
-        if "team_name" in updates and updates["team_name"] is not None:
-            updates["team_name"] = validate_team_name(updates["team_name"])
-        
-        # Validate group_name if provided
-        if "group_name" in updates and updates["group_name"] is not None:
-            updates["group_name"] = validate_group_name(updates["group_name"], conn)
-        
-        # Validate pi if provided
-        if "pi" in updates and updates["pi"] is not None:
-            updates["pi"] = validate_pi_name(updates["pi"])
-        
-        # Normalize empty strings to None
+        # Normalize empty strings to None FIRST (before validation)
         if "team_name" in updates and updates["team_name"] == "":
             updates["team_name"] = None
         if "group_name" in updates and updates["group_name"] == "":
             updates["group_name"] = None
         if "pi" in updates and updates["pi"] == "":
             updates["pi"] = None
+        
+        # Validate team_name if provided (after normalization)
+        if "team_name" in updates and updates["team_name"] is not None:
+            updates["team_name"] = validate_team_name(updates["team_name"])
+        
+        # Validate group_name if provided (after normalization)
+        if "group_name" in updates and updates["group_name"] is not None:
+            updates["group_name"] = validate_group_name(updates["group_name"], conn)
+        
+        # Validate pi if provided (after normalization)
+        if "pi" in updates and updates["pi"] is not None:
+            updates["pi"] = validate_pi_name(updates["pi"])
         
         # Validate that team_name and group_name are not both set (same as CREATE endpoint)
         if updates.get("team_name") and updates.get("group_name"):
