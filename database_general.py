@@ -126,8 +126,8 @@ def get_top_ai_cards_filtered(filter_column: str, filter_value: str, limit: int 
                             ORDER BY 
                                 CASE priority 
                                     WHEN 'Critical' THEN 1 
-                                    WHEN 'High' THEN 2 
-                                    WHEN 'Important' THEN 3 
+                                    WHEN 'Warning' THEN 2 
+                                    WHEN 'OK' THEN 3 
                                     ELSE 4 
                                 END,
                                 created_at DESC
@@ -143,8 +143,8 @@ def get_top_ai_cards_filtered(filter_column: str, filter_value: str, limit: int 
                 ORDER BY 
                     CASE priority 
                         WHEN 'Critical' THEN 1 
-                        WHEN 'High' THEN 2 
-                        WHEN 'Important' THEN 3 
+                        WHEN 'Warning' THEN 2 
+                        WHEN 'OK' THEN 3 
                         ELSE 4 
                     END,
                     created_at DESC
@@ -166,8 +166,8 @@ def get_top_ai_cards_filtered(filter_column: str, filter_value: str, limit: int 
                             ORDER BY 
                                 CASE priority 
                                     WHEN 'Critical' THEN 1 
-                                    WHEN 'High' THEN 2 
-                                    WHEN 'Important' THEN 3 
+                                    WHEN 'Warning' THEN 2 
+                                    WHEN 'OK' THEN 3 
                                     ELSE 4 
                                 END,
                                 created_at DESC
@@ -182,8 +182,8 @@ def get_top_ai_cards_filtered(filter_column: str, filter_value: str, limit: int 
                 ORDER BY 
                     CASE priority 
                         WHEN 'Critical' THEN 1 
-                        WHEN 'High' THEN 2 
-                        WHEN 'Important' THEN 3 
+                        WHEN 'Warning' THEN 2 
+                        WHEN 'OK' THEN 3 
                         ELSE 4 
                     END,
                     created_at DESC
@@ -264,8 +264,8 @@ def get_recommendations_by_ai_summary_id(
                 DATE(date) DESC,
                 CASE priority 
                     WHEN 'Critical' THEN 1
-                    WHEN 'High' THEN 2
-                    WHEN 'Important' THEN 3
+                    WHEN 'Warning' THEN 2
+                    WHEN 'OK' THEN 3
                     ELSE 4
                 END,
                 id DESC
@@ -377,13 +377,13 @@ def get_top_ai_cards_multi_filtered(
                     ROW_NUMBER() OVER (
                         PARTITION BY insight_type 
                         ORDER BY 
+                            date DESC,
                             CASE priority 
                                 WHEN 'Critical' THEN 1 
-                                WHEN 'High' THEN 2 
-                                WHEN 'Important' THEN 3 
+                                WHEN 'Warning' THEN 2 
+                                WHEN 'OK' THEN 3 
                                 ELSE 4 
-                            END,
-                            created_at DESC
+                            END
                     ) as rn
                 FROM public.ai_summary
                 WHERE {where_clause}
@@ -394,13 +394,13 @@ def get_top_ai_cards_multi_filtered(
             FROM ranked_cards
             WHERE rn = 1
             ORDER BY 
+                date DESC,
                 CASE priority 
                     WHEN 'Critical' THEN 1 
-                    WHEN 'High' THEN 2 
-                    WHEN 'Important' THEN 3 
+                    WHEN 'Warning' THEN 2 
+                    WHEN 'OK' THEN 3 
                     ELSE 4 
-                END,
-                created_at DESC
+                END
             LIMIT :limit
         """
         params['insight_types'] = insight_types_list
@@ -411,13 +411,13 @@ def get_top_ai_cards_multi_filtered(
                     ROW_NUMBER() OVER (
                         PARTITION BY insight_type 
                         ORDER BY 
+                            date DESC,
                             CASE priority 
                                 WHEN 'Critical' THEN 1 
-                                WHEN 'High' THEN 2 
-                                WHEN 'Important' THEN 3 
+                                WHEN 'Warning' THEN 2 
+                                WHEN 'OK' THEN 3 
                                 ELSE 4 
-                            END,
-                            created_at DESC
+                            END
                     ) as rn
                 FROM public.ai_summary
                 WHERE {where_clause}
@@ -427,13 +427,13 @@ def get_top_ai_cards_multi_filtered(
             FROM ranked_cards
             WHERE rn = 1
             ORDER BY 
+                date DESC,
                 CASE priority 
                     WHEN 'Critical' THEN 1 
-                    WHEN 'High' THEN 2 
-                    WHEN 'Important' THEN 3 
+                    WHEN 'Warning' THEN 2 
+                    WHEN 'OK' THEN 3 
                     ELSE 4 
-                END,
-                created_at DESC
+                END
             LIMIT :limit
         """
     
