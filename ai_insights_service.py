@@ -23,6 +23,7 @@ from database_general import (
     update_ai_card_by_id,
     delete_ai_card_by_id,
     get_top_ai_cards_with_recommendations_from_json,
+    add_priority_color_to_card,
 )
 from insight_types_service import get_insight_category_names
 import config
@@ -30,6 +31,9 @@ import config
 logger = logging.getLogger(__name__)
 
 ai_insights_router = APIRouter()
+
+# Import priority constants from config (no circular dependency)
+from config import PRIORITIES, build_priority_case_sql
 
 
 class InsightType(str, Enum):
@@ -535,6 +539,8 @@ async def get_ai_insights_collection(
                 "updated_at": row[10] if len(row) > 10 else None,
                 "created_at": row[11] if len(row) > 11 else None
             }
+            # Add priority_color
+            add_priority_color_to_card(card_dict)
             cards.append(card_dict)
         
         filter_message = ""
@@ -691,6 +697,7 @@ async def get_ai_insights_all_fields(
         cards = []
         for row in rows:
             card_dict = dict(row._mapping)
+            add_priority_color_to_card(card_dict)
             cards.append(card_dict)
         
         filter_message = ""

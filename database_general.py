@@ -14,6 +14,16 @@ import config
 
 logger = logging.getLogger(__name__)
 
+# Import priority helper from config (no circular dependency)
+from config import build_priority_case_sql, PRIORITY_COLOR_MAP
+
+
+def add_priority_color_to_card(card: Dict[str, Any]) -> None:
+    """Add priority_color field to a card dictionary based on its priority."""
+    if isinstance(card, dict):
+        priority = card.get('priority')
+        card['priority_color'] = PRIORITY_COLOR_MAP.get(priority, 'Gray')
+
 
 def get_insight_types_by_categories(categories: List[str], conn: Connection = None) -> List[str]:
     """
@@ -124,12 +134,7 @@ def get_top_ai_cards_filtered(filter_column: str, filter_value: str, limit: int 
                         ROW_NUMBER() OVER (
                             PARTITION BY insight_type 
                             ORDER BY 
-                                CASE priority 
-                                    WHEN 'Critical' THEN 1 
-                                    WHEN 'Warning' THEN 2 
-                                    WHEN 'OK' THEN 3 
-                                    ELSE 4 
-                                END,
+                                {build_priority_case_sql()},
                                 created_at DESC
                         ) as rn
                     FROM public.ai_summary
@@ -141,12 +146,7 @@ def get_top_ai_cards_filtered(filter_column: str, filter_value: str, limit: int 
                 FROM ranked_cards
                 WHERE rn = 1
                 ORDER BY 
-                    CASE priority 
-                        WHEN 'Critical' THEN 1 
-                        WHEN 'Warning' THEN 2 
-                        WHEN 'OK' THEN 3 
-                        ELSE 4 
-                    END,
+                    {build_priority_case_sql()},
                     created_at DESC
                 LIMIT :limit
             """
@@ -164,12 +164,7 @@ def get_top_ai_cards_filtered(filter_column: str, filter_value: str, limit: int 
                         ROW_NUMBER() OVER (
                             PARTITION BY insight_type 
                             ORDER BY 
-                                CASE priority 
-                                    WHEN 'Critical' THEN 1 
-                                    WHEN 'Warning' THEN 2 
-                                    WHEN 'OK' THEN 3 
-                                    ELSE 4 
-                                END,
+                                {build_priority_case_sql()},
                                 created_at DESC
                         ) as rn
                     FROM public.ai_summary
@@ -180,12 +175,7 @@ def get_top_ai_cards_filtered(filter_column: str, filter_value: str, limit: int 
                 FROM ranked_cards
                 WHERE rn = 1
                 ORDER BY 
-                    CASE priority 
-                        WHEN 'Critical' THEN 1 
-                        WHEN 'Warning' THEN 2 
-                        WHEN 'OK' THEN 3 
-                        ELSE 4 
-                    END,
+                    {build_priority_case_sql()},
                     created_at DESC
                 LIMIT :limit
             """
@@ -200,10 +190,12 @@ def get_top_ai_cards_filtered(filter_column: str, filter_value: str, limit: int 
         
         result = conn.execute(text(sql_query), params)
         
-        # Convert rows to list of dictionaries
+        # Convert rows to list of dictionaries and add priority_color
         ai_cards = []
         for row in result:
-            ai_cards.append(dict(row._mapping))
+            card = dict(row._mapping)
+            add_priority_color_to_card(card)
+            ai_cards.append(card)
         
         return ai_cards
             
@@ -262,12 +254,7 @@ def get_recommendations_by_ai_summary_id(
             WHERE source_ai_summary_id = :ai_summary_id
             ORDER BY 
                 DATE(date) DESC,
-                CASE priority 
-                    WHEN 'Critical' THEN 1
-                    WHEN 'Warning' THEN 2
-                    WHEN 'OK' THEN 3
-                    ELSE 4
-                END,
+                {build_priority_case_sql()},
                 id DESC
             LIMIT :limit
         """
@@ -378,12 +365,7 @@ def get_top_ai_cards_multi_filtered(
                         PARTITION BY insight_type 
                         ORDER BY 
                             date DESC,
-                            CASE priority 
-                                WHEN 'Critical' THEN 1 
-                                WHEN 'Warning' THEN 2 
-                                WHEN 'OK' THEN 3 
-                                ELSE 4 
-                            END
+                            {build_priority_case_sql()}
                     ) as rn
                 FROM public.ai_summary
                 WHERE {where_clause}
@@ -395,12 +377,7 @@ def get_top_ai_cards_multi_filtered(
             WHERE rn = 1
             ORDER BY 
                 date DESC,
-                CASE priority 
-                    WHEN 'Critical' THEN 1 
-                    WHEN 'Warning' THEN 2 
-                    WHEN 'OK' THEN 3 
-                    ELSE 4 
-                END
+                {build_priority_case_sql()}
             LIMIT :limit
         """
         params['insight_types'] = insight_types_list
@@ -412,12 +389,7 @@ def get_top_ai_cards_multi_filtered(
                         PARTITION BY insight_type 
                         ORDER BY 
                             date DESC,
-                            CASE priority 
-                                WHEN 'Critical' THEN 1 
-                                WHEN 'Warning' THEN 2 
-                                WHEN 'OK' THEN 3 
-                                ELSE 4 
-                            END
+                            {build_priority_case_sql()}
                     ) as rn
                 FROM public.ai_summary
                 WHERE {where_clause}
@@ -428,18 +400,19 @@ def get_top_ai_cards_multi_filtered(
             WHERE rn = 1
             ORDER BY 
                 date DESC,
-                CASE priority 
-                    WHEN 'Critical' THEN 1 
-                    WHEN 'Warning' THEN 2 
-                    WHEN 'OK' THEN 3 
-                    ELSE 4 
-                END
+                {build_priority_case_sql()}
             LIMIT :limit
         """
     
     logger.info(f"Executing multi-filter query: pi={pi}, team_name={team_name}, group_name={group_name}, categories={categories}")
     result = conn.execute(text(sql_query), params)
-    return [dict(row._mapping) for row in result]
+    cards = [dict(row._mapping) for row in result]
+    
+    # Add priority_color to each card
+    for card in cards:
+        add_priority_color_to_card(card)
+    
+    return cards
 
 
 def get_top_ai_cards_with_recommendations_from_json(
@@ -504,8 +477,11 @@ def get_top_ai_cards_with_recommendations_from_json(
         else:
             raise ValueError("Either (insight_type and filter_value) or (pi/team_name/group_name) must be provided")
         
-        # For each card, parse recommendations from information_json
+        # For each card, add priority_color and parse recommendations from information_json
         for card in ai_cards:
+            # Add priority_color to each card (needed here because cards are modified in this function)
+            add_priority_color_to_card(card)
+            
             card_id = card.get('id')
             information_json_str = card.get('information_json')
             
@@ -643,7 +619,9 @@ def get_ai_card_by_id(card_id: int, conn: Connection = None) -> Optional[Dict[st
             return None
         
         # Convert row to dictionary - get all fields from database
-        return dict(row._mapping)
+        card = dict(row._mapping)
+        add_priority_color_to_card(card)
+        return card
         
     except Exception as e:
         logger.error(f"Error fetching AI card {card_id}: {e}")

@@ -100,6 +100,26 @@ CACHE_TTL_HISTORICAL = int(os.getenv("CACHE_TTL_HISTORICAL") or "1800")  # 30 mi
 CACHE_TTL_DEFINITIONS = int(os.getenv("CACHE_TTL_DEFINITIONS") or "3600")  # 1 hour
 CACHE_TTL_GROUPS_TEAMS = int(os.getenv("CACHE_TTL_GROUPS_TEAMS") or "3600")  # 1 hour
 
+# --- Priority Constants ---
+# Priority constants - single source of truth
+PRIORITIES = [
+    {"name": "Critical", "order": 1, "color": "Red"},
+    {"name": "Warning", "order": 2, "color": "Yellow"},
+    {"name": "OK", "order": 3, "color": "Green"}
+]
+
+# Helper to build SQL CASE statement from PRIORITIES constant
+def build_priority_case_sql() -> str:
+    """Build SQL CASE statement from PRIORITIES constant"""
+    when_clauses = "\n".join([f"                            WHEN '{p['name']}' THEN {p['order']}" for p in PRIORITIES])
+    return f"""CASE priority 
+{when_clauses}
+                            ELSE 4 
+                        END"""
+
+# Color lookup map
+PRIORITY_COLOR_MAP = {p["name"]: p["color"] for p in PRIORITIES}
+
 # --- JIRA URL Configuration ---
 from typing import Optional, Dict, Any
 from sqlalchemy.engine import Connection
