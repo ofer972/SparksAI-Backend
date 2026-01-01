@@ -18,5 +18,5 @@ COPY . .
 # Expose port (Railway handles port binding automatically)
 EXPOSE 8000
 
-# Run the application with Railway's PORT environment variable (5 workers for production)
-CMD uvicorn main:app --host 0.0.0.0 --port $PORT --workers 5 --no-access-log
+# Run the application with Railway's PORT environment variable (2 workers for production)
+CMD uvicorn main:app --host 0.0.0.0 --port $PORT --workers 2 --no-access-log
