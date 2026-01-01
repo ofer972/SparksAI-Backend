@@ -32,7 +32,7 @@ DEFAULT_INSIGHT_TYPES = [
     {
         "insight_type": "PI Dependencies",
         "insight_description": "Analysis of Epic dependencies (inward and outward)",
-        "insight_categories": ["PI Status"],
+        "insight_categories": ["PI Status","PI Events"],
         "active": True,
         "pi_insight": True,
         "team_insight": False,
@@ -121,17 +121,6 @@ DEFAULT_INSIGHT_TYPES = [
         "insight_type": "Group Sprint Dependency",
         "insight_description": "Current sprint - cross-team dependency analysis",
         "insight_categories": ["Sprint Events"],
-        "active": True,
-        "pi_insight": False,
-        "team_insight": False,
-        "group_insight": True,
-        "sprint_insight": False,
-        "cron_config": {"hour": 5, "minute": 45}
-    },
-    {
-        "insight_type": "Group Epic Dependencies",
-        "insight_description": "Analysis of EPIC dependencies for the GROUP (inward and outward)",
-        "insight_categories": ["Sprint Status"],
         "active": True,
         "pi_insight": False,
         "team_insight": False,
