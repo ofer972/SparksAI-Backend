@@ -285,6 +285,7 @@ def get_top_ai_cards_multi_filtered(
     group_name: Optional[str] = None,
     limit: int = 4,
     categories: Optional[List[str]] = None,
+    insight_type: Optional[str] = None,
     conn: Connection = None
 ) -> List[Dict[str, Any]]:
     """
@@ -346,7 +347,7 @@ def get_top_ai_cards_multi_filtered(
     else:
         additional_filter = ""
     
-    # Handle categories
+    # Handle insight_type and categories (mutually exclusive)
     insight_types_list = []
     if categories:
         # get_insight_types_by_categories is defined in this same file (database_general.py)
@@ -357,7 +358,33 @@ def get_top_ai_cards_multi_filtered(
     # Build SQL query
     where_clause = " AND ".join(where_conditions)
     
-    if categories and insight_types_list:
+    if insight_type:
+        # Branch 1: Filter by single insight_type
+        sql_query = f"""
+            WITH ranked_cards AS (
+                SELECT *,
+                    ROW_NUMBER() OVER (
+                        PARTITION BY insight_type 
+                        ORDER BY 
+                            date DESC,
+                            {build_priority_case_sql()}
+                    ) as rn
+                FROM public.ai_summary
+                WHERE {where_clause}
+                  AND insight_type = :insight_type
+                  {additional_filter}
+            )
+            SELECT *
+            FROM ranked_cards
+            WHERE rn = 1
+            ORDER BY 
+                date DESC,
+                {build_priority_case_sql()}
+            LIMIT :limit
+        """
+        params['insight_type'] = insight_type
+    elif categories and insight_types_list:
+        # Branch 2: Filter by categories (existing logic)
         sql_query = f"""
             WITH ranked_cards AS (
                 SELECT *,
@@ -382,6 +409,7 @@ def get_top_ai_cards_multi_filtered(
         """
         params['insight_types'] = insight_types_list
     else:
+        # Branch 3: No insight_type filter (existing logic)
         sql_query = f"""
             WITH ranked_cards AS (
                 SELECT *,
@@ -404,7 +432,7 @@ def get_top_ai_cards_multi_filtered(
             LIMIT :limit
         """
     
-    logger.info(f"Executing multi-filter query: pi={pi}, team_name={team_name}, group_name={group_name}, categories={categories}")
+    logger.info(f"Executing multi-filter query: pi={pi}, team_name={team_name}, group_name={group_name}, categories={categories}, insight_type={insight_type}")
     result = conn.execute(text(sql_query), params)
     cards = [dict(row._mapping) for row in result]
     
@@ -424,6 +452,7 @@ def get_top_ai_cards_with_recommendations_from_json(
     limit: int = 4,
     recommendations_limit: int = 3,
     categories: Optional[List[str]] = None,
+    insight_type_name: Optional[str] = None,
     conn: Connection = None
 ) -> List[Dict[str, Any]]:
     """
@@ -459,6 +488,7 @@ def get_top_ai_cards_with_recommendations_from_json(
                 group_name=group_name,
                 limit=limit,
                 categories=categories,
+                insight_type=insight_type_name,
                 conn=conn
             )
         elif insight_type and filter_value:

@@ -217,7 +217,7 @@ async def get_ai_insights(
 
 @ai_insights_router.get("/ai-insights/getTopCardsWithRecommendations")
 async def get_ai_insights_with_recommendations(
-        insight_type: Optional[str] = Query(None, description="Type of insight: 'team', 'group', or 'pi'. Optional - mode is determined from parameters. Only used for backward compatibility."),
+        insight_type: Optional[str] = Query(None, description="Filter by a specific insight type (e.g., 'PI Sync', 'Daily Progress'). Mutually exclusive with category parameter."),
     team_name: Optional[str] = Query(None, description="Team name"),
     group_name: Optional[str] = Query(None, description="Group name"),
     pi: Optional[str] = Query(None, description="PI name (quarter)"),
@@ -246,13 +246,13 @@ async def get_ai_insights_with_recommendations(
     2. Date (newest first)
     
     Args:
-        insight_type: Type of insight - 'team', 'group', or 'pi' (optional if pi is provided)
+        insight_type: Optional filter by specific insight type (e.g., 'PI Sync', 'Daily Progress'). Mutually exclusive with category.
         team_name: Team name
         group_name: Group name
         pi: PI name (quarter)
         limit: Number of AI cards to return (default: 4)
         recommendations_limit: Maximum recommendations per card (default: 5)
-        category: Optional category filter(s) - PI Events, PI Status, Sprint Status, Sprint Events
+        category: Optional category filter(s) - PI Events, PI Status, Sprint Status, Sprint Events. Mutually exclusive with insight_type.
     
     Returns:
         JSON response with AI cards list (each with recommendations) and metadata
@@ -288,22 +288,25 @@ async def get_ai_insights_with_recommendations(
                 detail="At least one filter must be provided: pi, team_name, or group_name"
             )
         
-        # Handle legacy insight_type parameter for backward compatibility
-        # If insight_type is provided, it should match the parameters (but we don't require it)
-        if insight_type:
-            if insight_type not in [InsightType.TEAM, InsightType.GROUP, InsightType.PI]:
-                raise HTTPException(status_code=400, detail=f"Invalid insight_type: {insight_type}. Must be 'team', 'group', or 'pi'")
-            
-            # Validate that insight_type matches the provided parameters
-            if insight_type == InsightType.TEAM and not validated_team_name:
-                raise HTTPException(status_code=400, detail="insight_type='team' requires team_name parameter")
-            if insight_type == InsightType.GROUP and not validated_group_name:
-                raise HTTPException(status_code=400, detail="insight_type='group' requires group_name parameter")
-            if insight_type == InsightType.PI and not validated_pi:
-                raise HTTPException(status_code=400, detail="insight_type='pi' requires pi parameter")
-        
         validated_limit = validate_limit(limit)
         validated_recommendations_limit = validate_limit(recommendations_limit)
+        
+        # Validate that insight_type and category are mutually exclusive
+        if insight_type and category:
+            raise HTTPException(
+                status_code=400,
+                detail="Cannot specify both insight_type and category parameters. They are mutually exclusive."
+            )
+        
+        # Validate and sanitize insight_type if provided
+        validated_insight_type = None
+        if insight_type:
+            validated_insight_type = insight_type.strip()
+            if not validated_insight_type:
+                raise HTTPException(
+                    status_code=400,
+                    detail="insight_type cannot be empty"
+                )
         
         # Validate categories if provided
         validated_categories = None
@@ -336,6 +339,7 @@ async def get_ai_insights_with_recommendations(
             limit=validated_limit,
             recommendations_limit=recommendations_limit,
             categories=validated_categories,
+            insight_type_name=validated_insight_type,
             conn=conn
         )
         
@@ -361,13 +365,6 @@ async def get_ai_insights_with_recommendations(
         if validated_group_name:
             message_parts.append(f"group '{validated_group_name}'")
         message = f"Retrieved {len(ai_cards)} AI cards with recommendations for {', '.join(message_parts)}"
-        
-        # For backward compatibility, also include insight_type in response if it was provided
-        if insight_type:
-            identifier = validated_pi or validated_team_name or validated_group_name
-            identifier_key = 'team_name' if insight_type == InsightType.TEAM else ('group_name' if insight_type == InsightType.GROUP else 'pi')
-            response_data[insight_type] = identifier
-            response_data[identifier_key] = identifier
         
         return {
             "success": True,

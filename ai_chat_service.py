@@ -2322,11 +2322,6 @@ Results ({row_count} row{'s' if row_count != 1 else ''}):
         if conversation_id:
             headers["SA-ChatID"] = str(conversation_id)
         
-        # Add user question to metadata header (JSON format)
-        if request.question:
-            metadata = {"user_question": request.question}
-            headers["SA-Metadata"] = json.dumps(metadata)
-        
         return JSONResponse(content=response_data, headers=headers)
     
     except HTTPException:
