@@ -1568,6 +1568,17 @@ async def ai_chat(
         JSON response with AI answer and conversation details
     """
     try:
+        # Log POST body data (limited to 10KB)
+        try:
+            request_dict = request.model_dump() if hasattr(request, 'model_dump') else request.dict()
+            body_json = json.dumps(request_dict, indent=2, default=str)
+            if len(body_json) > 10000:
+                body_json = body_json[:10000] + "... [truncated]"
+            logger.info(f"[AI_CHAT_POST_BODY] POST body:\n{body_json}")
+            print(f"[AI_CHAT_POST_BODY] POST body:\n{body_json}")
+        except Exception as e:
+            logger.warning(f"[AI_CHAT_POST_BODY] Failed to log POST body: {e}")
+        
         # DEBUG: Log all AI chat parameters
         ai_chat_params = {
             "conversation_id": request.conversation_id,
