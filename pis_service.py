@@ -364,7 +364,7 @@ async def get_pis(conn: Connection = Depends(get_db_connection)):
         query = text(f"""
             SELECT * 
             FROM {config.PIS_TABLE} 
-            ORDER BY pi_name
+            ORDER BY start_date
         """)
         
         logger.info(f"Executing query to get all PIs from pis table")
