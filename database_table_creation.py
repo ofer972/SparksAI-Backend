@@ -475,20 +475,14 @@ DEFAULT_REPORT_DEFINITIONS = [
         "description": "Aggregates PI closure progress and WIP metrics for leadership review.",
         "default_filters": {
             "pi": None,
-            "project": None,
-            "issue_type": "Epic",
-            "team_name": None,
-            "plan_grace_period": 5
+            "team_name": None
         },
         "meta_schema": {
             "required_filters": [],
-            "optional_filters": ["pi", "project", "issue_type", "team_name", "plan_grace_period"],
+            "optional_filters": ["pi", "team_name"],
             "parameters": {
                 "pi": {"type": "string", "description": "PI name filter"},
-                "project": {"type": "string", "description": "Project key filter"},
-                "issue_type": {"type": "string", "description": "Issue type filter (default 'Epic')"},
-                "team_name": {"type": "string", "description": "Team name filter"},
-                "plan_grace_period": {"type": "integer", "description": "Grace period in days (default 5)"}
+                "team_name": {"type": "string", "description": "Team name filter"}
             },
             "allowed_views": ["pi-dashboard"]
         }

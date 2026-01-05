@@ -1641,11 +1641,13 @@ def _fetch_pi_metrics_summary(filters: Dict[str, Any], conn: Connection) -> Repo
     from database_team_metrics import resolve_team_names_from_filter
     
     pi_name = (filters.get("pi") or filters.get("pi_name") or "").strip() or None
-    project = (filters.get("project") or "").strip() or None
-    issue_type = (filters.get("issue_type") or "Epic").strip() or "Epic"
     team = (filters.get("team_name") or filters.get("team") or "").strip() or None
     is_group = filters.get("isGroup", False)
-    plan_grace_period = _parse_int(filters.get("plan_grace_period"), default=5)
+    
+    # Hardcoded: always use Epic for issue_type, no project filter, 5 days grace period
+    issue_type = "Epic"
+    project = None
+    plan_grace_period = 5
 
     # Fetch available teams from cache
     from groups_teams_cache import get_cached_teams, set_cached_teams, load_team_names_from_db, load_all_teams_from_db
@@ -1659,17 +1661,6 @@ def _fetch_pi_metrics_summary(filters: Dict[str, Any], conn: Connection) -> Repo
         # Also build full teams cache for future use
         all_teams = load_all_teams_from_db(conn)
         set_cached_teams({"teams": all_teams, "count": len(all_teams)})
-
-    # Fetch available issue types (always)
-    issue_types_query = text(
-        f"""
-        SELECT issue_type
-        FROM {config.ISSUE_TYPES_TABLE}
-        ORDER BY issue_type
-        """
-    )
-    issue_types_rows = conn.execute(issue_types_query).fetchall()
-    available_issue_types = [row[0] for row in issue_types_rows if row[0]]
 
     # Fetch available PIs (always)
     pis_query = text(
@@ -1713,10 +1704,6 @@ def _fetch_pi_metrics_summary(filters: Dict[str, Any], conn: Connection) -> Repo
         wip_where.append("team_name = :team_name")
         params["team_name"] = team
 
-    if project:
-        wip_where.append("project_key = :project")
-        params["project"] = project
-
     where_clause = " AND ".join(wip_where) if wip_where else "1=1"
 
     wip_query = text(
@@ -1751,17 +1738,14 @@ def _fetch_pi_metrics_summary(filters: Dict[str, Any], conn: Connection) -> Repo
         "in_progress_percentage": round(in_progress_percentage, 2),
         "pi": pi_name,
         "team_name": team,
-        "project": project,
     }
 
     # Build meta with appropriate fields
     meta = {
         "pi": pi_name,
-        "project": project,
         "issue_type": issue_type,
         "isGroup": is_group,
         "available_teams": available_teams,
-        "available_issue_types": available_issue_types,
         "available_pis": available_pis,
     }
     
