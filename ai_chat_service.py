@@ -1385,9 +1385,6 @@ async def fetch_dashboard_reports_data(
     top_bar_filters = dashboard_data.get('topBarFilters', {})
     report_filters = dashboard_data.get('reportFilters', {})
     
-    logger.info(f"Top bar filters: {json.dumps(top_bar_filters, indent=2, cls=DateTimeEncoder)}")
-    logger.info(f"Report filters: {json.dumps(report_filters, indent=2, cls=DateTimeEncoder)}")
-    
     def normalize_filters(filters: Dict[str, Any]) -> Dict[str, Any]:
         """
         Normalize frontend filter names to backend filter names.
@@ -1416,7 +1413,6 @@ async def fetch_dashboard_reports_data(
     
     # Normalize top bar filters
     top_bar_filters = normalize_filters(top_bar_filters)
-    logger.info(f"Normalized top bar filters: {json.dumps(top_bar_filters, indent=2, cls=DateTimeEncoder)}")
     
     # Normalize report filters (each report's filters)
     normalized_report_filters = {}
@@ -1459,25 +1455,13 @@ async def fetch_dashboard_reports_data(
                 logger.warning(f"Report '{report_id}' not found, skipping")
                 continue
             
-            # DEBUG: Log Report Name and Report ID
-            report_name_from_def = definition.get("report_name", "Unknown")
-            logger.info(f"[AI_CHAT_DEBUG] Fetching Report - Report ID: {report_id}, Report Name: {report_name_from_def}")
-            print(f"[AI_CHAT_DEBUG] Fetching Report - Report ID: {report_id}, Report Name: {report_name_from_def}")
-            
             # Merge filters: default < top bar < report-specific
             default_filters = definition.get("default_filters", {})
             merged_filters = {**default_filters, **top_bar_filters}
             
             # Apply report-specific filters if any
             if report_id in report_filters:
-                logger.info(f"  Applying report-specific filters: {report_filters[report_id]}")
                 merged_filters.update(report_filters[report_id])
-            
-            logger.info(f"  Merged filters: {json.dumps(merged_filters, indent=2, cls=DateTimeEncoder)}")
-            
-            # DEBUG: Log all parameters passed to the report
-            logger.info(f"[AI_CHAT_DEBUG] Report Parameters for '{report_name_from_def}' (ID: {report_id}): {json.dumps(merged_filters, indent=2, cls=DateTimeEncoder)}")
-            print(f"[AI_CHAT_DEBUG] Report Parameters for '{report_name_from_def}' (ID: {report_id}): {json.dumps(merged_filters, indent=2, cls=DateTimeEncoder)}")
             
             # Check cache first
             cache_key = generate_cache_key(report_id, merged_filters)
@@ -1485,16 +1469,10 @@ async def fetch_dashboard_reports_data(
             
             if cached_data:
                 logger.info(f"  ✓ Using cached data for report '{report_id}'")
-                # DEBUG: Log cache status
-                logger.info(f"[AI_CHAT_DEBUG] Report '{report_name_from_def}' (ID: {report_id}) - Data Source: CACHE")
-                print(f"[AI_CHAT_DEBUG] Report '{report_name_from_def}' (ID: {report_id}) - Data Source: CACHE")
                 report_data = cached_data
             else:
                 # Fetch fresh data
                 logger.info(f"  → Fetching fresh data for report '{report_id}'")
-                # DEBUG: Log resolve_report_data call
-                logger.info(f"[AI_CHAT_DEBUG] Report '{report_name_from_def}' (ID: {report_id}) - Data Source: resolve_report_data (fresh fetch)")
-                print(f"[AI_CHAT_DEBUG] Report '{report_name_from_def}' (ID: {report_id}) - Data Source: resolve_report_data (fresh fetch)")
                 resolved_payload = resolve_report_data(definition["data_source"], merged_filters, conn)
                 
                 report_data = {
@@ -1533,8 +1511,6 @@ async def fetch_dashboard_reports_data(
             formatted_report += f"Data: {json.dumps(report_result, indent=2, cls=DateTimeEncoder)}\n"
             
             formatted_reports.append(formatted_report)
-            report_char_count = len(formatted_report)
-            logger.info(f"[AI_CHAT_DASHBOARD] ✓ ReportName={report_name}: {report_char_count} chars")
             
         except Exception as e:
             logger.error(f"Error fetching report '{report_id}': {e}")
@@ -2354,8 +2330,6 @@ Results ({row_count} row{'s' if row_count != 1 else ''}):
             "model": llm_response.get("model"),
             "tokens_used": tokens_used
         }
-        logger.info(f"[AI_CHAT_DEBUG] AI Chat Response - Conversation ID: {conversation_id}, Response: {json.dumps(response_debug, indent=2, default=str)}")
-        print(f"[AI_CHAT_DEBUG] AI Chat Response - Conversation ID: {conversation_id}, Response: {json.dumps(response_debug, indent=2, default=str)}")
         
         # Add response headers for gateway audit logging
         headers = {}
