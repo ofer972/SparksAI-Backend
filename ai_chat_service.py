@@ -1459,6 +1459,11 @@ async def fetch_dashboard_reports_data(
                 logger.warning(f"Report '{report_id}' not found, skipping")
                 continue
             
+            # DEBUG: Log Report Name and Report ID
+            report_name_from_def = definition.get("report_name", "Unknown")
+            logger.info(f"[AI_CHAT_DEBUG] Fetching Report - Report ID: {report_id}, Report Name: {report_name_from_def}")
+            print(f"[AI_CHAT_DEBUG] Fetching Report - Report ID: {report_id}, Report Name: {report_name_from_def}")
+            
             # Merge filters: default < top bar < report-specific
             default_filters = definition.get("default_filters", {})
             merged_filters = {**default_filters, **top_bar_filters}
@@ -1470,16 +1475,26 @@ async def fetch_dashboard_reports_data(
             
             logger.info(f"  Merged filters: {json.dumps(merged_filters, indent=2, cls=DateTimeEncoder)}")
             
+            # DEBUG: Log all parameters passed to the report
+            logger.info(f"[AI_CHAT_DEBUG] Report Parameters for '{report_name_from_def}' (ID: {report_id}): {json.dumps(merged_filters, indent=2, cls=DateTimeEncoder)}")
+            print(f"[AI_CHAT_DEBUG] Report Parameters for '{report_name_from_def}' (ID: {report_id}): {json.dumps(merged_filters, indent=2, cls=DateTimeEncoder)}")
+            
             # Check cache first
             cache_key = generate_cache_key(report_id, merged_filters)
             cached_data = get_cached_report(cache_key)
             
             if cached_data:
                 logger.info(f"  ✓ Using cached data for report '{report_id}'")
+                # DEBUG: Log cache status
+                logger.info(f"[AI_CHAT_DEBUG] Report '{report_name_from_def}' (ID: {report_id}) - Data Source: CACHE")
+                print(f"[AI_CHAT_DEBUG] Report '{report_name_from_def}' (ID: {report_id}) - Data Source: CACHE")
                 report_data = cached_data
             else:
                 # Fetch fresh data
                 logger.info(f"  → Fetching fresh data for report '{report_id}'")
+                # DEBUG: Log resolve_report_data call
+                logger.info(f"[AI_CHAT_DEBUG] Report '{report_name_from_def}' (ID: {report_id}) - Data Source: resolve_report_data (fresh fetch)")
+                print(f"[AI_CHAT_DEBUG] Report '{report_name_from_def}' (ID: {report_id}) - Data Source: resolve_report_data (fresh fetch)")
                 resolved_payload = resolve_report_data(definition["data_source"], merged_filters, conn)
                 
                 report_data = {
@@ -1553,6 +1568,22 @@ async def ai_chat(
         JSON response with AI answer and conversation details
     """
     try:
+        # DEBUG: Log all AI chat parameters
+        ai_chat_params = {
+            "conversation_id": request.conversation_id,
+            "user_id": request.user_id,
+            "question": request.question[:100] + "..." if request.question and len(request.question) > 100 else request.question,
+            "selected_team": request.selected_team,
+            "selected_pi": request.selected_pi,
+            "chat_type": request.chat_type,
+            "prompt_name": request.prompt_name,
+            "insights_id": request.insights_id,
+            "recommendation_id": request.recommendation_id,
+            "dashboard_data": "present" if request.dashboard_data else "not present"
+        }
+        logger.info(f"[AI_CHAT_DEBUG] AI Chat Request Parameters: {json.dumps(ai_chat_params, indent=2, default=str)}")
+        print(f"[AI_CHAT_DEBUG] AI Chat Request Parameters: {json.dumps(ai_chat_params, indent=2, default=str)}")
+        
         # Validate question length
         if request.question and len(request.question) > MAX_QUESTION_LENGTH:
             raise HTTPException(
@@ -2302,6 +2333,18 @@ Results ({row_count} row{'s' if row_count != 1 else ''}):
             },
             "message": "AI chat response generated successfully"
         }
+        
+        # DEBUG: Log response including conversation_id
+        response_debug = {
+            "conversation_id": conversation_id,
+            "success": response_data["success"],
+            "response_length": len(ai_response) if ai_response else 0,
+            "provider": llm_response.get("provider"),
+            "model": llm_response.get("model"),
+            "tokens_used": tokens_used
+        }
+        logger.info(f"[AI_CHAT_DEBUG] AI Chat Response - Conversation ID: {conversation_id}, Response: {json.dumps(response_debug, indent=2, default=str)}")
+        print(f"[AI_CHAT_DEBUG] AI Chat Response - Conversation ID: {conversation_id}, Response: {json.dumps(response_debug, indent=2, default=str)}")
         
         # Add response headers for gateway audit logging
         headers = {}
