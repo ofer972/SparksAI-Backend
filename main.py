@@ -26,6 +26,7 @@ from issues_service import issues_router
 from sprints_service import sprints_router
 from insight_types_service import insight_types_router
 from etl_settings_service import etl_settings_router
+from pi_goals_service import pi_goals_router
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -208,6 +209,7 @@ app.include_router(sprints_router, prefix="/api/v1", tags=["sprints"])
 app.include_router(insight_types_router, prefix="/api/v1", tags=["insight-types"])
 app.include_router(reports_router, prefix="/api/v1", tags=["reports"])
 app.include_router(etl_settings_router, prefix="/api/v1", tags=["etl-settings"])
+app.include_router(pi_goals_router, prefix="/api/v1", tags=["pi-goals"])
 
 @app.on_event("startup")
 async def startup_event():
