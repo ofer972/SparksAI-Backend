@@ -1053,14 +1053,14 @@ async def get_epic_inbound_dependency_load_by_quarter(
         
         for record in records:
             assignee_team = record.get("assignee_team")
-            number_of_relying_teams = record.get("number_of_relying_teams", 0)
+            volume_of_work_relied_upon = record.get("volume_of_work_relied_upon", 0)
             
             if assignee_team:
                 unique_teams.add(assignee_team)
             
-            # Sum the number_of_relying_teams (dependencies) for all records
-            if number_of_relying_teams is not None:
-                total_dependencies += number_of_relying_teams
+            # Sum the volume_of_work_relied_upon (dependencies) for all records
+            if volume_of_work_relied_upon is not None:
+                total_dependencies += volume_of_work_relied_upon
         
         # Calculate average: total dependencies / number of teams
         number_of_teams = len(unique_teams) if unique_teams else 0
@@ -1130,12 +1130,37 @@ async def get_epic_outbound_dependency_metrics_by_quarter(
         # Call shared function to fetch data
         records = fetch_epic_outbound_dependency_data(pi, team_names_list, conn)
         
+        # Calculate average number of dependencies per team
+        # Count unique teams in the response
+        unique_teams = set()
+        total_dependencies = 0
+        
+        for record in records:
+            owned_team = record.get("owned_team")
+            number_of_dependent_issues = record.get("number_of_dependent_issues", 0)
+            
+            if owned_team:
+                unique_teams.add(owned_team)
+            
+            # Sum the number_of_dependent_issues (dependencies) for all records
+            if number_of_dependent_issues is not None:
+                total_dependencies += number_of_dependent_issues
+        
+        # Calculate average: total dependencies / number of teams
+        number_of_teams = len(unique_teams) if unique_teams else 0
+        average_number_of_dependencies_per_team = (
+            total_dependencies / number_of_teams 
+            if number_of_teams > 0 
+            else 0
+        )
+        
         # Build response
         response = {
             "success": True,
             "data": records,
             "count": len(records),
-            "message": f"Retrieved {len(records)} epic outbound dependency metrics records"
+            "message": f"Retrieved {len(records)} epic outbound dependency metrics records",
+            "average_number_of_dependencies_per_team": round(average_number_of_dependencies_per_team, 2)
         }
         
         # Add metadata based on what was filtered
