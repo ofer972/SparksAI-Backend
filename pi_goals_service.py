@@ -14,8 +14,17 @@ import logging
 import json
 from database_connection import get_db_connection
 from database_team_metrics import resolve_team_names_from_filter
-from database_general import get_prompt_by_email_and_name
+from database_general import (
+    get_prompt_by_email_and_name,
+    create_pi_goal,
+    upsert_pi_goal,
+    get_pi_goals_filtered,
+    get_pi_goal_by_id,
+    update_pi_goal_by_id,
+    delete_pi_goal_by_id
+)
 from agent_llm_service import call_llm_service_process_single
+from pydantic import BaseModel
 import config
 
 logger = logging.getLogger(__name__)
@@ -316,22 +325,213 @@ def validate_llm_response(data: Dict[str, Any]) -> bool:
     return True
 
 
-@pi_goals_router.get("/pi-goals")
-async def get_pi_goals(
-    pi: Optional[str] = Query(None, description="PI name (optional, uses current PI if not provided)"),
+def enrich_epic_keys_with_issue_details(
+    goals: List[Dict[str, Any]],
+    conn: Connection
+) -> List[Dict[str, Any]]:
+    """
+    Enrich epic_keys in goals with status, summary, and progress_percent from jira_issues.
+    
+    Args:
+        goals: List of goal dictionaries with epic_keys arrays
+        conn: Database connection
+        
+    Returns:
+        List of goals with enriched epic_keys (array of objects instead of strings)
+    """
+    # Collect all unique epic_keys from all goals
+    all_epic_keys = set()
+    for goal in goals:
+        epic_keys = goal.get("epic_keys", [])
+        if isinstance(epic_keys, list):
+            all_epic_keys.update(epic_keys)
+    
+    if not all_epic_keys:
+        # No epic_keys to enrich, return goals as-is
+        return goals
+    
+    # Single batch query to fetch all epic details
+    epic_keys_list = list(all_epic_keys)
+    placeholders = ", ".join([f":epic_key_{i}" for i in range(len(epic_keys_list))])
+    params = {f"epic_key_{i}": key for i, key in enumerate(epic_keys_list)}
+    
+    query = text(f"""
+        SELECT 
+            issue_key,
+            status,
+            summary,
+            number_of_children,
+            number_of_completed_children
+        FROM {config.WORK_ITEMS_TABLE}
+        WHERE issue_key IN ({placeholders})
+    """)
+    
+    result = conn.execute(query, params)
+    rows = result.fetchall()
+    
+    # Build lookup dictionary: {issue_key: {status, summary, progress_percent}}
+    epic_details_lookup = {}
+    for row in rows:
+        issue_key = row[0]
+        status = row[1] or ""
+        summary = row[2] or ""
+        number_of_children = row[3] if row[3] is not None else 0
+        number_of_completed_children = row[4] if row[4] is not None else 0
+        
+        # Calculate progress_percent
+        if number_of_children > 0:
+            progress_percent = (number_of_completed_children / number_of_children) * 100
+        else:
+            progress_percent = 0.0
+        
+        epic_details_lookup[issue_key] = {
+            "status": status,
+            "summary": summary,
+            "progress_percent": round(progress_percent, 2)
+        }
+    
+    # Enrich goals with epic details
+    enriched_goals = []
+    for goal in goals:
+        enriched_goal = goal.copy()
+        epic_keys = goal.get("epic_keys", [])
+        
+        if isinstance(epic_keys, list):
+            # Transform array of strings to array of objects
+            enriched_epic_keys = []
+            for epic_key in epic_keys:
+                if epic_key in epic_details_lookup:
+                    epic_details = epic_details_lookup[epic_key]
+                    enriched_epic_keys.append({
+                        "issue_key": epic_key,
+                        "status": epic_details["status"],
+                        "summary": epic_details["summary"],
+                        "progress_percent": epic_details["progress_percent"]
+                    })
+                else:
+                    # Epic not found in jira_issues, include with null values
+                    enriched_epic_keys.append({
+                        "issue_key": epic_key,
+                        "status": None,
+                        "summary": None,
+                        "progress_percent": None
+                    })
+            enriched_goal["epic_keys"] = enriched_epic_keys
+        else:
+            # Keep as-is if not a list
+            enriched_goal["epic_keys"] = epic_keys
+        
+        enriched_goals.append(enriched_goal)
+    
+    return enriched_goals
+
+
+def format_goals_response(
+    goals: List[Dict[str, Any]], 
+    pi: str,
+    group_name: Optional[str] = None,
+    team_name: Optional[str] = None,
+    isGroup: bool = False
+) -> Dict[str, Any]:
+    """
+    Format flat list of goals into response structure.
+    
+    Args:
+        goals: Flat list of goal dictionaries from database
+        pi: PI name
+        group_name: Group name if filtering by group
+        team_name: Team name if filtering by team
+        isGroup: If true, team_name is treated as group name
+        
+    Returns:
+        Dictionary with formatted response structure:
+        - If isGroup=true: {"group_goals": [...], "team_goals": [...]}
+        - If team_name only: {"team_goals": [...]} (no overall_goals)
+        - If no filter: {"overall_goals": [...], "team_goals": [...]}
+    """
+    # Separate goals by type
+    overall_goals = []
+    group_goals = []
+    team_goals_dict = {}  # Group by team_name
+    
+    for goal in goals:
+        goal_type = goal.get("goal_type")
+        goal_team_name = goal.get("team_name")
+        goal_group_name = goal.get("group_name")
+        
+        if goal_type == "overall":
+            overall_goals.append(goal)
+        elif goal_type == "group":
+            group_goals.append(goal)
+        elif goal_type == "team" and goal_team_name:
+            if goal_team_name not in team_goals_dict:
+                team_goals_dict[goal_team_name] = []
+            team_goals_dict[goal_team_name].append(goal)
+    
+    # Build team_goals array (grouped by team_name)
+    team_goals_response = []
+    for team_name_key, team_goals_list in team_goals_dict.items():
+        team_goals_response.append({
+            "team_name": team_name_key,
+            "goals": team_goals_list
+        })
+    
+    # Build response based on filters
+    response_data = {"pi": pi}
+    
+    if isGroup and group_name:
+        # Case A: Group filter - return group_goals and team_goals
+        response_data["group_goals"] = group_goals
+        response_data["team_goals"] = team_goals_response
+    elif team_name and not isGroup:
+        # Case B: Team filter only - return only team_goals (omit overall_goals)
+        response_data["team_goals"] = team_goals_response
+    else:
+        # Case C: No filter - return overall_goals and team_goals
+        response_data["overall_goals"] = overall_goals
+        response_data["team_goals"] = team_goals_response
+    
+    return response_data
+
+
+# Pydantic models for request/response
+class PIGoalCreateRequest(BaseModel):
+    pi: str
+    team_name: Optional[str] = None
+    group_name: Optional[str] = None
+    goal_text: str
+    epic_keys: List[str]
+    status: Optional[str] = "Draft"
+    priority_bv: Optional[int] = None
+
+
+class PIGoalUpdateRequest(BaseModel):
+    pi: Optional[str] = None
+    team_name: Optional[str] = None
+    group_name: Optional[str] = None
+    goal_text: Optional[str] = None
+    epic_keys: Optional[List[str]] = None
+    status: Optional[str] = None
+    priority_bv: Optional[int] = None
+
+
+@pi_goals_router.post("/pi-goals/generate")
+async def generate_ai_pi_goals(
+    pi: Optional[str] = Query(None, description="PI (optional, uses current PI if not provided)"),
     team_name: Optional[str] = Query(None, description="Team name or group name (if isGroup=true)"),
     isGroup: bool = Query(False, description="If true, team_name is treated as a group name"),
     quarter: Optional[str] = Query(None, description="Quarter parameter (reserved for future use)"),
     conn: Connection = Depends(get_db_connection)
 ):
     """
-    Endpoint to generate PI goals using LLM analysis of epics.
+    Generate PI goals using LLM analysis of epics and save to database.
     
     This endpoint:
     1. Gets current PI if not provided
     2. Fetches all epics for the PI (optionally filtered by team)
     3. Sends formatted prompt to LLM
-    4. Parses and returns LLM response with PI goals
+    4. Parses LLM response and saves all goals to database with status "Draft-AI"
+    5. Returns the generated goals
     
     Args:
         pi: Optional PI name (uses current PI if not provided)
@@ -341,7 +541,7 @@ async def get_pi_goals(
         conn: Database connection
         
     Returns:
-        JSON response with overall_goals and team_goals
+        JSON response with overall_goals and team_goals (saved to database)
     """
     try:
         # Step 1: Resolve PI (get current if not provided)
@@ -449,28 +649,94 @@ async def get_pi_goals(
                 detail="LLM response does not match expected structure"
             )
         
-        # Step 9: Build and return response
+        # Step 9: Save goals to database and build response
         logger.info("Successfully parsed and validated LLM response")
         
-        # Print per team goals (as requested)
-        if "team_goals" in parsed_data:
-            for team_goal in parsed_data["team_goals"]:
-                team_name = team_goal.get("team_name", "Unknown")
-                goals = team_goal.get("goals", [])
-                logger.info(f"Team {team_name}: {len(goals)} goal(s)")
-                for i, goal in enumerate(goals, 1):
-                    goal_title = goal.get("goal", "N/A")
-                    epic_count = len(goal.get("epic_keys", []))
-                    logger.info(f"  Goal {i}: {goal_title} ({epic_count} epics)")
+        # Determine group_name from parameters (if isGroup=true, team_name parameter is actually group_name)
+        group_name_for_saving = None
+        if isGroup and team_name:
+            group_name_for_saving = team_name
         
+        saved_overall_goals = []
+        saved_team_goals_by_team = {}  # Group by team_name for response format
+        
+        # Save overall goals using UPSERT (ai=true)
+        overall_goals_from_llm = parsed_data.get("overall_goals", [])
+        logger.info(f"Upserting {len(overall_goals_from_llm)} overall goals")
+        for goal_index, goal in enumerate(overall_goals_from_llm, start=1):
+            try:
+                goal_data = {
+                    "pi_name": resolved_pi,
+                    "team_name": None,
+                    "group_name": group_name_for_saving,  # Set if isGroup=true
+                    "goal_text": goal.get("goal", ""),
+                    "epic_keys": goal.get("epic_keys", []),
+                    "status": "Draft-AI",
+                    "ai": True,  # AI-generated goal
+                    "is_overall": True,  # Flag for goal_type determination
+                    "goal_number": goal_index  # Assign goal_number based on order (1, 2, 3, ...)
+                }
+                saved_goal = upsert_pi_goal(goal_data, conn)
+                if saved_goal:
+                    saved_overall_goals.append(saved_goal)
+                    logger.info(f"Successfully upserted overall goal with ID {saved_goal.get('id')} (goal_number={goal_index})")
+                else:
+                    logger.warning("upsert_pi_goal returned None for overall goal")
+            except Exception as e:
+                logger.error(f"Error upserting overall goal: {e}", exc_info=True)
+        
+        # Save team goals using UPSERT (ai=true)
+        # When isGroup=true, team goals should NOT have group_name (mutually exclusive)
+        team_goals_from_llm = parsed_data.get("team_goals", [])
+        logger.info(f"Upserting team goals from {len(team_goals_from_llm)} teams")
+        for team_goal in team_goals_from_llm:
+            team_name_from_llm = team_goal.get("team_name")
+            if team_name_from_llm not in saved_team_goals_by_team:
+                saved_team_goals_by_team[team_name_from_llm] = []
+            
+            goals_for_team = team_goal.get("goals", [])
+            logger.info(f"Upserting {len(goals_for_team)} goals for team {team_name_from_llm}")
+            for goal_index, goal in enumerate(goals_for_team, start=1):
+                try:
+                    goal_data = {
+                        "pi_name": resolved_pi,
+                        "team_name": team_name_from_llm,
+                        "group_name": None,  # Team goals never have group_name (mutually exclusive)
+                        "goal_text": goal.get("goal", ""),
+                        "epic_keys": goal.get("epic_keys", []),
+                        "status": "Draft-AI",
+                        "ai": True,  # AI-generated goal
+                        "is_overall": False,  # Flag for goal_type determination
+                        "goal_number": goal_index  # Assign goal_number based on order (1, 2, 3, 4)
+                    }
+                    saved_goal = upsert_pi_goal(goal_data, conn)
+                    if saved_goal:
+                        saved_team_goals_by_team[team_name_from_llm].append(saved_goal)
+                        logger.info(f"Successfully upserted team goal with ID {saved_goal.get('id')} for team {team_name_from_llm} (goal_number={goal_index})")
+                    else:
+                        logger.warning(f"upsert_pi_goal returned None for team goal of {team_name_from_llm}")
+                except Exception as e:
+                    logger.error(f"Error upserting team goal for {team_name_from_llm}: {e}", exc_info=True)
+        
+        # Collect all saved goals into a flat list for formatting
+        all_saved_goals = saved_overall_goals.copy()
+        for team_name_key, goals_list in saved_team_goals_by_team.items():
+            all_saved_goals.extend(goals_list)
+        
+        logger.info(f"Response summary: {len(saved_overall_goals)} overall goals, {len(saved_team_goals_by_team)} teams with goals")
+        
+        # Print per team goals (as requested)
+        for team_name, goals in saved_team_goals_by_team.items():
+            logger.info(f"Team {team_name}: {len(goals)} goal(s)")
+            for i, goal in enumerate(goals, 1):
+                goal_title = goal.get("goal_text", "N/A")
+                epic_count = len(goal.get("epic_keys", []))
+                logger.info(f"  Goal {i}: {goal_title} ({epic_count} epics)")
+        
+        # Return generic success response (no goal details)
         return {
             "success": True,
-            "data": {
-                "pi": resolved_pi,
-                "overall_goals": parsed_data.get("overall_goals", []),
-                "team_goals": parsed_data.get("team_goals", [])
-            },
-            "message": f"Generated PI goals for {resolved_pi}"
+            "message": f"Generated and saved PI goals for {resolved_pi}"
         }
     
     except HTTPException:
@@ -481,4 +747,277 @@ async def get_pi_goals(
             status_code=500,
             detail=f"Failed to generate PI goals: {str(e)}"
         )
+
+
+@pi_goals_router.get("/pi-goals")
+async def get_pi_goals(
+    pi: str = Query(..., description="PI (mandatory)"),
+    ai: Optional[bool] = Query(None, description="Filter by AI-generated goals (None = all goals, True = AI only, False = user only)"),
+    team_name: Optional[str] = Query(None, description="Team name or group name (if isGroup=true)"),
+    isGroup: bool = Query(False, description="If true, team_name is treated as a group name"),
+    conn: Connection = Depends(get_db_connection)
+):
+    """
+    Get PI goals with optional filters.
+    
+    Args:
+        pi: PI name (mandatory)
+        ai: Filter by AI-generated goals (default: False)
+        team_name: Team name or group name filter
+        isGroup: If true, team_name is treated as a group name
+        conn: Database connection
+        
+    Returns:
+        JSON response with formatted goals structure:
+        - If isGroup=true: {"group_goals": [...], "team_goals": [...]}
+        - If team_name only: {"team_goals": [...]}
+        - If no filter: {"overall_goals": [...], "team_goals": [...]}
+    """
+    try:
+        from database_team_metrics import resolve_team_names_from_filter
+        
+        # Resolve team names if team_name is provided
+        team_names_list = None
+        group_name_for_response = None
+        
+        if team_name:
+            if isGroup:
+                # team_name is actually a group name
+                group_name_for_response = team_name
+                team_names_list = resolve_team_names_from_filter(team_name, isGroup, conn)
+            else:
+                # Single team
+                team_names_list = resolve_team_names_from_filter(team_name, isGroup, conn)
+        
+        # Fetch goals from database with proper SQL filtering
+        filtered_goals = []
+        
+        if isGroup and group_name_for_response:
+            # For group filter: fetch group goals and team goals for teams in group
+            # Fetch group goals
+            group_goals = get_pi_goals_filtered(
+                pi=pi,
+                goal_type="group",
+                group_name=group_name_for_response,
+                ai=ai,
+                limit=100,
+                conn=conn
+            )
+            filtered_goals.extend(group_goals)
+            
+            # Fetch team goals for teams in the group
+            if team_names_list:
+                team_goals = get_pi_goals_filtered(
+                    pi=pi,
+                    goal_type="team",
+                    team_names_list=team_names_list,
+                    ai=ai,
+                    limit=1000,
+                    conn=conn
+                )
+                filtered_goals.extend(team_goals)
+        elif team_name and not isGroup:
+            # For team filter: fetch only goals for this team
+            filtered_goals = get_pi_goals_filtered(
+                pi=pi,
+                goal_type="team",
+                team_name=team_name,
+                ai=ai,
+                limit=100,
+                conn=conn
+            )
+        else:
+            # No filter: fetch overall and team goals (but not group goals)
+            overall_goals = get_pi_goals_filtered(
+                pi=pi,
+                goal_type="overall",
+                ai=ai,
+                limit=100,
+                conn=conn
+            )
+            team_goals = get_pi_goals_filtered(
+                pi=pi,
+                goal_type="team",
+                ai=ai,
+                limit=1000,
+                conn=conn
+            )
+            filtered_goals = overall_goals + team_goals
+        
+        # Enrich epic_keys with issue details (status, summary, progress_percent)
+        enriched_goals = enrich_epic_keys_with_issue_details(filtered_goals, conn)
+        
+        # Format response using helper function
+        response_data = format_goals_response(
+            goals=enriched_goals,
+            pi=pi,
+            group_name=group_name_for_response,
+            team_name=team_name if not isGroup else None,
+            isGroup=isGroup
+        )
+        
+        return {
+            "success": True,
+            "data": response_data,
+            "message": f"Retrieved PI goals for {pi}"
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error fetching PI goals: {e}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to fetch PI goals: {str(e)}"
+        )
+
+
+@pi_goals_router.post("/pi-goals")
+async def create_pi_goal_endpoint(
+    request: PIGoalCreateRequest,
+    conn: Connection = Depends(get_db_connection)
+):
+    """
+    Manually create a PI goal.
+    
+    goal_type is automatically determined:
+    - If team_name provided → goal_type = 'team'
+    - If group_name provided → goal_type = 'group'
+    - If neither → goal_type = 'overall'
+    
+    Args:
+        request: PIGoalCreateRequest with goal data
+        conn: Database connection
+        
+    Returns:
+        JSON response with created goal
+    """
+    try:
+        # Determine if this is an overall goal
+        is_overall = not request.team_name
+        
+        goal_data = {
+            "pi_name": request.pi,  # Map 'pi' from request to 'pi_name' for database
+            "team_name": request.team_name,
+            "group_name": request.group_name,
+            "goal_text": request.goal_text,
+            "epic_keys": request.epic_keys,
+            "status": request.status or "Draft",
+            "priority_bv": request.priority_bv,
+            "ai": False,  # User-created goals always have ai=false
+            "is_overall": is_overall
+        }
+        
+        created_goal = create_pi_goal(goal_data, conn)
+        
+        return {
+            "success": True,
+            "data": {
+                "goal": created_goal
+            },
+            "message": f"PI goal created with ID {created_goal.get('id')}"
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error creating PI goal: {e}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to create PI goal: {str(e)}"
+        )
+
+
+@pi_goals_router.patch("/pi-goals/{goal_id}")
+async def update_pi_goal_endpoint(
+    goal_id: int,
+    request: PIGoalUpdateRequest,
+    conn: Connection = Depends(get_db_connection)
+):
+    """
+    Update an existing PI goal.
+    
+    If team_name or group_name is updated, goal_type is recalculated automatically.
+    
+    Args:
+        goal_id: ID of the goal to update
+        request: PIGoalUpdateRequest with fields to update
+        conn: Database connection
+        
+    Returns:
+        JSON response with updated goal
+    """
+    try:
+        updates = request.model_dump(exclude_unset=True)
+        
+        # Map 'pi' from request to 'pi_name' for database
+        if "pi" in updates:
+            updates["pi_name"] = updates.pop("pi")
+        
+        if not updates:
+            raise HTTPException(
+                status_code=400,
+                detail="No fields provided for update"
+            )
+        
+        updated_goal = update_pi_goal_by_id(goal_id, updates, conn)
+        
+        if not updated_goal:
+            raise HTTPException(
+                status_code=404,
+                detail=f"PI goal with ID {goal_id} not found"
+            )
+        
+        return {
+            "success": True,
+            "data": {
+                "goal": updated_goal
+            },
+            "message": f"PI goal {goal_id} updated successfully"
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error updating PI goal {goal_id}: {e}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to update PI goal: {str(e)}"
+        )
+
+
+@pi_goals_router.delete("/pi-goals/{goal_id}")
+async def delete_pi_goal_endpoint(
+    goal_id: int,
+    conn: Connection = Depends(get_db_connection)
+):
+    """
+    Delete a PI goal by ID.
+    
+    Args:
+        goal_id: ID of the goal to delete
+        conn: Database connection
+        
+    Returns:
+        JSON response confirming deletion
+    """
+    try:
+        deleted = delete_pi_goal_by_id(goal_id, conn)
+        
+        if not deleted:
+            raise HTTPException(
+                status_code=404,
+                detail=f"PI goal with ID {goal_id} not found"
+            )
+        
+        return {
+            "success": True,
+            "message": f"PI goal {goal_id} deleted successfully"
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error deleting PI goal {goal_id}: {e}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to delete PI goal: {str(e)}"
+        )
+
 

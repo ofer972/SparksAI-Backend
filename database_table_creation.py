@@ -1789,6 +1789,85 @@ def insert_default_report_definitions(engine=None):
         traceback.print_exc()
 
 
+def create_pi_goals_table_if_not_exists(engine=None) -> bool:
+    """Create pi_goals table if it doesn't exist"""
+    global _tables_initialized
+    if _tables_initialized:
+        return True
+    
+    import database_connection
+    
+    if engine is None:
+        engine = database_connection.get_db_engine()
+    if engine is None:
+        print("Warning: Database engine not available, cannot create pi_goals table")
+        return False
+    
+    try:
+        with engine.connect() as conn:
+            check_table_sql = """
+            SELECT EXISTS (
+                SELECT FROM information_schema.tables 
+                WHERE table_schema = 'public' 
+                AND table_name = 'pi_goals'
+            );
+            """
+            result = conn.execute(text(check_table_sql))
+            table_exists = result.scalar()
+            
+            if not table_exists:
+                print("Creating pi_goals table...")
+                create_table_sql = """
+                CREATE TABLE public.pi_goals (
+                    id SERIAL PRIMARY KEY,
+                    pi_name VARCHAR(255) NOT NULL,
+                    goal_type VARCHAR(20) NOT NULL,
+                    team_name VARCHAR(255) NULL,
+                    group_name VARCHAR(255) NULL,
+                    goal_text TEXT NOT NULL,
+                    epic_keys JSONB NULL,
+                    status VARCHAR(25) NOT NULL,
+                    priority_bv INTEGER NULL,
+                    goal_number INTEGER NOT NULL DEFAULT 1,
+                    ai BOOLEAN NOT NULL DEFAULT false,
+                    created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP NOT NULL,
+                    updated_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP NOT NULL
+                );
+                
+                CREATE INDEX idx_pi_goals_pi_name ON public.pi_goals(pi_name);
+                CREATE INDEX idx_pi_goals_team_name ON public.pi_goals(team_name);
+                CREATE INDEX idx_pi_goals_group_name ON public.pi_goals(group_name);
+                CREATE INDEX idx_pi_goals_status ON public.pi_goals(status);
+                CREATE INDEX idx_pi_goals_pi_type ON public.pi_goals(pi_name, goal_type);
+                
+                -- Unique constraint on (pi_name, goal_type, team_name, group_name, ai, goal_number) with NULL handling
+                -- COALESCE converts NULL to empty string for comparison
+                -- Allows same PI/team/group to have both AI goals (ai=true) and user goals (ai=false)
+                -- goal_number allows multiple goals per team/group/PI (1, 2, 3, 4...)
+                -- This is a functional unique index that handles NULLs properly
+                CREATE UNIQUE INDEX idx_pi_goals_unique ON public.pi_goals(
+                    pi_name, 
+                    goal_type, 
+                    COALESCE(team_name, ''), 
+                    COALESCE(group_name, ''),
+                    ai,
+                    goal_number
+                );
+                """
+                conn.execute(text(create_table_sql))
+                conn.commit()
+                print("pi_goals table created successfully")
+            else:
+                print("pi_goals table already exists")
+            
+            return True
+            
+    except Exception as e:
+        print(f"Error creating pi_goals table: {e}")
+        traceback.print_exc()
+        return False
+
+
 def initialize_database_tables_with_engine(engine) -> None:
     """Initialize all database tables using provided engine - should be called only once on startup"""
     global _tables_initialized
@@ -1808,6 +1887,7 @@ def initialize_database_tables_with_engine(engine) -> None:
     create_chat_history_table_if_not_exists(engine)
     create_insight_types_table_if_not_exists(engine)
     create_report_definitions_table_if_not_exists(engine)
+    create_pi_goals_table_if_not_exists(engine)
     _tables_initialized = True
     print("=== DATABASE TABLES INITIALIZATION COMPLETE ===")
 

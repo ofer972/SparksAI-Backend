@@ -10,6 +10,7 @@ from sqlalchemy.engine import Connection
 from typing import List, Dict, Any, Optional
 import logging
 import os
+import json
 import config
 
 logger = logging.getLogger(__name__)
@@ -1171,6 +1172,521 @@ def delete_recommendation_by_id(recommendation_id: int, conn: Connection = None)
         return result.rowcount > 0
     except Exception as e:
         logger.error(f"Error deleting recommendation {recommendation_id}: {e}")
+        conn.rollback()
+        raise e
+
+
+# -------------------------------------------------------------
+# CRUD helpers for pi_goals
+# -------------------------------------------------------------
+def determine_goal_type(team_name: Optional[str], group_name: Optional[str], is_overall: bool = False) -> str:
+    """
+    Determine goal_type based on team_name and group_name.
+    
+    Args:
+        team_name: Optional team name
+        group_name: Optional group name
+        is_overall: If True, this is an overall goal (not team-specific)
+        
+    Returns:
+        'team', 'group', or 'overall'
+    """
+    if is_overall:
+        # For overall goals: if group_name provided, it's 'group', otherwise 'overall'
+        if group_name:
+            return 'group'
+        else:
+            return 'overall'
+    else:
+        # For team goals: always 'team' (even if group_name also exists)
+        if team_name:
+            return 'team'
+        else:
+            return 'overall'
+
+
+def _get_next_goal_number(
+    pi_name: str,
+    goal_type: str,
+    team_name: Optional[str],
+    group_name: Optional[str],
+    ai: bool,
+    conn: Connection
+) -> int:
+    """
+    Get the next available goal_number for a given (PI, goal_type, team, group, ai) combination.
+    
+    Args:
+        pi_name: PI name
+        goal_type: Goal type ('overall', 'team', 'group')
+        team_name: Optional team name
+        group_name: Optional group name
+        ai: AI flag
+        conn: Database connection
+        
+    Returns:
+        Next available goal_number (1 if no goals exist, max + 1 otherwise)
+    """
+    query = text(f"""
+        SELECT COALESCE(MAX(goal_number), 0) + 1
+        FROM {config.PI_GOALS_TABLE}
+        WHERE pi_name = :pi_name
+          AND goal_type = :goal_type
+          AND COALESCE(team_name, '') = COALESCE(:team_name, '')
+          AND COALESCE(group_name, '') = COALESCE(:group_name, '')
+          AND ai = :ai
+    """)
+    
+    params = {
+        "pi_name": pi_name,
+        "goal_type": goal_type,
+        "team_name": team_name,
+        "group_name": group_name,
+        "ai": ai
+    }
+    
+    result = conn.execute(query, params)
+    next_number = result.scalar()
+    return next_number if next_number else 1
+
+
+def _prepare_goal_data_for_db(data: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    Prepare goal data for database insertion/update.
+    Determines goal_type and converts epic_keys to JSON string.
+    Does NOT set goal_number - that should be set separately.
+    
+    Args:
+        data: Dictionary with goal data (pi_name, team_name, group_name, goal_text, epic_keys, etc.)
+        
+    Returns:
+        Dictionary ready for database insertion with goal_type and converted epic_keys
+    """
+    team_name = data.get("team_name")
+    group_name = data.get("group_name")
+    is_overall = data.get("is_overall", False)
+    
+    # Determine goal_type automatically
+    goal_type = determine_goal_type(team_name, group_name, is_overall)
+    
+    # Prepare data
+    goal_data = {
+        "pi_name": data.get("pi_name"),
+        "goal_type": goal_type,
+        "team_name": team_name,
+        "group_name": group_name,
+        "goal_text": data.get("goal_text"),
+        "epic_keys": json.dumps(data.get("epic_keys", [])) if data.get("epic_keys") is not None else None,  # Convert list to JSON string, allow NULL
+        "status": data.get("status", "Draft"),
+        "priority_bv": data.get("priority_bv"),  # Can be None
+        "ai": data.get("ai", False)  # Default to False
+    }
+    
+    # goal_number is set separately (auto-assigned or from data)
+    if "goal_number" in data:
+        goal_data["goal_number"] = data.get("goal_number")
+    
+    return goal_data
+
+
+def create_pi_goal(data: Dict[str, Any], conn: Connection = None) -> Dict[str, Any]:
+    """
+    Insert a new PI goal and return the created row.
+    goal_type is automatically determined from team_name/group_name.
+    goal_number is auto-assigned if not provided.
+    team_name and group_name can coexist (for team goals within a group).
+    For user-created goals, ai is always False.
+    """
+    try:
+        # Prepare goal data using helper function
+        goal_data = _prepare_goal_data_for_db(data)
+        
+        # Auto-assign goal_number if not provided
+        if "goal_number" not in goal_data:
+            goal_type = goal_data.get("goal_type")
+            team_name = goal_data.get("team_name")
+            group_name = goal_data.get("group_name")
+            ai = goal_data.get("ai", False)
+            pi_name = goal_data.get("pi_name")
+            
+            goal_data["goal_number"] = _get_next_goal_number(
+                pi_name=pi_name,
+                goal_type=goal_type,
+                team_name=team_name,
+                group_name=group_name,
+                ai=ai,
+                conn=conn
+            )
+        
+        columns_sql = ", ".join(goal_data.keys())
+        values_sql = ", ".join([f":{k}" for k in goal_data.keys()])
+        
+        query = text(f"""
+            INSERT INTO {config.PI_GOALS_TABLE} ({columns_sql})
+            VALUES ({values_sql})
+            RETURNING *
+        """)
+        
+        result = conn.execute(query, goal_data)
+        row = result.fetchone()
+        conn.commit()
+        
+        # Convert epic_keys back to list for response (handle both string and already-parsed JSONB)
+        result_dict = dict(row._mapping)
+        epic_keys_value = result_dict.get("epic_keys")
+        if epic_keys_value is not None:
+            if isinstance(epic_keys_value, str):
+                result_dict["epic_keys"] = json.loads(epic_keys_value)
+            else:
+                # Already a list/dict from JSONB
+                result_dict["epic_keys"] = epic_keys_value
+        else:
+            result_dict["epic_keys"] = []
+        
+        return result_dict
+    except Exception as e:
+        logger.error(f"Error creating PI goal: {e}")
+        conn.rollback()
+        raise e
+
+
+def upsert_pi_goal(data: Dict[str, Any], conn: Connection = None) -> Dict[str, Any]:
+    """
+    Insert or update a PI goal (UPSERT) and return the created/updated row.
+    Used for AI-generated goals. Updates all fields if goal already exists.
+    goal_type is automatically determined from team_name/group_name.
+    goal_number must be provided in data (typically 1, 2, 3, 4... based on LLM response order).
+    """
+    try:
+        # Set default status and ai for AI-generated goals if not provided
+        if "status" not in data:
+            data["status"] = "Draft-AI"
+        if "ai" not in data:
+            data["ai"] = True  # Default to True for AI-generated goals
+        
+        # goal_number must be provided for upsert (from LLM response order)
+        if "goal_number" not in data:
+            raise ValueError("goal_number is required for upsert_pi_goal")
+        
+        # Prepare goal data using helper function
+        goal_data = _prepare_goal_data_for_db(data)
+        
+        # Get values for the check query
+        goal_type = goal_data.get("goal_type")
+        team_name = goal_data.get("team_name")
+        group_name = goal_data.get("group_name")
+        ai = goal_data.get("ai")
+        goal_number = goal_data.get("goal_number")
+        pi_name = goal_data.get("pi_name")
+        
+        # Check if goal exists using the unique constraint logic (including goal_number)
+        check_query = text(f"""
+            SELECT id FROM {config.PI_GOALS_TABLE}
+            WHERE pi_name = :pi_name
+              AND goal_type = :goal_type
+              AND COALESCE(team_name, '') = COALESCE(:team_name, '')
+              AND COALESCE(group_name, '') = COALESCE(:group_name, '')
+              AND ai = :ai
+              AND goal_number = :goal_number
+            LIMIT 1
+        """)
+        
+        check_params = {
+            "pi_name": pi_name,
+            "goal_type": goal_type,
+            "team_name": team_name,
+            "group_name": group_name,
+            "ai": ai,
+            "goal_number": goal_number
+        }
+        
+        existing = conn.execute(check_query, check_params).fetchone()
+        
+        if existing:
+            # Update existing goal
+            goal_id = existing[0]
+            update_fields = ["goal_text", "epic_keys", "status", "priority_bv", "updated_at"]
+            set_clauses = ", ".join([f"{k} = :{k}" if k != "updated_at" else f"{k} = CURRENT_TIMESTAMP" for k in update_fields])
+            
+            update_params = {k: goal_data.get(k) for k in update_fields if k != "updated_at"}
+            update_params["id"] = goal_id
+            
+            update_query = text(f"""
+                UPDATE {config.PI_GOALS_TABLE}
+                SET {set_clauses}
+                WHERE id = :id
+                RETURNING *
+            """)
+            
+            result = conn.execute(update_query, update_params)
+            row = result.fetchone()
+        else:
+            # Insert new goal
+            columns_sql = ", ".join(goal_data.keys())
+            values_sql = ", ".join([f":{k}" for k in goal_data.keys()])
+            
+            insert_query = text(f"""
+                INSERT INTO {config.PI_GOALS_TABLE} ({columns_sql})
+                VALUES ({values_sql})
+                RETURNING *
+            """)
+            
+            result = conn.execute(insert_query, goal_data)
+            row = result.fetchone()
+        
+        conn.commit()
+        
+        # Convert epic_keys back to list for response
+        result_dict = dict(row._mapping)
+        epic_keys_value = result_dict.get("epic_keys")
+        if epic_keys_value is not None:
+            # PostgreSQL JSONB columns are automatically deserialized by SQLAlchemy
+            # So it might already be a list/dict, or it might be a string
+            if isinstance(epic_keys_value, str):
+                result_dict["epic_keys"] = json.loads(epic_keys_value)
+            else:
+                # Already a list/dict from JSONB
+                result_dict["epic_keys"] = epic_keys_value
+        else:
+            result_dict["epic_keys"] = []
+        
+        return result_dict
+    except Exception as e:
+        logger.error(f"Error upserting PI goal: {e}")
+        conn.rollback()
+        raise e
+
+
+def get_pi_goals_filtered(
+    pi: Optional[str] = None,
+    goal_type: Optional[str] = None,
+    team_name: Optional[str] = None,
+    team_names_list: Optional[List[str]] = None,
+    group_name: Optional[str] = None,
+    status: Optional[str] = None,
+    ai: Optional[bool] = None,
+    limit: int = 100,
+    conn: Connection = None
+) -> List[Dict[str, Any]]:
+    """
+    Get PI goals with optional filters.
+    
+    Args:
+        pi: Filter by PI name
+        goal_type: Filter by goal type
+        team_name: Filter by single team name
+        team_names_list: Filter by list of team names (uses IN clause)
+        group_name: Filter by group name
+        status: Filter by status
+        ai: Filter by AI flag
+        limit: Maximum number of goals to return
+        conn: Database connection
+    """
+    try:
+        where_conditions = []
+        params = {"limit": limit}
+        
+        if pi:
+            where_conditions.append("pi_name = :pi")
+            params["pi"] = pi
+        
+        if goal_type:
+            where_conditions.append("goal_type = :goal_type")
+            params["goal_type"] = goal_type
+        
+        if team_names_list:
+            # Use IN clause for multiple team names
+            placeholders = ", ".join([f":team_name_{i}" for i in range(len(team_names_list))])
+            where_conditions.append(f"team_name IN ({placeholders})")
+            for i, name in enumerate(team_names_list):
+                params[f"team_name_{i}"] = name
+        elif team_name:
+            # Single team name
+            where_conditions.append("team_name = :team_name")
+            params["team_name"] = team_name
+        
+        if group_name:
+            where_conditions.append("group_name = :group_name")
+            params["group_name"] = group_name
+        
+        if status:
+            where_conditions.append("status = :status")
+            params["status"] = status
+        
+        if ai is not None:
+            where_conditions.append("ai = :ai")
+            params["ai"] = ai
+        
+        where_clause = " AND ".join(where_conditions) if where_conditions else "1=1"
+        
+        query = text(f"""
+            SELECT *
+            FROM {config.PI_GOALS_TABLE}
+            WHERE {where_clause}
+            ORDER BY created_at DESC
+            LIMIT :limit
+        """)
+        
+        result = conn.execute(query, params)
+        rows = result.fetchall()
+        
+        goals = []
+        for row in rows:
+            goal_dict = dict(row._mapping)
+            # Convert epic_keys JSON to list (handle both string and already-parsed JSONB)
+            epic_keys_value = goal_dict.get("epic_keys")
+            if epic_keys_value is not None:
+                if isinstance(epic_keys_value, str):
+                    goal_dict["epic_keys"] = json.loads(epic_keys_value)
+                else:
+                    # Already a list/dict from JSONB
+                    goal_dict["epic_keys"] = epic_keys_value
+            else:
+                goal_dict["epic_keys"] = []
+            goals.append(goal_dict)
+        
+        return goals
+    except Exception as e:
+        logger.error(f"Error fetching PI goals: {e}")
+        raise e
+
+
+def get_pi_goal_by_id(goal_id: int, conn: Connection = None) -> Optional[Dict[str, Any]]:
+    """Get a single PI goal by ID."""
+    try:
+        query = text(f"""
+            SELECT *
+            FROM {config.PI_GOALS_TABLE}
+            WHERE id = :id
+        """)
+        
+        result = conn.execute(query, {"id": goal_id})
+        row = result.fetchone()
+        
+        if not row:
+            return None
+        
+        goal_dict = dict(row._mapping)
+        # Convert epic_keys JSON to list (handle both string and already-parsed JSONB)
+        epic_keys_value = goal_dict.get("epic_keys")
+        if epic_keys_value is not None:
+            if isinstance(epic_keys_value, str):
+                goal_dict["epic_keys"] = json.loads(epic_keys_value)
+            else:
+                # Already a list/dict from JSONB
+                goal_dict["epic_keys"] = epic_keys_value
+        else:
+            goal_dict["epic_keys"] = []
+        
+        return goal_dict
+    except Exception as e:
+        logger.error(f"Error fetching PI goal {goal_id}: {e}")
+        raise e
+
+
+def delete_pi_goal_by_id(goal_id: int, conn: Connection = None) -> bool:
+    """
+    Delete a PI goal by ID.
+    
+    Args:
+        goal_id: ID of the goal to delete
+        conn: Database connection
+        
+    Returns:
+        True if goal was deleted, False if goal not found
+    """
+    try:
+        query = text(f"""
+            DELETE FROM {config.PI_GOALS_TABLE}
+            WHERE id = :id
+            RETURNING id
+        """)
+        
+        result = conn.execute(query, {"id": goal_id})
+        row = result.fetchone()
+        conn.commit()
+        
+        return row is not None
+    except Exception as e:
+        logger.error(f"Error deleting PI goal {goal_id}: {e}")
+        conn.rollback()
+        raise e
+
+
+def update_pi_goal_by_id(goal_id: int, updates: Dict[str, Any], conn: Connection = None) -> Optional[Dict[str, Any]]:
+    """
+    Update an existing PI goal by id and return the updated row, or None if not found.
+    If team_name or group_name is updated, goal_type is recalculated automatically.
+    team_name and group_name can coexist (for team goals within a group).
+    """
+    try:
+        # Handle team_name/group_name updates - recalculate goal_type
+        if "team_name" in updates or "group_name" in updates:
+            # Get current goal first
+            current_goal = get_pi_goal_by_id(goal_id, conn)
+            if not current_goal:
+                return None
+            
+            # Merge updates with current values
+            team_name = updates.get("team_name", current_goal.get("team_name"))
+            group_name = updates.get("group_name", current_goal.get("group_name"))
+            
+            # Determine if this is an overall goal (no team_name means overall)
+            is_overall = not team_name
+            
+            # Recalculate goal_type
+            goal_type = determine_goal_type(team_name, group_name, is_overall)
+            updates["goal_type"] = goal_type
+        
+        # Handle epic_keys - convert to JSON if it's a list, allow NULL
+        if "epic_keys" in updates:
+            if updates["epic_keys"] is None:
+                updates["epic_keys"] = None  # Keep as NULL
+            elif isinstance(updates["epic_keys"], list):
+                updates["epic_keys"] = json.dumps(updates["epic_keys"])
+        
+        allowed_columns = {
+            "pi_name", "goal_type", "team_name", "group_name", "goal_text", "epic_keys", "status", "priority_bv"
+        }
+        # ai is not allowed to be updated - it's set automatically (False for user updates)
+        filtered = {k: v for k, v in updates.items() if k in allowed_columns}
+        
+        if not filtered:
+            raise ValueError("No valid fields provided for PI goal update")
+        
+        set_clauses = ", ".join([f"{k} = :{k}" for k in filtered.keys()])
+        params = dict(filtered)
+        params["id"] = goal_id
+        
+        query = text(f"""
+            UPDATE {config.PI_GOALS_TABLE}
+            SET {set_clauses}, updated_at = CURRENT_TIMESTAMP
+            WHERE id = :id
+            RETURNING *
+        """)
+        
+        result = conn.execute(query, params)
+        row = result.fetchone()
+        conn.commit()
+        
+        if not row:
+            return None
+        
+        goal_dict = dict(row._mapping)
+        # Convert epic_keys JSON to list (handle both string and already-parsed JSONB)
+        epic_keys_value = goal_dict.get("epic_keys")
+        if epic_keys_value is not None:
+            if isinstance(epic_keys_value, str):
+                goal_dict["epic_keys"] = json.loads(epic_keys_value)
+            else:
+                # Already a list/dict from JSONB
+                goal_dict["epic_keys"] = epic_keys_value
+        else:
+            goal_dict["epic_keys"] = []
+        
+        return goal_dict
+    except Exception as e:
+        logger.error(f"Error updating PI goal {goal_id}: {e}")
         conn.rollback()
         raise e
 

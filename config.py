@@ -29,6 +29,7 @@ CHAT_HISTORY_TABLE = "chat_history"  # Chat history table
 INSIGHT_TYPES_TABLE = "insight_types"  # Insight types table
 ISSUE_TYPES_TABLE = "issue_types"  # Issue types table
 REPORT_DEFINITIONS_TABLE = "report_definitions"  # Report definitions metadata table
+PI_GOALS_TABLE = "pi_goals"  # PI goals table
 
 # --- Service Configuration ---
 # Teams Service
