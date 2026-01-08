@@ -1269,6 +1269,10 @@ def _prepare_goal_data_for_db(data: Dict[str, Any]) -> Dict[str, Any]:
     # Determine goal_type automatically
     goal_type = determine_goal_type(team_name, group_name, is_overall)
     
+    # Log for debugging group goals
+    if is_overall and group_name:
+        logger.info(f"_prepare_goal_data_for_db: is_overall=True, group_name={group_name}, determined goal_type={goal_type}")
+    
     # Prepare data
     goal_data = {
         "pi_name": data.get("pi_name"),
@@ -1379,7 +1383,9 @@ def upsert_pi_goal(data: Dict[str, Any], conn: Connection = None) -> Dict[str, A
         goal_number = goal_data.get("goal_number")
         pi_name = goal_data.get("pi_name")
         
-        # Check if goal exists using the unique constraint logic (including goal_number)
+        # Check if goal exists using the unique constraint logic
+        # For AI goals (ai=true): unique constraint includes goal_number
+        # For user goals (ai=false): no unique constraint, but we still check to avoid duplicates if needed
         check_query = text(f"""
             SELECT id FROM {config.PI_GOALS_TABLE}
             WHERE pi_name = :pi_name
@@ -1403,9 +1409,10 @@ def upsert_pi_goal(data: Dict[str, Any], conn: Connection = None) -> Dict[str, A
         existing = conn.execute(check_query, check_params).fetchone()
         
         if existing:
-            # Update existing goal
+            # Update existing goal (including goal_number to match the new order)
+            # Note: group_name and goal_type are NOT updated - they remain as originally created
             goal_id = existing[0]
-            update_fields = ["goal_text", "epic_keys", "status", "priority_bv", "updated_at"]
+            update_fields = ["goal_text", "epic_keys", "status", "priority_bv", "goal_number", "updated_at"]
             set_clauses = ", ".join([f"{k} = :{k}" if k != "updated_at" else f"{k} = CURRENT_TIMESTAMP" for k in update_fields])
             
             update_params = {k: goal_data.get(k) for k in update_fields if k != "updated_at"}
@@ -1618,6 +1625,7 @@ def update_pi_goal_by_id(goal_id: int, updates: Dict[str, Any], conn: Connection
     Update an existing PI goal by id and return the updated row, or None if not found.
     If team_name or group_name is updated, goal_type is recalculated automatically.
     team_name and group_name can coexist (for team goals within a group).
+    The ai column is always set to False when a goal is updated by a user, even if it was True before.
     """
     try:
         # Handle team_name/group_name updates - recalculate goal_type
@@ -1648,11 +1656,15 @@ def update_pi_goal_by_id(goal_id: int, updates: Dict[str, Any], conn: Connection
         allowed_columns = {
             "pi_name", "goal_type", "team_name", "group_name", "goal_text", "epic_keys", "status", "priority_bv"
         }
-        # ai is not allowed to be updated - it's set automatically (False for user updates)
+        # ai is always set to False when user updates a goal (even if it was True before)
+        # This ensures that user-modified goals are marked as non-AI
         filtered = {k: v for k, v in updates.items() if k in allowed_columns}
         
         if not filtered:
             raise ValueError("No valid fields provided for PI goal update")
+        
+        # Always set ai = False for user updates
+        filtered["ai"] = False
         
         set_clauses = ", ".join([f"{k} = :{k}" for k in filtered.keys()])
         params = dict(filtered)

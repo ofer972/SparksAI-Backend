@@ -40,7 +40,8 @@ def validate_limit(limit: int) -> int:
 async def get_issues(
     issue_type: Optional[str] = Query(None, description="Filter by issue type"),
     status_category: Optional[str] = Query(None, description="Filter by status category"),
-    team_name: Optional[str] = Query(None, description="Filter by team name"),
+    team_name: Optional[str] = Query(None, description="Team name or group name (if isGroup=true)"),
+    isGroup: bool = Query(False, description="If true, team_name is treated as a group name"),
     pi: Optional[str] = Query(None, description="Filter by PI (quarter_pi)"),
     sprint_id: Optional[int] = Query(None, description="Filter by sprint ID (matches any sprint_ids array element)"),
     limit: int = Query(200, description="Number of issues to return (default: 200, max: 1000)"),
@@ -54,7 +55,8 @@ async def get_issues(
     Args:
         issue_type: Optional filter by issue type
         status_category: Optional filter by status category
-        team_name: Optional filter by team name
+        team_name: Team name or group name (if isGroup=true)
+        isGroup: If true, team_name is treated as a group name
         pi: Optional filter by PI (quarter_pi)
         sprint_id: Optional filter by sprint ID (checks if sprint_id is in sprint_ids array)
         limit: Number of issues to return (default: 200, max: 1000)
@@ -63,8 +65,15 @@ async def get_issues(
         JSON response with issues list and metadata
     """
     try:
+        from database_team_metrics import resolve_team_names_from_filter
+        
         # Validate limit
         validated_limit = validate_limit(limit)
+        
+        # Resolve team names if team_name is provided (handles group to teams translation)
+        team_names_list = None
+        if team_name:
+            team_names_list = resolve_team_names_from_filter(team_name, isGroup, conn)
         
         # Build WHERE clause conditions based on provided filters
         where_conditions = []
@@ -78,9 +87,12 @@ async def get_issues(
             where_conditions.append("status_category = :status_category")
             params["status_category"] = status_category
         
-        if team_name:
-            where_conditions.append("team_name = :team_name")
-            params["team_name"] = team_name
+        if team_names_list:
+            # Build parameterized IN clause for multiple teams
+            placeholders = ", ".join([f":team_name_{i}" for i in range(len(team_names_list))])
+            where_conditions.append(f"team_name IN ({placeholders})")
+            for i, name in enumerate(team_names_list):
+                params[f"team_name_{i}"] = name
         
         if pi:
             where_conditions.append("quarter_pi = :quarter_pi")
@@ -109,7 +121,9 @@ async def get_issues(
             LIMIT :limit
         """)
         
-        logger.info(f"Executing query to get issues with filters: issue_type={issue_type}, status_category={status_category}, team_name={team_name}, pi={pi}, sprint_id={sprint_id}, limit={validated_limit}")
+        logger.info(f"Executing query to get issues with filters: issue_type={issue_type}, status_category={status_category}, team_name={team_name}, isGroup={isGroup}, pi={pi}, sprint_id={sprint_id}, limit={validated_limit}")
+        if team_names_list:
+            logger.info(f"Resolved team names: {team_names_list}")
         
         result = conn.execute(query, params)
         rows = result.fetchall()

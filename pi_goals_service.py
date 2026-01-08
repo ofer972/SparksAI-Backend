@@ -347,7 +347,10 @@ def enrich_epic_keys_with_issue_details(
             all_epic_keys.update(epic_keys)
     
     if not all_epic_keys:
-        # No epic_keys to enrich, return goals as-is
+        # No epic_keys to enrich, add progress fields with 0.0
+        for goal in goals:
+            goal["goal_progress_by_epics"] = 0.0
+            goal["goal_progress_by_children"] = 0.0
         return goals
     
     # Single batch query to fetch all epic details
@@ -359,6 +362,7 @@ def enrich_epic_keys_with_issue_details(
         SELECT 
             issue_key,
             status,
+            status_category,
             summary,
             number_of_children,
             number_of_completed_children
@@ -369,14 +373,15 @@ def enrich_epic_keys_with_issue_details(
     result = conn.execute(query, params)
     rows = result.fetchall()
     
-    # Build lookup dictionary: {issue_key: {status, summary, progress_percent}}
+    # Build lookup dictionary: {issue_key: {status, status_category, summary, progress_percent, number_of_children, number_of_completed_children}}
     epic_details_lookup = {}
     for row in rows:
         issue_key = row[0]
         status = row[1] or ""
-        summary = row[2] or ""
-        number_of_children = row[3] if row[3] is not None else 0
-        number_of_completed_children = row[4] if row[4] is not None else 0
+        status_category = row[2] or ""
+        summary = row[3] or ""
+        number_of_children = row[4] if row[4] is not None else 0
+        number_of_completed_children = row[5] if row[5] is not None else 0
         
         # Calculate progress_percent
         if number_of_children > 0:
@@ -386,8 +391,11 @@ def enrich_epic_keys_with_issue_details(
         
         epic_details_lookup[issue_key] = {
             "status": status,
+            "status_category": status_category,
             "summary": summary,
-            "progress_percent": round(progress_percent, 2)
+            "progress_percent": round(progress_percent, 2),
+            "number_of_children": number_of_children,
+            "number_of_completed_children": number_of_completed_children
         }
     
     # Enrich goals with epic details
@@ -405,21 +413,47 @@ def enrich_epic_keys_with_issue_details(
                     enriched_epic_keys.append({
                         "issue_key": epic_key,
                         "status": epic_details["status"],
+                        "status_category": epic_details["status_category"],
                         "summary": epic_details["summary"],
-                        "progress_percent": epic_details["progress_percent"]
+                        "progress_percent": epic_details["progress_percent"],
+                        "number_of_children": epic_details["number_of_children"],
+                        "number_of_completed_children": epic_details["number_of_completed_children"]
                     })
                 else:
                     # Epic not found in jira_issues, include with null values
                     enriched_epic_keys.append({
                         "issue_key": epic_key,
                         "status": None,
+                        "status_category": None,
                         "summary": None,
-                        "progress_percent": None
+                        "progress_percent": None,
+                        "number_of_children": 0,
+                        "number_of_completed_children": 0
                     })
             enriched_goal["epic_keys"] = enriched_epic_keys
+            
+            # Calculate goal progress
+            # goal_progress_by_epics: percentage of epics with status_category='Done'
+            total_epics = len(enriched_epic_keys)
+            done_epics = sum(1 for epic in enriched_epic_keys if epic.get("status_category") == "Done")
+            if total_epics > 0:
+                enriched_goal["goal_progress_by_epics"] = round((done_epics / total_epics) * 100, 2)
+            else:
+                enriched_goal["goal_progress_by_epics"] = 0.0
+            
+            # goal_progress_by_children: percentage based on sum of completed children / sum of total children
+            total_children = sum(epic.get("number_of_children", 0) for epic in enriched_epic_keys)
+            completed_children = sum(epic.get("number_of_completed_children", 0) for epic in enriched_epic_keys)
+            if total_children > 0:
+                enriched_goal["goal_progress_by_children"] = round((completed_children / total_children) * 100, 2)
+            else:
+                enriched_goal["goal_progress_by_children"] = 0.0
         else:
             # Keep as-is if not a list
             enriched_goal["epic_keys"] = epic_keys
+            # No epics, so progress is 0
+            enriched_goal["goal_progress_by_epics"] = 0.0
+            enriched_goal["goal_progress_by_children"] = 0.0
         
         enriched_goals.append(enriched_goal)
     
@@ -515,12 +549,20 @@ class PIGoalUpdateRequest(BaseModel):
     priority_bv: Optional[int] = None
 
 
+class PIGoalGenerateRequest(BaseModel):
+    pi: Optional[str] = None
+    team_name: Optional[str] = None
+    isGroup: bool = False
+    quarter: Optional[str] = None
+
+
+class MoveGoalsAIToUserRequest(BaseModel):
+    goal_ids: List[int]
+
+
 @pi_goals_router.post("/pi-goals/generate")
 async def generate_ai_pi_goals(
-    pi: Optional[str] = Query(None, description="PI (optional, uses current PI if not provided)"),
-    team_name: Optional[str] = Query(None, description="Team name or group name (if isGroup=true)"),
-    isGroup: bool = Query(False, description="If true, team_name is treated as a group name"),
-    quarter: Optional[str] = Query(None, description="Quarter parameter (reserved for future use)"),
+    request: PIGoalGenerateRequest,
     conn: Connection = Depends(get_db_connection)
 ):
     """
@@ -534,16 +576,23 @@ async def generate_ai_pi_goals(
     5. Returns the generated goals
     
     Args:
-        pi: Optional PI name (uses current PI if not provided)
-        team_name: Optional team name or group name filter
-        isGroup: If true, team_name is treated as a group name
-        quarter: Reserved for future use
+        request: PIGoalGenerateRequest with pi, team_name, isGroup, and quarter
         conn: Database connection
         
     Returns:
         JSON response with overall_goals and team_goals (saved to database)
     """
     try:
+        # Extract parameters from request
+        pi = request.pi
+        team_name = request.team_name
+        isGroup = request.isGroup
+        quarter = request.quarter
+        
+        # Log all POST parameters received
+        logger.info(f"POST /pi-goals/generate - Received parameters: pi={pi}, team_name={team_name}, isGroup={isGroup}, quarter={quarter}")
+        logger.info(f"POST /pi-goals/generate - isGroup type: {type(isGroup)}, isGroup value: {isGroup}")
+        
         # Step 1: Resolve PI (get current if not provided)
         resolved_pi = pi
         if not resolved_pi:
@@ -654,15 +703,23 @@ async def generate_ai_pi_goals(
         
         # Determine group_name from parameters (if isGroup=true, team_name parameter is actually group_name)
         group_name_for_saving = None
-        if isGroup and team_name:
+        if isGroup:
+            if not team_name:
+                raise HTTPException(
+                    status_code=400,
+                    detail="team_name parameter is required when isGroup=true (team_name should be the group name)"
+                )
             group_name_for_saving = team_name
+            logger.info(f"isGroup=true: Setting group_name_for_saving={group_name_for_saving}")
+        else:
+            logger.info(f"isGroup=false: group_name_for_saving will be None")
         
         saved_overall_goals = []
         saved_team_goals_by_team = {}  # Group by team_name for response format
         
         # Save overall goals using UPSERT (ai=true)
         overall_goals_from_llm = parsed_data.get("overall_goals", [])
-        logger.info(f"Upserting {len(overall_goals_from_llm)} overall goals")
+        logger.info(f"Upserting {len(overall_goals_from_llm)} overall goals (will become {'group' if group_name_for_saving else 'overall'} goals)")
         for goal_index, goal in enumerate(overall_goals_from_llm, start=1):
             try:
                 goal_data = {
@@ -676,6 +733,7 @@ async def generate_ai_pi_goals(
                     "is_overall": True,  # Flag for goal_type determination
                     "goal_number": goal_index  # Assign goal_number based on order (1, 2, 3, ...)
                 }
+                logger.info(f"Goal {goal_index} data before upsert: group_name={goal_data.get('group_name')}, is_overall={goal_data.get('is_overall')}")
                 saved_goal = upsert_pi_goal(goal_data, conn)
                 if saved_goal:
                     saved_overall_goals.append(saved_goal)
@@ -861,7 +919,8 @@ async def get_pi_goals(
             "data": response_data,
             "message": f"Retrieved PI goals for {pi}"
         }
-    except HTTPException:
+    except HTTPException as e:
+        logger.error(f"Error fetching PI goals - HTTPException: status_code={e.status_code}, detail={e.detail}")
         raise
     except Exception as e:
         logger.error(f"Error fetching PI goals: {e}")
@@ -926,6 +985,66 @@ async def create_pi_goal_endpoint(
         )
 
 
+@pi_goals_router.patch("/pi-goals/ai-to-user")
+async def move_goals_ai_to_user_endpoint(
+    request: MoveGoalsAIToUserRequest,
+    conn: Connection = Depends(get_db_connection)
+):
+    """
+    Move multiple PI goals from AI-generated to user-modified by setting ai = False and status = 'Draft'.
+    
+    Args:
+        request: MoveGoalsAIToUserRequest with list of goal_ids
+        conn: Database connection
+        
+    Returns:
+        JSON response with count of updated goals
+    """
+    try:
+        goal_ids = request.goal_ids
+        
+        if not goal_ids:
+            raise HTTPException(
+                status_code=400,
+                detail="goal_ids list cannot be empty"
+            )
+        
+        # Build placeholders for IN clause
+        placeholders = ", ".join([f":goal_id_{i}" for i in range(len(goal_ids))])
+        params = {f"goal_id_{i}": goal_id for i, goal_id in enumerate(goal_ids)}
+        
+        # Single SQL UPDATE to set ai = False and status = 'Draft' for all provided goal_ids
+        query = text(f"""
+            UPDATE {config.PI_GOALS_TABLE}
+            SET ai = false, status = 'Draft', updated_at = CURRENT_TIMESTAMP
+            WHERE id IN ({placeholders})
+        """)
+        
+        result = conn.execute(query, params)
+        rows_updated = result.rowcount
+        conn.commit()
+        
+        logger.info(f"PATCH /pi-goals/ai-to-user - Updated {rows_updated} goals from AI to user (ai=false, status=Draft) (requested {len(goal_ids)} goal_ids)")
+        
+        return {
+            "success": True,
+            "data": {
+                "goal_ids_requested": len(goal_ids),
+                "goals_updated": rows_updated
+            },
+            "message": f"Updated {rows_updated} goal(s) from AI to user"
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error moving goals from AI to user: {e}")
+        conn.rollback()
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to move goals from AI to user: {str(e)}"
+        )
+
+
 @pi_goals_router.patch("/pi-goals/{goal_id}")
 async def update_pi_goal_endpoint(
     goal_id: int,
@@ -936,6 +1055,8 @@ async def update_pi_goal_endpoint(
     Update an existing PI goal.
     
     If team_name or group_name is updated, goal_type is recalculated automatically.
+    The ai column is always set to False when a goal is updated (even if it was True before),
+    as user modifications mark the goal as user-modified rather than AI-generated.
     
     Args:
         goal_id: ID of the goal to update
@@ -948,9 +1069,15 @@ async def update_pi_goal_endpoint(
     try:
         updates = request.model_dump(exclude_unset=True)
         
+        # Log all parameters
+        logger.info(f"PATCH /pi-goals/{goal_id} - Request parameters: goal_id={goal_id}, updates={updates}")
+        logger.info(f"PATCH /pi-goals/{goal_id} - Full request model: {request.model_dump()}")
+        
         # Map 'pi' from request to 'pi_name' for database
         if "pi" in updates:
             updates["pi_name"] = updates.pop("pi")
+        
+        logger.info(f"PATCH /pi-goals/{goal_id} - Processed updates (after mapping): {updates}")
         
         if not updates:
             raise HTTPException(

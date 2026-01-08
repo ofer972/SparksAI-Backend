@@ -1840,10 +1840,10 @@ def create_pi_goals_table_if_not_exists(engine=None) -> bool:
                 CREATE INDEX idx_pi_goals_status ON public.pi_goals(status);
                 CREATE INDEX idx_pi_goals_pi_type ON public.pi_goals(pi_name, goal_type);
                 
-                -- Unique constraint on (pi_name, goal_type, team_name, group_name, ai, goal_number) with NULL handling
+                -- Partial unique constraint ONLY for AI goals (ai=true) with goal_number
+                -- This allows the generate endpoint to identify which AI goal to update/replace
                 -- COALESCE converts NULL to empty string for comparison
-                -- Allows same PI/team/group to have both AI goals (ai=true) and user goals (ai=false)
-                -- goal_number allows multiple goals per team/group/PI (1, 2, 3, 4...)
+                -- User goals (ai=false) have NO unique constraint - duplicates allowed (end user responsibility)
                 -- This is a functional unique index that handles NULLs properly
                 CREATE UNIQUE INDEX idx_pi_goals_unique ON public.pi_goals(
                     pi_name, 
@@ -1852,7 +1852,7 @@ def create_pi_goals_table_if_not_exists(engine=None) -> bool:
                     COALESCE(group_name, ''),
                     ai,
                     goal_number
-                );
+                ) WHERE ai = true;
                 """
                 conn.execute(text(create_table_sql))
                 conn.commit()
