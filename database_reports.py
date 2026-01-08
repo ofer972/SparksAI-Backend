@@ -191,7 +191,10 @@ def _fetch_team_sprint_burndown(filters: Dict[str, Any], conn: Connection) -> Re
     # Only fetch sprint data if team is selected
     if not team_name:
         return {
-            "data": [],
+            "data": {
+                "sprint_name": None,
+                "burndown_data": [],
+            },
             "meta": {
                 "team_name": None,
                 "issue_type": issue_type,
@@ -218,7 +221,10 @@ def _fetch_team_sprint_burndown(filters: Dict[str, Any], conn: Connection) -> Re
     # If error occurred, return error in report format
     if error_message:
         return {
-            "data": [],
+            "data": {
+                "sprint_name": None,
+                "burndown_data": [],
+            },
             "meta": {
                 "team_name": team_name,
                 "issue_type": issue_type,
@@ -235,7 +241,10 @@ def _fetch_team_sprint_burndown(filters: Dict[str, Any], conn: Connection) -> Re
 
     if not selected_sprint_name:
         return {
-            "data": [],
+            "data": {
+                "sprint_name": None,
+                "burndown_data": [],
+            },
             "meta": {
                 "team_name": team_name,
                 "issue_type": issue_type,
@@ -266,11 +275,16 @@ def _fetch_team_sprint_burndown(filters: Dict[str, Any], conn: Connection) -> Re
             end_date = _date_to_iso(first_entry.get("end_date"))
 
     return {
-        "data": burndown_data,
+        "data": {
+            "sprint_name": selected_sprint_name,
+            "sprint_start_date": start_date,
+            "sprint_end_date": end_date,
+            "burndown_data": burndown_data,
+        },
         "meta": {
             "team_name": team_name,
             "issue_type": issue_type,
-            "sprint_name": sprint_name,
+            "sprint_name": selected_sprint_name,
             "sprint_id": selected_sprint_id,
             "auto_selected": auto_selected,
             "total_issues_in_sprint": total_issues,
@@ -394,10 +408,10 @@ def _fetch_pi_burndown(filters: Dict[str, Any], conn: Connection) -> ReportDataR
     team = (filters.get("team_name") or filters.get("team") or "").strip() or None
     is_group = filters.get("isGroup", False)
 
-    # Fetch available PIs (always)
+    # Fetch available PIs (always) - include dates for selected PI
     pis_query = text(
         f"""
-        SELECT DISTINCT pi_name
+        SELECT DISTINCT pi_name, start_date, end_date
         FROM {config.PIS_TABLE}
         WHERE pi_name IS NOT NULL
         ORDER BY pi_name DESC
@@ -405,6 +419,16 @@ def _fetch_pi_burndown(filters: Dict[str, Any], conn: Connection) -> ReportDataR
     )
     pis_rows = conn.execute(pis_query).fetchall()
     available_pis = [row[0] for row in pis_rows if row[0]]
+    
+    # Extract PI dates if pi_name is selected
+    pi_start_date = None
+    pi_end_date = None
+    if pi_name:
+        for row in pis_rows:
+            if row[0] == pi_name:
+                pi_start_date = _date_to_iso(row[1]) if row[1] else None
+                pi_end_date = _date_to_iso(row[2]) if row[2] else None
+                break
 
     # Resolve team names using shared helper function (handles single team, group, or None)
     team_names_list = resolve_team_names_from_filter(team, is_group, conn)
@@ -442,7 +466,12 @@ def _fetch_pi_burndown(filters: Dict[str, Any], conn: Connection) -> ReportDataR
         meta["team"] = None
 
     return {
-        "data": burndown_data,
+        "data": {
+            "pi_name": pi_name,
+            "pi_start_date": pi_start_date,
+            "pi_end_date": pi_end_date,
+            "burndown_data": burndown_data,
+        },
         "meta": meta,
     }
 
