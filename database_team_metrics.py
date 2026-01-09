@@ -443,6 +443,41 @@ def get_sprints_with_total_issues_db(team_name: str, sprint_status: str = None, 
         raise e
 
 
+def get_available_sprint_names_db(team_names: List[str], conn: Connection = None) -> List[str]:
+    """
+    Get available sprint names (active + closed, not future) for team(s).
+    Returns last 10 unique sprint names sorted by start_date DESC.
+    
+    Args:
+        team_names: List of team names
+        conn: Database connection
+    
+    Returns:
+        List of sprint names (strings)
+    """
+    if not team_names:
+        return []
+    
+    sql_query = """
+        SELECT DISTINCT s.name, s.start_date
+        FROM public.jira_sprints s
+        WHERE s.state IN ('active', 'closed')
+          AND s.start_date <= CURRENT_DATE
+          AND EXISTS (
+              SELECT 1 
+              FROM public.jira_issues i
+              WHERE i.team_name = ANY(:team_names)
+                AND (i.current_sprint_id = s.sprint_id OR s.sprint_id = ANY(i.sprint_ids))
+              LIMIT 1
+          )
+        ORDER BY s.start_date DESC
+        LIMIT 10
+    """
+    
+    result = conn.execute(text(sql_query), {"team_names": team_names})
+    return [row[0] for row in result if row[0]]
+
+
 def select_sprint_for_teams(
     team_name: Optional[str],
     is_group: bool,
@@ -801,6 +836,174 @@ def get_sprint_burndown_data_db(team_names: List[str], sprint_name: str, issue_t
             
     except Exception as e:
         logger.error(f"Error fetching sprint burndown data for teams {team_names}, sprint {sprint_name}: {e}")
+        raise e
+
+
+def get_sprint_history_issues_db(
+    sprint_id: int,
+    target_date: date,
+    team_names: Optional[List[str]],
+    issue_type: Optional[str] = None,
+    metric_type: str = "total_scope",
+    conn: Connection = None
+) -> List[Dict[str, Any]]:
+    """
+    Get sprint issue details for a specific date using get_sprint_issue_details_for_date function.
+    
+    Args:
+        sprint_id (int): Sprint ID to filter by
+        target_date (date): The date to query (date only, no time)
+        team_names (Optional[List[str]]): List of team names, or None for all teams
+        issue_type (Optional[str]): Issue type filter (e.g., "Story", "Bug"). If None, passes "all" to function.
+        metric_type (str): Metric type to filter by. Valid values:
+            - "issues_completed" - Issues completed on this day
+            - "issues_removed" - Issues removed from sprint
+            - "total_scope" - Total scope of sprint on this day (all issues)
+            - "wip_in_progress" - Work in progress items
+            - "actual_remaining" - Actual remaining items (not done)
+        conn (Connection): Database connection from FastAPI dependency
+    
+    Returns:
+        list: List of issue dictionaries with issue_key, summary, and other fields
+    """
+    try:
+        # Map metric_type to function's metric_category values
+        metric_category_map = {
+            "issues_completed": "COMPLETED",
+            "issues_removed": "REMOVED",
+            "wip_in_progress": "WIP",
+            "actual_remaining": "REMAINING"
+        }
+        
+        # Handle issue_type parameter (pass "all" if not provided)
+        target_issuetype = issue_type if issue_type else "all"
+        
+        # Build parameters for the function call
+        params = {
+            "target_sprint_id": sprint_id,
+            "target_issuetype": target_issuetype,
+            "target_date": target_date.strftime("%Y-%m-%d")
+        }
+        
+        # Build query - pass team_names as array or NULL
+        # The SQL function handles NULL team_names (returns all teams)
+        if team_names:
+            params["team_names"] = team_names
+            sql_query_text = text("""
+                SELECT * FROM public.get_sprint_issue_details_for_date(
+                    :target_sprint_id,
+                    :target_issuetype,
+                    CAST(:team_names AS text[]),
+                    CAST(:target_date AS date)
+                )
+            """)
+            logger.info(f"Executing query to get sprint history issues: sprint_id={sprint_id}, date={target_date}, issue_type={target_issuetype}, teams={team_names}, metric_type={metric_type}")
+        else:
+            # Pass NULL for all teams - function handles it
+            sql_query_text = text("""
+                SELECT * FROM public.get_sprint_issue_details_for_date(
+                    :target_sprint_id,
+                    :target_issuetype,
+                    NULL,
+                    CAST(:target_date AS date)
+                )
+            """)
+            logger.info(f"Executing query to get sprint history issues: sprint_id={sprint_id}, date={target_date}, issue_type={target_issuetype}, teams=all, metric_type={metric_type}")
+        
+        # Execute query with parameters (SECURE: prevents SQL injection)
+        result = conn.execute(sql_query_text, params)
+        rows = result.fetchall()
+        
+        # Convert rows to list of dictionaries
+        all_issues = []
+        for row in rows:
+            row_dict = dict(row._mapping)
+            all_issues.append(row_dict)
+        
+        # Filter by metric_type if not "total_scope"
+        if metric_type == "total_scope":
+            # For total_scope, we need ALL issues in sprint on that date
+            # The function returns issues with specific categories, so we need a separate query
+            # Query jira_issue_history directly for all issues in sprint on that date
+            # Return same structure as function: issue_key, summary, team_name, metric_category
+            params_scope = {
+                "target_sprint_id": sprint_id,
+                "target_date": target_date.strftime("%Y-%m-%d"),
+                "target_issuetype": target_issuetype
+            }
+            
+            # Build team filter if team_names provided
+            if team_names:
+                team_placeholders = ", ".join([f":team_name_{i}" for i in range(len(team_names))])
+                for i, name in enumerate(team_names):
+                    params_scope[f"team_name_{i}"] = name
+                
+                scope_query = text(f"""
+                    SELECT DISTINCT
+                        jh.issue_key,
+                        ji.summary,
+                        jh.team_name,
+                        'TOTAL_SCOPE' as metric_category
+                    FROM public.jira_issue_history jh
+                    LEFT JOIN public.jira_issues ji ON jh.issue_key = ji.issue_key
+                    WHERE jh.snapshot_date::date = CAST(:target_date AS date)
+                    AND :target_sprint_id = ANY(jh.sprint_ids)
+                    AND (:target_issuetype = 'all' OR jh.issuetype = :target_issuetype)
+                    AND jh.team_name IN ({team_placeholders})
+                """)
+            else:
+                # No team filter - get all teams
+                scope_query = text("""
+                    SELECT DISTINCT
+                        jh.issue_key,
+                        ji.summary,
+                        jh.team_name,
+                        'TOTAL_SCOPE' as metric_category
+                    FROM public.jira_issue_history jh
+                    LEFT JOIN public.jira_issues ji ON jh.issue_key = ji.issue_key
+                    WHERE jh.snapshot_date::date = CAST(:target_date AS date)
+                    AND :target_sprint_id = ANY(jh.sprint_ids)
+                    AND (:target_issuetype = 'all' OR jh.issuetype = :target_issuetype)
+                """)
+            
+            scope_result = conn.execute(scope_query, params_scope)
+            scope_rows = scope_result.fetchall()
+            
+            issues = []
+            for row in scope_rows:
+                row_dict = dict(row._mapping)
+                issues.append({
+                    "issue_key": row_dict.get("issue_key"),
+                    "summary": row_dict.get("summary"),
+                    "team_name": row_dict.get("team_name"),
+                    "metric_category": row_dict.get("metric_category")
+                })
+            
+            logger.info(f"Retrieved {len(issues)} issues for total_scope metric")
+            return issues
+        else:
+            # Filter by metric_category
+            target_category = metric_category_map.get(metric_type)
+            if not target_category:
+                raise ValueError(f"Invalid metric_type: {metric_type}")
+            
+            # Filter issues by metric_category - return only what function returns
+            filtered_issues = [
+                {
+                    "issue_key": issue.get("issue_key"),
+                    "summary": issue.get("summary"),
+                    "team_name": issue.get("team_name"),
+                    "metric_category": issue.get("metric_category")
+                }
+                for issue in all_issues 
+                if issue.get("metric_category") == target_category
+            ]
+            
+            logger.info(f"Retrieved {len(filtered_issues)} issues for metric_type={metric_type}")
+            return filtered_issues
+            
+    except Exception as e:
+        logger.error(f"Error fetching sprint history issues (sprint_id={sprint_id}, date={target_date}, metric_type={metric_type}): {e}")
         raise e
 
 

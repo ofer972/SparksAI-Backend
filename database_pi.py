@@ -748,3 +748,171 @@ def fetch_epic_outbound_dependency_data(
     except Exception as e:
         logger.error(f"Error fetching epic outbound dependency data: {e}")
         raise e
+
+
+def get_pi_history_issues_db(
+    pi_name: str,
+    target_date: date,
+    team_names: Optional[List[str]],
+    issue_type: Optional[str] = None,
+    metric_type: str = "total_scope",
+    conn: Connection = None
+) -> List[Dict[str, Any]]:
+    """
+    Get PI issue details for a specific date using get_pi_issue_details_for_date function.
+    
+    Args:
+        pi_name (str): PI name (quarter_pi) to filter by
+        target_date (date): The date to query (date only, no time)
+        team_names (Optional[List[str]]): List of team names, or None for all teams
+        issue_type (Optional[str]): Issue type filter (e.g., "Story", "Bug", "Epic"). If None, passes "all" to function.
+        metric_type (str): Metric type to filter by. Valid values:
+            - "issues_completed" - Issues completed on this day
+            - "issues_removed" - Issues removed from PI
+            - "total_scope" - Total scope of PI on this day (all issues in PI)
+            - "wip_in_progress" - Work in progress items
+            - "actual_remaining" - Actual remaining items (not done)
+        conn (Connection): Database connection from FastAPI dependency
+    
+    Returns:
+        list: List of issue dictionaries with issue_key, summary, team_name, metric_category
+    """
+    try:
+        # Map metric_type to function's metric_category values
+        metric_category_map = {
+            "issues_completed": "COMPLETED",
+            "issues_removed": "REMOVED",
+            "wip_in_progress": "WIP",
+            "actual_remaining": "REMAINING"
+        }
+        
+        # Handle issue_type parameter (pass "all" if not provided)
+        target_issuetype = issue_type if issue_type else "all"
+        
+        # Build parameters for the function call
+        params = {
+            "target_pi_name": pi_name,
+            "target_issuetype": target_issuetype,
+            "target_date": target_date.strftime("%Y-%m-%d")
+        }
+        
+        # Build query - pass team_names as array or NULL
+        # The SQL function handles NULL team_names (returns all teams)
+        if team_names:
+            params["team_names"] = team_names
+            sql_query_text = text("""
+                SELECT * FROM public.get_pi_issue_details_for_date(
+                    :target_pi_name,
+                    :target_issuetype,
+                    CAST(:team_names AS text[]),
+                    CAST(:target_date AS date)
+                )
+            """)
+            logger.info(f"Executing query to get PI history issues: pi={pi_name}, date={target_date}, issue_type={target_issuetype}, teams={team_names}, metric_type={metric_type}")
+        else:
+            # Pass NULL for all teams - function handles it
+            sql_query_text = text("""
+                SELECT * FROM public.get_pi_issue_details_for_date(
+                    :target_pi_name,
+                    :target_issuetype,
+                    NULL,
+                    CAST(:target_date AS date)
+                )
+            """)
+            logger.info(f"Executing query to get PI history issues: pi={pi_name}, date={target_date}, issue_type={target_issuetype}, teams=all, metric_type={metric_type}")
+        
+        # Execute query with parameters (SECURE: prevents SQL injection)
+        result = conn.execute(sql_query_text, params)
+        rows = result.fetchall()
+        
+        # Convert rows to list of dictionaries
+        all_issues = []
+        for row in rows:
+            row_dict = dict(row._mapping)
+            all_issues.append(row_dict)
+        
+        # Filter by metric_type if not "total_scope"
+        if metric_type == "total_scope":
+            # For total_scope, we need ALL issues in PI on that date
+            # The function returns issues with specific categories, so we need a separate query
+            # Query jira_issue_history directly for all issues in PI on that date
+            # Return same structure as function: issue_key, summary, team_name, metric_category
+            params_scope = {
+                "target_pi_name": pi_name,
+                "target_date": target_date.strftime("%Y-%m-%d"),
+                "target_issuetype": target_issuetype
+            }
+            
+            # Build team filter if team_names provided
+            if team_names:
+                team_placeholders = ", ".join([f":team_name_{i}" for i in range(len(team_names))])
+                for i, name in enumerate(team_names):
+                    params_scope[f"team_name_{i}"] = name
+                
+                scope_query = text(f"""
+                    SELECT DISTINCT
+                        jh.issue_key,
+                        ji.summary,
+                        jh.team_name,
+                        'TOTAL_SCOPE' as metric_category
+                    FROM public.jira_issue_history jh
+                    LEFT JOIN public.jira_issues ji ON jh.issue_key = ji.issue_key
+                    WHERE jh.snapshot_date::date = CAST(:target_date AS date)
+                    AND jh.quarter_pi = :target_pi_name
+                    AND (:target_issuetype = 'all' OR jh.issuetype = :target_issuetype)
+                    AND jh.team_name IN ({team_placeholders})
+                """)
+            else:
+                # No team filter - get all teams
+                scope_query = text("""
+                    SELECT DISTINCT
+                        jh.issue_key,
+                        ji.summary,
+                        jh.team_name,
+                        'TOTAL_SCOPE' as metric_category
+                    FROM public.jira_issue_history jh
+                    LEFT JOIN public.jira_issues ji ON jh.issue_key = ji.issue_key
+                    WHERE jh.snapshot_date::date = CAST(:target_date AS date)
+                    AND jh.quarter_pi = :target_pi_name
+                    AND (:target_issuetype = 'all' OR jh.issuetype = :target_issuetype)
+                """)
+            
+            scope_result = conn.execute(scope_query, params_scope)
+            scope_rows = scope_result.fetchall()
+            
+            issues = []
+            for row in scope_rows:
+                row_dict = dict(row._mapping)
+                issues.append({
+                    "issue_key": row_dict.get("issue_key"),
+                    "summary": row_dict.get("summary"),
+                    "team_name": row_dict.get("team_name"),
+                    "metric_category": row_dict.get("metric_category")
+                })
+            
+            logger.info(f"Retrieved {len(issues)} issues for total_scope metric")
+            return issues
+        else:
+            # Filter by metric_category
+            target_category = metric_category_map.get(metric_type)
+            if not target_category:
+                raise ValueError(f"Invalid metric_type: {metric_type}")
+            
+            # Filter issues by metric_category - return only what function returns
+            filtered_issues = [
+                {
+                    "issue_key": issue.get("issue_key"),
+                    "summary": issue.get("summary"),
+                    "team_name": issue.get("team_name"),
+                    "metric_category": issue.get("metric_category")
+                }
+                for issue in all_issues 
+                if issue.get("metric_category") == target_category
+            ]
+            
+            logger.info(f"Retrieved {len(filtered_issues)} issues for metric_type={metric_type}")
+            return filtered_issues
+            
+    except Exception as e:
+        logger.error(f"Error fetching PI history issues (pi={pi_name}, date={target_date}, metric_type={metric_type}): {e}")
+        raise e

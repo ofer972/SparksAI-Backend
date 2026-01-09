@@ -31,6 +31,7 @@ from database_team_metrics import (
     get_closed_sprints_data_db,
     get_issues_trend_data_db,
     select_sprint_for_teams,
+    get_available_sprint_names_db,
 )
 
 logger = logging.getLogger(__name__)
@@ -205,6 +206,7 @@ def _fetch_team_sprint_burndown(filters: Dict[str, Any], conn: Connection) -> Re
                 "start_date": None,
                 "end_date": None,
                 "available_teams": available_teams,
+                "available_sprints": [],
             },
         }
 
@@ -217,6 +219,9 @@ def _fetch_team_sprint_burndown(filters: Dict[str, Any], conn: Connection) -> Re
     selected_sprint_end_date = sprint_selection.get('selected_sprint_end_date')
     error_message = sprint_selection['error_message']
     auto_selected = sprint_name is None and selected_sprint_name is not None
+    
+    # Get available sprints for the team(s)
+    available_sprints = get_available_sprint_names_db(team_names_list if team_names_list else [team_name], conn) if team_name else []
 
     # If error occurred, return error in report format
     if error_message:
@@ -235,6 +240,7 @@ def _fetch_team_sprint_burndown(filters: Dict[str, Any], conn: Connection) -> Re
                 "start_date": None,
                 "end_date": None,
                 "available_teams": available_teams,
+                "available_sprints": available_sprints,
                 "error_message": error_message,
             },
         }
@@ -255,6 +261,7 @@ def _fetch_team_sprint_burndown(filters: Dict[str, Any], conn: Connection) -> Re
                 "start_date": None,
                 "end_date": None,
                 "available_teams": available_teams,
+                "available_sprints": available_sprints,
             },
         }
 
@@ -291,6 +298,7 @@ def _fetch_team_sprint_burndown(filters: Dict[str, Any], conn: Connection) -> Re
             "start_date": start_date,
             "end_date": end_date,
             "available_teams": available_teams,
+            "available_sprints": available_sprints,
         },
     }
 

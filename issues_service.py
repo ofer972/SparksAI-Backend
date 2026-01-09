@@ -2002,6 +2002,221 @@ async def get_cycle_time_with_issue_keys(
         )
 
 
+@issues_router.get("/issues/get-history-info")
+async def get_history_info(
+    date: str = Query(..., description="Date to query (YYYY-MM-DD format, date only, no time)"),
+    sprint_id: int = Query(..., description="Sprint ID to filter by"),
+    team_name: Optional[str] = Query(None, description="Team name or group name (if isGroup=true)"),
+    isGroup: bool = Query(False, description="If true, team_name is treated as a group name"),
+    issue_type: Optional[str] = Query(None, description="Filter by issue type (e.g., 'Story', 'Bug', 'Epic')"),
+    metric_type: str = Query(..., description="Metric type: 'issues_completed', 'issues_removed', 'total_scope', 'wip_in_progress', or 'actual_remaining'"),
+    conn: Connection = Depends(get_db_connection)
+):
+    """
+    Get history info for issues on a specific date in a sprint.
+    
+    Returns issues matching the specified metric type for the given date, sprint, team, and issue type.
+    
+    Args:
+        date: Date to query (YYYY-MM-DD format, date only, no time)
+        sprint_id: Sprint ID to filter by
+        team_name: Optional team name or group name (if isGroup=true)
+        isGroup: If true, team_name is treated as a group name
+        issue_type: Optional filter by issue type
+        metric_type: Metric type to return:
+            - "issues_completed" - Issues completed on this day
+            - "issues_removed" - Issues removed from sprint (were in sprint day before, not now)
+            - "total_scope" - Total scope of sprint on this day (all issues in sprint)
+            - "wip_in_progress" - Work in progress items on this day
+            - "actual_remaining" - Actual remaining items on this day (not done)
+    
+    Returns:
+        JSON response with issues list and metadata
+    """
+    try:
+        from database_team_metrics import resolve_team_names_from_filter, get_sprint_history_issues_db
+        
+        # Validate date format
+        try:
+            target_date = datetime.strptime(date, "%Y-%m-%d").date()
+        except ValueError as e:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Invalid date format. Expected YYYY-MM-DD format. Error: {str(e)}"
+            )
+        
+        # Validate metric_type
+        valid_metric_types = ["issues_completed", "issues_removed", "total_scope", "wip_in_progress", "actual_remaining"]
+        if metric_type not in valid_metric_types:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Invalid metric_type. Must be one of: {', '.join(valid_metric_types)}"
+            )
+        
+        # Resolve team names using shared helper function
+        # Returns None if no team_name provided (meaning all teams)
+        team_names_list = resolve_team_names_from_filter(team_name, isGroup, conn)
+        
+        logger.info(f"Fetching history info: date={date}, sprint_id={sprint_id}, team_name={team_name}, isGroup={isGroup}, issue_type={issue_type}, metric_type={metric_type}")
+        if team_names_list:
+            logger.info(f"Resolved team names: {team_names_list}")
+        
+        # Call database helper function
+        issues = get_sprint_history_issues_db(
+            sprint_id=sprint_id,
+            target_date=target_date,
+            team_names=team_names_list,
+            issue_type=issue_type,
+            metric_type=metric_type,
+            conn=conn
+        )
+        
+        # Build response
+        response_data = {
+            "issues": issues,
+            "count": len(issues),
+            "date": date,
+            "sprint_id": sprint_id,
+            "metric_type": metric_type
+        }
+        
+        # Add optional filters to response
+        if team_name:
+            if isGroup:
+                response_data["group_name"] = team_name
+                if team_names_list:
+                    response_data["teams_in_group"] = team_names_list
+            else:
+                response_data["team_name"] = team_name
+        
+        if issue_type:
+            response_data["issue_type"] = issue_type
+        
+        return {
+            "success": True,
+            "data": response_data,
+            "message": f"Retrieved {len(issues)} issues"
+        }
+    
+    except HTTPException:
+        # Re-raise HTTP exceptions (validation errors)
+        raise
+    except Exception as e:
+        logger.error(f"Error fetching history info: {e}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to fetch history info: {str(e)}"
+        )
+
+
+@issues_router.get("/issues/get-pi-history-info")
+async def get_pi_history_info(
+    date: str = Query(..., description="Date to query (YYYY-MM-DD format, date only, no time)"),
+    pi: str = Query(..., description="PI name (quarter_pi) to filter by"),
+    team_name: Optional[str] = Query(None, description="Team name or group name (if isGroup=true)"),
+    isGroup: bool = Query(False, description="If true, team_name is treated as a group name"),
+    issue_type: Optional[str] = Query(None, description="Filter by issue type (e.g., 'Story', 'Bug', 'Epic')"),
+    metric_type: str = Query(..., description="Metric type: 'issues_completed', 'issues_removed', 'total_scope', 'wip_in_progress', or 'actual_remaining'"),
+    conn: Connection = Depends(get_db_connection)
+):
+    """
+    Get history info for issues on a specific date in a PI.
+    
+    Returns issues matching the specified metric type for the given date, PI, team, and issue type.
+    
+    Args:
+        date: Date to query (YYYY-MM-DD format, date only, no time)
+        pi: PI name (quarter_pi) to filter by
+        team_name: Optional team name or group name (if isGroup=true)
+        isGroup: If true, team_name is treated as a group name
+        issue_type: Optional filter by issue type
+        metric_type: Metric type to return:
+            - "issues_completed" - Issues completed on this day
+            - "issues_removed" - Issues removed from PI (were in PI day before, not now)
+            - "total_scope" - Total scope of PI on this day (all issues in PI)
+            - "wip_in_progress" - Work in progress items on this day
+            - "actual_remaining" - Actual remaining items on this day (not done)
+    
+    Returns:
+        JSON response with issues list and metadata
+    """
+    try:
+        from database_team_metrics import resolve_team_names_from_filter
+        from database_pi import get_pi_history_issues_db
+        
+        # Validate date format
+        try:
+            target_date = datetime.strptime(date, "%Y-%m-%d").date()
+        except ValueError as e:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Invalid date format. Expected YYYY-MM-DD format. Error: {str(e)}"
+            )
+        
+        # Validate metric_type
+        valid_metric_types = ["issues_completed", "issues_removed", "total_scope", "wip_in_progress", "actual_remaining"]
+        if metric_type not in valid_metric_types:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Invalid metric_type. Must be one of: {', '.join(valid_metric_types)}"
+            )
+        
+        # Resolve team names using shared helper function
+        # Returns None if no team_name provided (meaning all teams)
+        team_names_list = resolve_team_names_from_filter(team_name, isGroup, conn)
+        
+        logger.info(f"Fetching PI history info: date={date}, pi={pi}, team_name={team_name}, isGroup={isGroup}, issue_type={issue_type}, metric_type={metric_type}")
+        if team_names_list:
+            logger.info(f"Resolved team names: {team_names_list}")
+        
+        # Call database helper function
+        issues = get_pi_history_issues_db(
+            pi_name=pi,
+            target_date=target_date,
+            team_names=team_names_list,
+            issue_type=issue_type,
+            metric_type=metric_type,
+            conn=conn
+        )
+        
+        # Build response
+        response_data = {
+            "issues": issues,
+            "count": len(issues),
+            "date": date,
+            "pi": pi,
+            "metric_type": metric_type
+        }
+        
+        # Add optional filters to response
+        if team_name:
+            if isGroup:
+                response_data["group_name"] = team_name
+                if team_names_list:
+                    response_data["teams_in_group"] = team_names_list
+            else:
+                response_data["team_name"] = team_name
+        
+        if issue_type:
+            response_data["issue_type"] = issue_type
+        
+        return {
+            "success": True,
+            "data": response_data,
+            "message": f"Retrieved {len(issues)} issues"
+        }
+    
+    except HTTPException:
+        # Re-raise HTTP exceptions (validation errors)
+        raise
+    except Exception as e:
+        logger.error(f"Error fetching PI history info: {e}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to fetch PI history info: {str(e)}"
+        )
+
+
 @issues_router.get("/issues/{issue_id}")
 async def get_issue(
     issue_id: str,
@@ -2057,6 +2272,8 @@ async def get_issue(
             status_code=500,
             detail=f"Failed to fetch issue: {str(e)}"
         )
+
+
 async def get_cycle_time_with_issue_keys(
     request: Request,
     period_start: str = Query(..., description="Start date (YYYY-MM-DD) - filter by resolved_at >= period_start"),
