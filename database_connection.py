@@ -273,11 +273,11 @@ def get_db_engine() -> Optional[create_engine]:
         print("🚀 DATABASE: Creating NEW engine (not from pool) - this should be rare!")
         engine = create_engine(
             connection_string,
-            pool_size=20,        # Keep 20 connections in pool
+            pool_size=10,        # Keep 10 connections in pool
             pool_pre_ping=True,  # Verify connections before use
             pool_recycle=300,    # Recycle connections every 5 minutes
             pool_timeout=30,     # Timeout for getting connection from pool
-            max_overflow=10,     # Allow up to 10 extra connections (total: 30 connections)
+            max_overflow=5,      # Allow up to 5 extra connections (total: 15 connections)
             echo=False           # Set to True for SQL debugging
         )
         
