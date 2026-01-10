@@ -20,6 +20,9 @@ load_dotenv()
 
 logger = logging.getLogger(__name__)
 
+# Database application name for PostgreSQL connection identification
+DB_APPLICATION_NAME = "SparksAI-Backend"
+
 # Control SQL logging via environment variable (defaults to enabled)
 _sql_log_env = os.getenv('SQL_LOG_ENABLED', 'true').strip().lower()
 SQL_LOG_ENABLED = _sql_log_env in ('1', 'true', 'yes', 'on')
@@ -113,6 +116,11 @@ def get_connection_string() -> Optional[str]:
             logger.error("Error: Neither POSTGRES_* variables nor DATABASE_URL are configured.")
             return None
     
+    # Add application_name to connection string
+    if connection_string:
+        separator = '&' if '?' in connection_string else '?'
+        connection_string += f"{separator}application_name={DB_APPLICATION_NAME}"
+    
     return connection_string
 
 
@@ -193,7 +201,9 @@ def ensure_database_exists(connection_string: str) -> bool:
         # Build connection string to default 'postgres' database
         default_db_conn_str = f"postgresql://{user}:{password}@{host}:{port}/postgres"
         if sslmode:
-            default_db_conn_str += f"?sslmode={sslmode}"
+            default_db_conn_str += f"?sslmode={sslmode}&application_name={DB_APPLICATION_NAME}"
+        else:
+            default_db_conn_str += f"?application_name={DB_APPLICATION_NAME}"
         
         logger.info(f"🔍 Checking if database '{target_database}' exists...")
         
