@@ -490,7 +490,6 @@ def _fetch_release_burndown(filters: Dict[str, Any], conn: Connection) -> Report
     
     release_name = (filters.get("release") or "").strip() or None
     issue_type = (filters.get("issue_type") or "all").strip() or "all"
-    project = filters.get("project")
     team = (filters.get("team_name") or filters.get("team") or "").strip() or None
     is_group = filters.get("isGroup", False)
 
@@ -520,7 +519,7 @@ def _fetch_release_burndown(filters: Dict[str, Any], conn: Connection) -> Report
     if release_name:
         burndown_data = fetch_release_burndown_data(
             release_name=release_name,
-            project_keys=project,
+            project_keys=None,
             issue_type=issue_type,
             team_names=team_names_list,
             conn=conn,
@@ -529,7 +528,6 @@ def _fetch_release_burndown(filters: Dict[str, Any], conn: Connection) -> Report
     meta = {
         "release": release_name,
         "issue_type": issue_type,
-        "project": project,
         "isGroup": is_group,
         "available_releases": available_releases,
     }

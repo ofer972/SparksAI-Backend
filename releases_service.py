@@ -137,7 +137,6 @@ async def get_release_predictability(
 @releases_router.get("/releases/burndown")
 async def get_release_burndown(
     release: str = Query(..., description="Release name (mandatory)"),
-    project: str = Query(None, description="Project key filter"),
     issue_type: str = Query(None, description="Issue type filter"),
     team_name: str = Query(None, description="Team name filter (or group name if isGroup=true)"),
     isGroup: bool = Query(False, description="If true, team_name is treated as a group name"),
@@ -148,8 +147,7 @@ async def get_release_burndown(
     
     Parameters:
         release: Release name (mandatory)
-        project: Project key filter (optional)
-        issue_type: Issue type filter (optional, defaults to 'Epic')
+        issue_type: Issue type filter (optional, defaults to 'all')
         team_name: Team name filter (optional, or group name if isGroup=true)
         isGroup: If true, team_name parameter is treated as a group name (default: false)
     
@@ -169,13 +167,13 @@ async def get_release_burndown(
         team_names_list = resolve_team_names_from_filter(team_name, isGroup, conn)
         
         logger.info(f"Fetching release burndown data for release: {release}")
-        logger.info(f"Filters: project={project}, issue_type={issue_type}, team_name={team_name}, isGroup={isGroup}")
+        logger.info(f"Filters: issue_type={issue_type}, team_name={team_name}, isGroup={isGroup}")
         if team_names_list:
             logger.info(f"Resolved team names: {team_names_list}")
         
         burndown_data = fetch_release_burndown_data(
             release_name=release,
-            project_keys=project,
+            project_keys=None,
             issue_type=issue_type,
             team_names=team_names_list,
             conn=conn
@@ -185,7 +183,6 @@ async def get_release_burndown(
             "burndown_data": burndown_data,
             "count": len(burndown_data),
             "release": release,
-            "project": project,
             "issue_type": issue_type,
             "isGroup": isGroup
         }

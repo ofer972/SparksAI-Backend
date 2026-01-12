@@ -217,16 +217,14 @@ DEFAULT_REPORT_DEFINITIONS = [
         "default_filters": {
             "release": None,
             "team_name": None,
-            "issue_type": None,
-            "project": None
+            "issue_type": None
         },
         "meta_schema": {
             "required_filters": [],
-            "optional_filters": ["release", "issue_type", "project", "team_name"],
+            "optional_filters": ["release", "issue_type", "team_name"],
             "parameters": {
                 "release": {"type": "string", "description": "Release name"},
                 "issue_type": {"type": "string", "description": "Issue type filter (default 'all' for all issue types)"},
-                "project": {"type": "string", "description": "Project key filter"},
                 "team_name": {"type": "string", "description": "Team name filter"}
             },
             "allowed_views": ["every-dashboard"]
