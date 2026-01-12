@@ -1038,80 +1038,93 @@ async def get_sprint_velocity_advanced(
 
 @team_metrics_router.get("/team-metrics/issues-trend")
 async def get_issues_trend(
-    team_name: str = Query(..., description="Team name or group name (if isGroup=true)"),
-    months: int = Query(6, description="Number of months to look back (1, 2, 3, 4, 6, 9, 12)", ge=1, le=12),
-    issue_type: str = Query("all", description="Issue type filter (default: 'all')"),
+    team_name: Optional[str] = Query(None, description="Team name or group name (if isGroup=true)"),
+    months: int = Query(6, description="Number of months to look back (any integer)"),
+    issue_type: Optional[str] = Query(None, description="Issue type filter (e.g., 'Bug', 'Story'). If not provided, returns all types"),
     isGroup: bool = Query(False, description="If true, team_name is treated as a group name"),
     conn: Connection = Depends(get_db_connection)
 ):
     """
-    Get issues created and resolved over time for a specific team(s) or group.
+    Get issues created and resolved over time using the get_issues_created_and_resolved_trend SQL function.
     
     This endpoint retrieves trend data showing issues created, resolved, and cumulative open issues over time.
-    Returns all columns from the issues_created_and_resolved_over_time view.
-    When isGroup=true, aggregates data across all teams in the group.
+    Data is aggregated per month (not per team). When isGroup=true, aggregates data across all teams in the group.
     
     Parameters:
-    - team_name: Name of the team or group name (if isGroup=true) (required)
-    - months: Number of months to look back (optional, default: 6)
-      Valid values: 1, 2, 3, 4, 6, 9, 12
-      Note: Only values 1, 2, 3, 4, 6, 9 are accepted (will validate in code)
-    - issue_type: Issue type filter (optional, default: 'all')
-      Examples: 'Bug', 'Story', 'Task', 'all'
-    - isGroup: If true, team_name is treated as a group name and returns trend data for all teams in that group
+    - team_name: Optional team name or group name (if isGroup=true)
+    - months: Number of months to look back (any integer, default: 6)
+    - issue_type: Optional issue type filter (e.g., 'Bug', 'Story'). If not provided, returns data for all types
+    - isGroup: If true, team_name is treated as a group name
     
     Returns:
-        JSON response with trend data list and metadata
+        JSON response with trend data grouped by issue_type and metadata
     """
     try:
         from database_team_metrics import resolve_team_names_from_filter
         
-        # Validate months parameter (same validation as closed sprints)
-        if months not in [1, 2, 3, 4, 6, 9]:
-            raise HTTPException(
-                status_code=400, 
-                detail="Months parameter must be one of: 1, 2, 3, 4, 6, 9"
-            )
+        # Validate months is an integer (FastAPI already does this, but ensure it's positive)
+        if not isinstance(months, int):
+            raise HTTPException(status_code=400, detail="Months parameter must be an integer")
         
-        # Validate issue_type
-        if not isinstance(issue_type, str):
-            raise HTTPException(status_code=400, detail="Issue type must be a string")
-        if issue_type.strip() == "":
-            issue_type = "all"
-        
-        # Validate and resolve team names using shared helper function (same pattern as closed sprints)
-        validated_name = None
-        if isGroup:
-            validated_name = validate_group_name(team_name)
-        else:
-            validated_name = validate_team_name(team_name)
+        # Normalize issue_type - convert "all" to None, empty string to None
+        normalized_issue_type = None
+        if issue_type:
+            issue_type = issue_type.strip()
+            if issue_type and issue_type.lower() != "all":
+                normalized_issue_type = issue_type
         
         # Resolve team names using shared helper function
-        team_names_list = resolve_team_names_from_filter(validated_name, isGroup, conn)
+        team_names_list = None
+        validated_name = None
+        if team_name:
+            team_name = team_name.strip()
+            if team_name:
+                if isGroup:
+                    validated_name = validate_group_name(team_name)
+                else:
+                    validated_name = validate_team_name(team_name)
+                team_names_list = resolve_team_names_from_filter(validated_name, isGroup, conn)
         
-        # Get issues trend data from database function (now accepts list of team names)
-        trend_data = get_issues_trend_data_db(team_names_list, months, issue_type, conn)
+        # Get issues trend data from database function
+        # Returns dict grouped by issue_type: {"Bug": [...], "Story": [...]}
+        trend_data = get_issues_trend_data_db(team_names_list, months, normalized_issue_type, conn)
+        
+        # Calculate total count across all issue types
+        total_count = sum(len(data_list) for data_list in trend_data.values())
         
         # Build response data
         response_data = {
-            "months": months,
-            "issue_type": issue_type,
-            "trend_data": trend_data,
-            "count": len(trend_data)
+            "data": trend_data,
+            "meta": {
+                "months": months,
+                "count": total_count
+            }
         }
         
         # Add metadata based on what was filtered
-        if isGroup:
-            response_data["group_name"] = validated_name
-            response_data["teams_in_group"] = team_names_list
-            message = f"Retrieved issues trend data for group '{validated_name}' ({len(team_names_list)} teams) (last {months} months)"
+        if validated_name:
+            if isGroup:
+                response_data["meta"]["group_name"] = validated_name
+                response_data["meta"]["teams_in_group"] = team_names_list
+            else:
+                response_data["meta"]["team_name"] = validated_name
+        
+        if normalized_issue_type:
+            response_data["meta"]["issue_type"] = normalized_issue_type
+        
+        # Build message
+        if validated_name:
+            if isGroup:
+                message = f"Retrieved issues trend data for group '{validated_name}' ({len(team_names_list)} teams) (last {months} months)"
+            else:
+                message = f"Retrieved issues trend data for team '{validated_name}' (last {months} months)"
         else:
-            response_data["team_name"] = validated_name
-            message = f"Retrieved issues trend data for team '{validated_name}' (last {months} months)"
+            message = f"Retrieved issues trend data for all teams (last {months} months)"
         
         return {
             "success": True,
-            "data": response_data,
+            "data": response_data["data"],
+            "meta": response_data["meta"],
             "message": message
         }
     

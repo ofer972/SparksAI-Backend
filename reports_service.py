@@ -172,11 +172,12 @@ async def get_report_instance(
     issue_type: Optional[str] = Query(None),
     sprint_name: Optional[str] = Query(None),
     pi: Optional[str] = Query(None),
+    release: Optional[str] = Query(None, description="Release name filter (for release-burndown report)"),
     project: Optional[str] = Query(None),
     team: Optional[str] = Query(None),
     months: Optional[int] = Query(None),
     pi_names: Optional[List[str]] = Query(None),
-    status_category: Optional[str] = Query(None), # New filter
+    status_category: Optional[List[str]] = Query(None), # Status category filter (array)
     include_done: Optional[bool] = Query(None), # New filter
     view_mode: Optional[str] = Query(None), # New filter
     limit: Optional[int] = Query(None), # New filter
@@ -193,6 +194,7 @@ async def get_report_instance(
     - team-sprint-burndown
     - team-current-sprint-progress
     - pi-burndown
+    - release-burndown
     - team-closed-sprints
     - sprint-velocity-advanced
     - team-issues-trend

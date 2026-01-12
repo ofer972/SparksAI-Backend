@@ -209,6 +209,30 @@ DEFAULT_REPORT_DEFINITIONS = [
         }
     },
     {
+        "report_id": "release-burndown",
+        "report_name": "Release Burndown",
+        "chart_type": "burn_down",
+        "data_source": "release_burndown",
+        "description": "Displays release burndown for issues (Epic, Stories, Bugs etc.) that are part of a defined release.",
+        "default_filters": {
+            "release": None,
+            "team_name": None,
+            "issue_type": None,
+            "project": None
+        },
+        "meta_schema": {
+            "required_filters": [],
+            "optional_filters": ["release", "issue_type", "project", "team_name"],
+            "parameters": {
+                "release": {"type": "string", "description": "Release name"},
+                "issue_type": {"type": "string", "description": "Issue type filter (default 'all' for all issue types)"},
+                "project": {"type": "string", "description": "Project key filter"},
+                "team_name": {"type": "string", "description": "Team name filter"}
+            },
+            "allowed_views": ["every-dashboard"]
+        }
+    },
+    {
         "report_id": "team-closed-sprints",
         "report_name": "Closed Sprints",
         "chart_type": "table",
@@ -264,10 +288,11 @@ DEFAULT_REPORT_DEFINITIONS = [
             "months": 6
         },
         "meta_schema": {
-            "required_filters": ["team_name"],
-            "optional_filters": ["issue_type", "months"],
+            "required_filters": [],
+            "optional_filters": ["team_name", "isGroup", "issue_type", "months"],
             "parameters": {
-                "team_name": {"type": "string", "description": "Team identifier"},
+                "team_name": {"type": "string", "description": "Optional team name or group name (if isGroup=true)"},
+                "isGroup": {"type": "boolean", "description": "If true, team_name is treated as a group name"},
                 "issue_type": {"type": "string", "description": "Issue type filter (e.g., 'Bug', 'Story', 'all')"},
                 "months": {"type": "integer", "description": "Number of months to look back (1-12)"}
             },
@@ -346,16 +371,17 @@ DEFAULT_REPORT_DEFINITIONS = [
         "description": "Visualizes open bugs grouped by team with priority breakdown.",
         "default_filters": {
             "issue_type": "Bug",
-            "status_category": None,
-            "include_done": False
+            "months": 6
         },
         "meta_schema": {
             "required_filters": [],
-            "optional_filters": ["issue_type", "status_category", "include_done"],
+            "optional_filters": ["issue_type", "status_category", "team_name", "isGroup", "months"],
             "parameters": {
                 "issue_type": {"type": "string", "description": "Issue type filter (default 'Bug')"},
-                "status_category": {"type": "string", "description": "Optional status category filter"},
-                "include_done": {"type": "boolean", "description": "Include completed issues (defaults to false)"}
+                "status_category": {"type": "array", "description": "Status category filter (array)"},
+                "team_name": {"type": "string", "description": "Optional team name or group name (if isGroup=true)"},
+                "isGroup": {"type": "boolean", "description": "If true, team_name is treated as a group name"},
+                "months": {"type": "integer", "description": "Number of months to look back (default: 6)"}
             },
             "allowed_views": ["team-dashboard"]
         }
@@ -432,10 +458,10 @@ DEFAULT_REPORT_DEFINITIONS = [
         "report_id": "issues-release-predictability",
         "report_name": "Release Predictability",
         "chart_type": "table",
-        "data_source": "issues_release_predictability",
+        "data_source": "release_predictability",
         "description": "Highlights release progress across epics and other issues over recent months.",
         "default_filters": {
-            "months": 3
+            "months": 6
         },
         "meta_schema": {
             "required_filters": [],

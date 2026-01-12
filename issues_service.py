@@ -737,163 +737,57 @@ async def get_issue_status_duration_per_month(
         )
 
 
-@issues_router.get("/issues/release-predictability")
-async def get_release_predictability(
-    months: int = Query(3, description="Number of months to look back", ge=1, le=12),
-    conn: Connection = Depends(get_db_connection)
-):
-    """
-    Get release predictability analysis from the release_predictability_analysis table.
-    
-    Returns release predictability metrics including version name, project key, dates,
-    epic completion percentages, and other issues completion percentages.
-    
-    Args:
-        months: Number of months to look back (default: 3)
-    
-    Returns:
-        JSON response with release predictability data list and metadata
-    """
-    try:
-        # Calculate start date based on months parameter
-        start_date = datetime.now().date() - timedelta(days=months * 30)
-        
-        # SECURE: Parameterized query prevents SQL injection
-        query = text("""
-            SELECT 
-                version_name, 
-                project_key, 
-                release_start_date, 
-                release_date, 
-                total_epics_in_scope, 
-                epics_completed, 
-                epic_percent_completed, 
-                total_other_issues_in_scope, 
-                other_issues_completed, 
-                other_issues_percent_completed 
-            FROM public.release_predictability_analysis 
-            WHERE release_start_date >= :start_date
-            ORDER BY release_start_date DESC
-        """)
-        
-        logger.info(f"Executing query to get release predictability: months={months}")
-        
-        result = conn.execute(query, {"start_date": start_date.strftime("%Y-%m-%d")})
-        rows = result.fetchall()
-        
-        # Convert rows to list of dictionaries
-        predictability_data = []
-        for row in rows:
-            data_dict = dict(row._mapping)
-            
-            # Format date fields if they exist
-            for key, value in data_dict.items():
-                if value is not None and hasattr(value, 'strftime'):
-                    data_dict[key] = value.strftime('%Y-%m-%d')
-            
-            predictability_data.append(data_dict)
-        
-        return {
-            "success": True,
-            "data": {
-                "release_predictability": predictability_data,
-                "count": len(predictability_data),
-                "months": months
-            },
-            "message": f"Retrieved {len(predictability_data)} release predictability records (last {months} months)"
-        }
-    
-    except HTTPException:
-        # Re-raise HTTP exceptions (validation errors)
-        raise
-    except Exception as e:
-        logger.error(f"Error fetching release predictability: {e}")
-        raise HTTPException(
-            status_code=500,
-            detail=f"Failed to fetch release predictability: {str(e)}"
-        )
-
-
 @issues_router.get("/issues/issues-grouped-by-priority")
 async def get_issues_grouped_by_priority(
     issue_type: Optional[str] = Query(None, description="Filter by issue type"),
     team_name: Optional[str] = Query(None, description="Filter by team name or group name (if isGroup=true)"),
-    status_category: Optional[str] = Query(None, description="Filter by status category"),
+    status_category: Optional[List[str]] = Query(None, description="Filter by status categories (array)"),
     isGroup: bool = Query(False, description="If true, team_name is treated as a group name"),
+    months: Optional[int] = Query(3, description="Number of months to look back (1-12)", ge=1, le=12),
     conn: Connection = Depends(get_db_connection)
 ):
     """
     Get issues grouped by priority from the jira_issues table.
     
-    Returns the count of issues per priority level, with optional filtering by issue_type, team_name, and/or status_category.
+    Returns the count of issues per priority level, with optional filtering by issue_type, team_name, status_category, and time period.
     When isGroup=true, aggregates data across all teams in the group.
+    Uses the same logic as the reports service endpoint.
     
     Args:
         issue_type: Optional filter by issue type
         team_name: Optional filter by team name or group name (if isGroup=true)
-        status_category: Optional filter by status category
+        status_category: Optional filter by status categories (array)
         isGroup: If true, team_name is treated as a group name
+        months: Number of months to look back (default: 3)
     
     Returns:
         JSON response with issues grouped by priority (priority, status_category, and issue_count)
     """
     try:
-        from database_team_metrics import resolve_team_names_from_filter
+        from database_reports import _fetch_issues_bugs_by_priority
         
-        # Build WHERE clause conditions based on provided filters
-        where_conditions = []
-        params = {}
-        
+        # Build filters dict to match what _fetch_issues_bugs_by_priority expects
+        filters: Dict[str, Any] = {}
         if issue_type:
-            where_conditions.append("issue_type = :issue_type")
-            params["issue_type"] = issue_type
-        
-        # Resolve team names using shared helper function (same pattern as other endpoints)
-        team_names_list = None
+            filters["issue_type"] = issue_type
         if team_name:
-            team_names_list = resolve_team_names_from_filter(team_name, isGroup, conn)
-            if team_names_list:
-                # Build parameterized IN clause (same pattern as closed sprints)
-                placeholders = ", ".join([f":team_name_{i}" for i in range(len(team_names_list))])
-                where_conditions.append(f"team_name IN ({placeholders})")
-                for i, name in enumerate(team_names_list):
-                    params[f"team_name_{i}"] = name
-        
+            filters["team_name"] = team_name
         if status_category:
-            where_conditions.append("status_category = :status_category")
-            params["status_category"] = status_category
-        else:
-            # Default: exclude "Done" to get only open issues
-            where_conditions.append("status_category != 'Done'")
+            filters["status_category"] = status_category
+        if isGroup:
+            filters["isGroup"] = isGroup
+        if months:
+            filters["months"] = months
         
-        # Build SQL query
-        where_clause = " AND ".join(where_conditions) if where_conditions else "1=1"
+        # Call the shared function
+        result = _fetch_issues_bugs_by_priority(filters, conn)
         
-        # SECURE: Parameterized query prevents SQL injection
-        query = text(f"""
-            SELECT 
-                priority,
-                status_category,
-                COUNT(*) as issue_count
-            FROM {config.WORK_ITEMS_TABLE}
-            WHERE {where_clause}
-            GROUP BY priority, status_category
-            ORDER BY priority, status_category
-        """)
+        # Transform response to match direct endpoint format
+        priority_summary = result.get("data", {}).get("priority_summary", [])
+        meta = result.get("meta", {})
         
-        logger.info(f"Executing query to get issues grouped by priority: issue_type={issue_type}, team_name={team_name}, isGroup={isGroup}, status_category={status_category}")
-        
-        result = conn.execute(query, params)
-        rows = result.fetchall()
-        
-        # Convert rows to list of dictionaries
-        issues_by_priority = []
-        for row in rows:
-            issues_by_priority.append({
-                "priority": row[0] if row[0] is not None else "Unspecified",
-                "status_category": row[1] if row[1] is not None else "Unspecified",
-                "issue_count": int(row[2])
-            })
+        # Convert to issues_by_priority format
+        issues_by_priority = priority_summary
         
         # Build response data
         response_data = {
@@ -905,13 +799,17 @@ async def get_issues_grouped_by_priority(
         if team_name:
             if isGroup:
                 response_data["group_name"] = team_name
-                response_data["teams_in_group"] = team_names_list
-                message = f"Retrieved {len(issues_by_priority)} priority groups for group '{team_name}' ({len(team_names_list)} teams)"
+                teams_in_group = meta.get("teams_in_group")
+                if teams_in_group:
+                    response_data["teams_in_group"] = teams_in_group
+                message = f"Retrieved {len(issues_by_priority)} priority groups for group '{team_name}'"
             else:
                 response_data["team_name"] = team_name
                 message = f"Retrieved {len(issues_by_priority)} priority groups for team '{team_name}'"
         else:
             message = f"Retrieved {len(issues_by_priority)} priority groups"
+        
+        logger.info(f"Retrieved issues grouped by priority: issue_type={issue_type}, team_name={team_name}, isGroup={isGroup}, status_category={status_category}, months={months}")
         
         return {
             "success": True,

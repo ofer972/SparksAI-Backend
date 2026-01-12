@@ -24,6 +24,7 @@ from database_pi import (
     fetch_epic_inbound_dependency_data,
     fetch_epic_outbound_dependency_data,
 )
+from database_releases import fetch_release_burndown_data
 from database_team_metrics import (
     get_sprint_burndown_data_db,
     get_sprints_with_total_issues_db,
@@ -484,6 +485,75 @@ def _fetch_pi_burndown(filters: Dict[str, Any], conn: Connection) -> ReportDataR
     }
 
 
+def _fetch_release_burndown(filters: Dict[str, Any], conn: Connection) -> ReportDataResult:
+    from database_team_metrics import resolve_team_names_from_filter
+    
+    release_name = (filters.get("release") or "").strip() or None
+    issue_type = (filters.get("issue_type") or "all").strip() or "all"
+    project = filters.get("project")
+    team = (filters.get("team_name") or filters.get("team") or "").strip() or None
+    is_group = filters.get("isGroup", False)
+
+    releases_query = text(
+        """
+        SELECT DISTINCT name, start_date, release_date
+        FROM jira_releases
+        WHERE name IS NOT NULL
+        ORDER BY release_date DESC NULLS LAST, name DESC
+        """
+    )
+    releases_rows = conn.execute(releases_query).fetchall()
+    available_releases = [row[0] for row in releases_rows if row[0]]
+    
+    release_start_date = None
+    release_end_date = None
+    if release_name:
+        for row in releases_rows:
+            if row[0] == release_name:
+                release_start_date = _date_to_iso(row[1]) if row[1] else None
+                release_end_date = _date_to_iso(row[2]) if row[2] else None
+                break
+
+    team_names_list = resolve_team_names_from_filter(team, is_group, conn)
+
+    burndown_data = []
+    if release_name:
+        burndown_data = fetch_release_burndown_data(
+            release_name=release_name,
+            project_keys=project,
+            issue_type=issue_type,
+            team_names=team_names_list,
+            conn=conn,
+        )
+
+    meta = {
+        "release": release_name,
+        "issue_type": issue_type,
+        "project": project,
+        "isGroup": is_group,
+        "available_releases": available_releases,
+    }
+    
+    if team:
+        if is_group:
+            meta["group_name"] = team
+            meta["teams_in_group"] = team_names_list
+        else:
+            meta["team_name"] = team
+    else:
+        meta["team_name"] = None
+
+    return {
+        "data": {
+            "release_name": release_name,
+            "release_start_date": release_start_date,
+            "release_end_date": release_end_date,
+            "burndown_data": burndown_data,
+        },
+        "meta": meta,
+    }
+
+
 def _parse_int(value: Any, default: int) -> int:
     if value is None:
         return default
@@ -626,7 +696,7 @@ def _fetch_team_sprint_velocity_advanced(filters: Dict[str, Any], conn: Connecti
 
 
 def _fetch_team_issues_trend(filters: Dict[str, Any], conn: Connection) -> ReportDataResult:
-    team_name = _require_filter(filters, "team_name")
+    team_name = (filters.get("team_name") or "").strip() or None
     is_group = filters.get("isGroup", False)
     issue_type = (filters.get("issue_type") or "Bug").strip() or "Bug"
     months_value = filters.get("months")
@@ -638,14 +708,17 @@ def _fetch_team_issues_trend(filters: Dict[str, Any], conn: Connection) -> Repor
     from database_team_metrics import resolve_team_names_from_filter
     team_names_list = resolve_team_names_from_filter(team_name, is_group, conn)
 
-    # Get trend data for all teams
+    # Get trend data - returns dict grouped by issue_type
     trend_data = get_issues_trend_data_db(team_names_list, months, issue_type, conn)
+
+    # Calculate total count across all issue types
+    total_count = sum(len(data_list) for data_list in trend_data.values())
 
     # Build meta with appropriate fields
     meta = {
-        "issue_type": issue_type,
+        "issue_type": issue_type if issue_type != "all" else None,
         "months": months,
-        "count": len(trend_data),
+        "count": total_count,
     }
     
     if is_group:
@@ -833,8 +906,9 @@ def _fetch_issues_bugs_by_priority(filters: Dict[str, Any], conn: Connection) ->
     issue_type = (filters.get("issue_type") or "Bug").strip() or "Bug"
     team_name = (filters.get("team_name") or "").strip() or None
     is_group = filters.get("isGroup", False)
-    status_category = (filters.get("status_category") or "").strip() or None
-    include_done = bool(filters.get("include_done"))
+    status_categories = filters.get("status_category")
+    months_value = filters.get("months")
+    months = _parse_int(months_value, default=3)  # Default: 3 months
 
     # Resolve team names using shared helper function (same pattern as other endpoints)
     from database_team_metrics import resolve_team_names_from_filter
@@ -857,11 +931,23 @@ def _fetch_issues_bugs_by_priority(filters: Dict[str, Any], conn: Connection) ->
         for i, name in enumerate(team_names_list):
             params[f"team_name_{i}"] = name
 
-    if status_category:
-        conditions.append("status_category = :status_category")
-        params["status_category"] = status_category
-    elif not include_done:
-        conditions.append("status_category != 'Done'")
+    # Handle array of status categories (same pattern as _fetch_issues_bugs_by_team)
+    if status_categories:
+        if isinstance(status_categories, list):
+            if len(status_categories) > 0:
+                placeholders = ", ".join([f":status_cat_{i}" for i in range(len(status_categories))])
+                conditions.append(f"status_category IN ({placeholders})")
+                for i, cat in enumerate(status_categories):
+                    params[f"status_cat_{i}"] = cat
+        elif isinstance(status_categories, str) and status_categories.strip():
+            conditions.append("status_category = :status_category")
+            params["status_category"] = status_categories.strip()
+
+    # Time period filter (same pattern as _fetch_issues_bugs_by_team)
+    if months > 0:
+        days_back = months * 30
+        conditions.append("created_at >= CURRENT_DATE - (:days_back || ' days')::interval")
+        params["days_back"] = days_back
 
     where_clause = " AND ".join(conditions) if conditions else "1=1"
 
@@ -889,40 +975,41 @@ def _fetch_issues_bugs_by_priority(filters: Dict[str, Any], conn: Connection) ->
             }
         )
 
-    team_query = text(
-        f"""
-        SELECT
-            team_name,
-            priority,
-            COUNT(*) AS issue_count
-        FROM {config.WORK_ITEMS_TABLE}
-        WHERE {where_clause}
-        GROUP BY team_name, priority
-        ORDER BY team_name, priority
-        """
-    )
+    # Team breakdown query - commented out because UI is not using it
+    # team_query = text(
+    #     f"""
+    #     SELECT
+    #         team_name,
+    #         priority,
+    #         COUNT(*) AS issue_count
+    #     FROM {config.WORK_ITEMS_TABLE}
+    #     WHERE {where_clause}
+    #     GROUP BY team_name, priority
+    #     ORDER BY team_name, priority
+    #     """
+    # )
 
-    team_rows = conn.execute(team_query, params).fetchall()
-    teams_dict: Dict[str, Dict[str, Any]] = {}
-    for row in team_rows:
-        team = row[0] if row[0] is not None else "Unspecified"
-        priority_value = row[1] if row[1] is not None else "Unspecified"
-        count = int(row[2]) if row[2] is not None else 0
+    # team_rows = conn.execute(team_query, params).fetchall()
+    # teams_dict: Dict[str, Dict[str, Any]] = {}
+    # for row in team_rows:
+    #     team = row[0] if row[0] is not None else "Unspecified"
+    #     priority_value = row[1] if row[1] is not None else "Unspecified"
+    #     count = int(row[2]) if row[2] is not None else 0
 
-        if team not in teams_dict:
-            teams_dict[team] = {"priorities": [], "total_issues": 0}
+    #     if team not in teams_dict:
+    #         teams_dict[team] = {"priorities": [], "total_issues": 0}
 
-        teams_dict[team]["priorities"].append({"priority": priority_value, "issue_count": count})
-        teams_dict[team]["total_issues"] += count
+    #     teams_dict[team]["priorities"].append({"priority": priority_value, "issue_count": count})
+    #     teams_dict[team]["total_issues"] += count
 
-    team_breakdown = [
-        {
-            "team_name": team,
-            "priorities": data["priorities"],
-            "total_issues": data["total_issues"],
-        }
-        for team, data in teams_dict.items()
-    ]
+    # team_breakdown = [
+    #     {
+    #         "team_name": team,
+    #         "priorities": data["priorities"],
+    #         "total_issues": data["total_issues"],
+    #     }
+    #     for team, data in teams_dict.items()
+    # ]
 
     # Fetch all available team names from cache (for dropdown - no issue_type filter needed)
     from groups_teams_cache import get_cached_teams, set_cached_teams, load_team_names_from_db, load_all_teams_from_db
@@ -940,10 +1027,10 @@ def _fetch_issues_bugs_by_priority(filters: Dict[str, Any], conn: Connection) ->
     # Build meta with appropriate fields
     meta = {
         "issue_type": issue_type,
-        "status_category": status_category,
-        "include_done": include_done,
+        "status_category": status_categories,
+        "months": months,
         "priority_count": len(priority_summary),
-        "team_count": len(team_breakdown),
+        # "team_count": len(team_breakdown),  # Commented out - UI not using team breakdown
         "available_teams": available_teams,
         "isGroup": is_group,
     }
@@ -958,7 +1045,7 @@ def _fetch_issues_bugs_by_priority(filters: Dict[str, Any], conn: Connection) ->
     return {
         "data": {
             "priority_summary": priority_summary,
-            "team_breakdown": team_breakdown,
+            # "team_breakdown": team_breakdown,  # Commented out - UI not using team breakdown
         },
         "meta": meta,
     }
@@ -968,12 +1055,49 @@ def _fetch_issues_bugs_by_team(filters: Dict[str, Any], conn: Connection) -> Rep
     """
     Fetch bugs grouped by team with priority breakdown
     """
+    from database_team_metrics import resolve_team_names_from_filter
+    
     issue_type = (filters.get("issue_type") or "Bug").strip() or "Bug"
-    status_category = (filters.get("status_category") or "").strip() or None
-    include_done = bool(filters.get("include_done"))
-
-    # Don't filter by team for this report - we want all teams
-    where_clause, params = _build_issue_where_clause(issue_type, None, status_category, include_done)
+    team_name = (filters.get("team_name") or "").strip() or None
+    is_group = filters.get("isGroup", False)
+    status_categories = filters.get("status_category")
+    months_value = filters.get("months")
+    months = _parse_int(months_value, default=6)
+    
+    team_names_list = None
+    if team_name:
+        team_names_list = resolve_team_names_from_filter(team_name, is_group, conn)
+    
+    conditions = []
+    params = {}
+    
+    if issue_type:
+        conditions.append("issue_type = :issue_type")
+        params["issue_type"] = issue_type
+    
+    if team_names_list:
+        placeholders = ", ".join([f":team_name_{i}" for i in range(len(team_names_list))])
+        conditions.append(f"team_name IN ({placeholders})")
+        for i, name in enumerate(team_names_list):
+            params[f"team_name_{i}"] = name
+    
+    if status_categories:
+        if isinstance(status_categories, list):
+            if len(status_categories) > 0:
+                placeholders = ", ".join([f":status_cat_{i}" for i in range(len(status_categories))])
+                conditions.append(f"status_category IN ({placeholders})")
+                for i, cat in enumerate(status_categories):
+                    params[f"status_cat_{i}"] = cat
+        elif isinstance(status_categories, str) and status_categories.strip():
+            conditions.append("status_category = :status_category")
+            params["status_category"] = status_categories.strip()
+    
+    if months > 0:
+        days_back = months * 30
+        conditions.append("created_at >= CURRENT_DATE - (:days_back || ' days')::interval")
+        params["days_back"] = days_back
+    
+    where_clause = " AND ".join(conditions) if conditions else "1=1"
 
     team_query = text(
         f"""
@@ -1016,8 +1140,7 @@ def _fetch_issues_bugs_by_team(filters: Dict[str, Any], conn: Connection) -> Rep
         },
         "meta": {
             "issue_type": issue_type,
-            "status_category": status_category,
-            "include_done": include_done,
+            "status_category": status_categories,
             "team_count": len(team_breakdown),
         },
     }
@@ -1557,14 +1680,22 @@ def _fetch_epic_dependencies(filters: Dict[str, Any], conn: Connection) -> Repor
 
 
 def _fetch_release_predictability(filters: Dict[str, Any], conn: Connection) -> ReportDataResult:
-    months = _parse_int(filters.get("months"), default=3)
+    months = _parse_int(filters.get("months"), default=6)
     if months <= 0:
-        months = 3
+        months = 6
 
+    release_name = (filters.get("release") or "").strip() or None
     start_date = datetime.now().date() - timedelta(days=months * 30)
 
+    where_conditions = ["release_start_date >= :start_date"]
+    params = {"start_date": start_date.strftime("%Y-%m-%d")}
+
+    if release_name:
+        where_conditions.append("version_name = :release_name")
+        params["release_name"] = release_name
+
     query = text(
-        """
+        f"""
         SELECT 
             version_name, 
             project_key, 
@@ -1577,12 +1708,12 @@ def _fetch_release_predictability(filters: Dict[str, Any], conn: Connection) -> 
             other_issues_completed, 
             other_issues_percent_completed 
         FROM public.release_predictability_analysis 
-        WHERE release_start_date >= :start_date
+        WHERE {' AND '.join(where_conditions)}
         ORDER BY release_start_date DESC
         """
     )
 
-    rows = conn.execute(query, {"start_date": start_date.strftime("%Y-%m-%d")}).fetchall()
+    rows = conn.execute(query, params).fetchall()
     data: List[Dict[str, Any]] = []
     for row in rows:
         row_dict = dict(row._mapping)
@@ -1595,6 +1726,7 @@ def _fetch_release_predictability(filters: Dict[str, Any], conn: Connection) -> 
         "data": data,
         "meta": {
             "months": months,
+            "release": release_name,
             "count": len(data),
         },
     }
@@ -2241,7 +2373,8 @@ _REPORT_DATA_FETCHERS: Dict[str, ReportDataFetcher] = {
     "issues_flow_status_duration": _fetch_issues_flow_status_duration,
     "issues_hierarchy": _fetch_issue_hierarchy,
     "issues_epic_dependencies": _fetch_epic_dependencies,
-    "issues_release_predictability": _fetch_release_predictability,
+    "release_predictability": _fetch_release_predictability,
+    "release_burndown": _fetch_release_burndown,
     "sprint_predictability": _fetch_sprint_predictability,
     "pi_metrics_summary": _fetch_pi_metrics_summary,
     "pi_metrics_summary_by_team": _fetch_pi_metrics_summary_by_team,

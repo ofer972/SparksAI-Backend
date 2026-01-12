@@ -1007,66 +1007,157 @@ def get_sprint_history_issues_db(
         raise e
 
 
-def get_issues_trend_data_db(team_names: Optional[List[str]], months: int = 6, issue_type: str = "all", conn: Connection = None) -> List[Dict[str, Any]]:
+def get_issues_trend_data_db(team_names: Optional[List[str]], months: int = 6, issue_type: Optional[str] = None, conn: Connection = None) -> Dict[str, List[Dict[str, Any]]]:
     """
-    Get issues created and resolved over time for one or more teams.
-    Uses the issues_created_and_resolved_over_time view.
-    Returns all columns from the view (pass-through).
+    Get issues created and resolved over time using the get_issues_created_and_resolved_trend SQL function.
+    Returns data grouped by issue_type.
     
     Args:
         team_names (Optional[List[str]]): List of team names to filter by. If None or empty, returns data for all teams.
-        months (int): Number of months to look back (1, 2, 3, 4, 6, 9, 12) - default: 6
-        issue_type (str): Issue type filter (default: "all")
+        months (int): Number of months to look back - default: 6
+        issue_type (Optional[str]): Issue type filter. If None or "all", returns data for all issue types. Otherwise returns only for specified type.
         conn (Connection): Database connection from FastAPI dependency
     
     Returns:
-        list: List of trend data dictionaries directly from the view
+        dict: Dictionary grouped by issue_type:
+        {
+            "Bug": [
+                {
+                    "report_month": "2025-12-01",
+                    "total_created": 45,
+                    "total_resolved": 38,
+                    "total_cumulative_open": 450
+                }
+            ],
+            "Story": [...]
+        }
     """
     try:
-        # Calculate start date based on months parameter
-        start_date = datetime.now().date() - timedelta(days=months * 30)
-        
-        # SECURE: Parameterized query prevents SQL injection
-        # We use SELECT * to pass through all columns from the view
-        sql_query = """
-            SELECT *
-            FROM issues_created_and_resolved_over_time
-            WHERE report_month >= :start_date
-        """
-        
-        # Prepare parameters
-        params = {
-            "start_date": start_date.strftime("%Y-%m-%d")
-        }
-        
-        # Add team filter if team_names provided
-        if team_names and len(team_names) > 0:
-            # Build parameterized IN clause (same pattern as closed sprints)
-            placeholders = ", ".join([f":team_name_{i}" for i in range(len(team_names))])
-            sql_query += f" AND team_name IN ({placeholders})"
-            for i, name in enumerate(team_names):
-                params[f"team_name_{i}"] = name
-        
-        # Add issue type filter if not "all"
+        # Handle issue_type - if None or "all", get all types; otherwise get specific type
         if issue_type and issue_type != "all":
-            sql_query += " AND issue_type = :issue_type"
-            params["issue_type"] = issue_type
-        
-        sql_query += " ORDER BY report_month DESC;"
-        
-        logger.info(f"Executing query to get issues trend data for teams: {team_names}")
-        logger.info(f"Parameters: months={months}, start_date={start_date}, issue_type={issue_type}")
-        
-        result = conn.execute(text(sql_query), params)
-        
-        # Convert rows to dictionaries - pass through all columns
-        trend_data = []
-        for row in result:
-            # Convert row to dictionary using row._mapping
-            row_dict = dict(row._mapping)
-            trend_data.append(row_dict)
-        
-        return trend_data
+            # Get data for specific issue type
+            params = {
+                "p_lookback_months": months,
+                "p_issue_type": issue_type
+            }
+            
+            # Handle team_names - convert to array or NULL
+            if team_names and len(team_names) > 0:
+                params['p_team_names'] = team_names
+                sql_query = text("""
+                    SELECT 
+                        report_month,
+                        opened,
+                        resolved,
+                        cumulative_open
+                    FROM public.get_issues_created_and_resolved_trend(
+                        :p_lookback_months,
+                        CAST(:p_team_names AS text[]),
+                        :p_issue_type
+                    )
+                    ORDER BY report_month
+                """)
+            else:
+                sql_query = text("""
+                    SELECT 
+                        report_month,
+                        opened,
+                        resolved,
+                        cumulative_open
+                    FROM public.get_issues_created_and_resolved_trend(
+                        :p_lookback_months,
+                        NULL,
+                        :p_issue_type
+                    )
+                    ORDER BY report_month
+                """)
+            
+            logger.info(f"Executing get_issues_created_and_resolved_trend for issue_type={issue_type}, teams={team_names}, months={months}")
+            
+            result = conn.execute(sql_query, params)
+            
+            # Transform results
+            trend_data = []
+            for row in result:
+                trend_data.append({
+                    "report_month": row[0].strftime("%Y-%m-%d") if row[0] else None,
+                    "total_created": int(row[1]) if row[1] is not None else 0,
+                    "total_resolved": int(row[2]) if row[2] is not None else 0,
+                    "total_cumulative_open": int(row[3]) if row[3] is not None else 0
+                })
+            
+            return {issue_type: trend_data}
+        else:
+            # Get all issue types - need to query for each distinct issue type
+            # First, get distinct issue types from jira_issues
+            issue_types_query = text("""
+                SELECT DISTINCT issue_type 
+                FROM jira_issues 
+                WHERE issue_type IS NOT NULL
+                ORDER BY issue_type
+            """)
+            issue_types_result = conn.execute(issue_types_query)
+            issue_types = [row[0] for row in issue_types_result]
+            
+            if not issue_types:
+                return {}
+            
+            # Get data for each issue type
+            result_dict = {}
+            for itype in issue_types:
+                params = {
+                    "p_lookback_months": months,
+                    "p_issue_type": itype
+                }
+                
+                # Handle team_names - convert to array or NULL
+                if team_names and len(team_names) > 0:
+                    params['p_team_names'] = team_names
+                    sql_query = text("""
+                        SELECT 
+                            report_month,
+                            opened,
+                            resolved,
+                            cumulative_open
+                        FROM public.get_issues_created_and_resolved_trend(
+                            :p_lookback_months,
+                            CAST(:p_team_names AS text[]),
+                            :p_issue_type
+                        )
+                        ORDER BY report_month
+                    """)
+                else:
+                    sql_query = text("""
+                        SELECT 
+                            report_month,
+                            opened,
+                            resolved,
+                            cumulative_open
+                        FROM public.get_issues_created_and_resolved_trend(
+                            :p_lookback_months,
+                            NULL,
+                            :p_issue_type
+                        )
+                        ORDER BY report_month
+                    """)
+                
+                result = conn.execute(sql_query, params)
+                
+                trend_data = []
+                for row in result:
+                    trend_data.append({
+                        "report_month": row[0].strftime("%Y-%m-%d") if row[0] else None,
+                        "total_created": int(row[1]) if row[1] is not None else 0,
+                        "total_resolved": int(row[2]) if row[2] is not None else 0,
+                        "total_cumulative_open": int(row[3]) if row[3] is not None else 0
+                    })
+                
+                if trend_data:  # Only add if there's data
+                    result_dict[itype] = trend_data
+            
+            logger.info(f"Executing get_issues_created_and_resolved_trend for all issue types, teams={team_names}, months={months}")
+            
+            return result_dict
             
     except Exception as e:
         logger.error(f"Error fetching issues trend data for teams {team_names}: {e}")
