@@ -112,6 +112,7 @@ class ChatType(str, Enum):
     """Enumeration of chat type options"""
     PI_DASHBOARD = "PI_dashboard"
     TEAM_DASHBOARD = "Team_dashboard"
+    CUSTOM_DASHBOARD = "Custom_dashboard"
     DIRECT_CHAT = "Direct_chat"
     TEAM_INSIGHTS = "Team_insights"
     PI_INSIGHTS = "PI_insights"
@@ -1837,14 +1838,18 @@ async def ai_chat(
         else:
             logger.info("chat_type not provided; using default system message")
 
-        # 2.8.5. Handle dashboard data if provided (for Team_dashboard or PI_dashboard chat types)
+        # 2.8.5. Handle dashboard data if provided (for Team_dashboard, PI_dashboard, or Custom_dashboard chat types)
         if request.dashboard_data and conversation_context is None:
             logger.info("Processing dashboard data for AI chat")
             try:
                 dashboard_context = await fetch_dashboard_reports_data(request.dashboard_data, conn)
                 
                 # Get content intro prompt from DB
-                content_prompt_name = "Team_dashboard-Content" if request.selected_team else "PI_dashboard-Content"
+                # For Custom_dashboard, choose prompt based on whether PI is selected
+                if chat_type_str == "Custom_dashboard":
+                    content_prompt_name = "PI_dashboard-Content" if request.selected_pi else "Team_dashboard-Content"
+                else:
+                    content_prompt_name = "Team_dashboard-Content" if request.selected_team else "PI_dashboard-Content"
                 content_intro = None
                 try:
                     content_prompt = get_prompt_by_email_and_name(
