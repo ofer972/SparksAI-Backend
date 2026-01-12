@@ -1422,20 +1422,44 @@ async def fetch_dashboard_reports_data(
     report_filters = normalized_report_filters
     logger.info(f"Normalized report filters: {json.dumps(report_filters, indent=2, cls=DateTimeEncoder)}")
     
-    # Extract all report IDs from layout
-    report_ids = []
-    for row in layout_config.get('rows', []):
-        report_ids.extend(row.get('reportIds', []))
+    # Helper function to extract base report ID from unique key
+    # Unique keys have format: {reportId}-{rowIndex}-{reportIndex} (e.g., "team-sprint-burndown-0-0")
+    def extract_base_report_id(key: str) -> str:
+        """Extract base report ID from a unique key format."""
+        import re
+        # Match pattern: reportId-rowIndex-reportIndex (where indices are numbers)
+        match = re.match(r'^(.+)-(\d+)-(\d+)$', key)
+        if match:
+            return match.group(1)
+        return key
     
-    if not report_ids:
+    # Helper function to find filter key for a report at given position
+    def find_filter_key(report_id: str, row_idx: int, report_idx: int, filters: Dict[str, Any]) -> Optional[str]:
+        """Find the appropriate filter key for a report at a given position."""
+        # First try unique key format (e.g., "team-sprint-burndown-0-0")
+        unique_key = f"{report_id}-{row_idx}-{report_idx}"
+        if unique_key in filters:
+            return unique_key
+        # Fall back to direct report ID match
+        if report_id in filters:
+            return report_id
+        return None
+    
+    # Extract all report IDs from layout with their row/report indices
+    report_entries = []  # List of (report_id, row_idx, report_idx)
+    for row_idx, row in enumerate(layout_config.get('rows', [])):
+        for report_idx, report_id in enumerate(row.get('reportIds', [])):
+            report_entries.append((report_id, row_idx, report_idx))
+    
+    if not report_entries:
         logger.warning("No reports in dashboard layout")
         return "No reports in dashboard layout."
     
-    logger.info(f"Fetching data for {len(report_ids)} reports: {report_ids}")
+    logger.info(f"Fetching data for {len(report_entries)} reports: {[e[0] for e in report_entries]}")
     
     # Fetch data for each report
     formatted_reports = []
-    for idx, report_id in enumerate(report_ids, 1):
+    for idx, (report_id, row_idx, report_idx) in enumerate(report_entries, 1):
         # TEMPORARY FIX: Skip Epic Hierarchy report for LLM context
         # TODO: Replace with proper solution using report definition flag
         # Proper fix should:
@@ -1448,9 +1472,9 @@ async def fetch_dashboard_reports_data(
             continue
         
         try:
-            logger.info(f"[{idx}/{len(report_ids)}] Processing report: {report_id}")
+            logger.info(f"[{idx}/{len(report_entries)}] Processing report: {report_id} (row={row_idx}, idx={report_idx})")
             
-            # Get report definition
+            # Get report definition using the base report ID
             definition = get_report_definition_by_id(report_id, conn)
             if not definition:
                 logger.warning(f"Report '{report_id}' not found, skipping")
@@ -1461,8 +1485,11 @@ async def fetch_dashboard_reports_data(
             merged_filters = {**default_filters, **top_bar_filters}
             
             # Apply report-specific filters if any
-            if report_id in report_filters:
-                merged_filters.update(report_filters[report_id])
+            # Try unique key first, then fall back to direct report ID
+            filter_key = find_filter_key(report_id, row_idx, report_idx, report_filters)
+            if filter_key:
+                logger.info(f"  Using filters from key: {filter_key}")
+                merged_filters.update(report_filters[filter_key])
             
             # Check cache first
             cache_key = generate_cache_key(report_id, merged_filters)
