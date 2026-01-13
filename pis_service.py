@@ -1648,3 +1648,191 @@ async def get_pi_participating_teams(
             status_code=500,
             detail=f"Failed to fetch PI participating teams: {str(e)}"
         )
+
+
+@pis_router.get("/pis/epics-average-velocity")
+async def get_epics_average_velocity(
+    team_name: Optional[str] = Query(None, description="Team name or group name (if isGroup=true)"),
+    isGroup: bool = Query(False, description="If true, team_name is treated as a group name"),
+    num_pis: int = Query(3, description="Number of recent completed PIs to analyze (default: 3)", ge=1, le=20),
+    conn: Connection = Depends(get_db_connection)
+):
+    """
+    Get average epic velocity per team and overall across the last N completed PIs.
+    
+    Calculates:
+    - Per team: Average number of completed epics per PI for each team
+    - Overall: Average number of completed epics per PI across all teams
+    
+    Only includes PIs that have ended (end_date < CURRENT_DATE), excluding future and currently running PIs.
+    
+    Args:
+        team_name: Optional team name or group name (if isGroup=true)
+        isGroup: If true, team_name is treated as a group name
+        num_pis: Number of recent completed PIs to analyze (default: 3, range: 1-20)
+    
+    Returns:
+        JSON response with epic velocity metrics by team and overall
+    """
+    try:
+        # Resolve team names using shared helper function (handles validation and group resolution)
+        team_names_list = resolve_team_names_from_filter(team_name, isGroup, conn)
+        
+        # Step 1: Get last N completed PIs (only PIs that have ended)
+        pis_query = text(f"""
+            SELECT pi_name, end_date
+            FROM {config.PIS_TABLE}
+            WHERE end_date IS NOT NULL
+              AND end_date < CURRENT_DATE
+            ORDER BY end_date DESC
+            LIMIT :num_pis
+        """)
+        
+        logger.info(f"Executing query to get last {num_pis} completed PIs")
+        pis_result = conn.execute(pis_query, {"num_pis": num_pis})
+        pis_rows = pis_result.fetchall()
+        
+        if not pis_rows:
+            return {
+                "success": True,
+                "data": {
+                    "num_pis": 0,
+                    "pis_analyzed": [],
+                    "velocity_by_team": [],
+                    "overall_pi_velocity": {
+                        "completed_epics_in_selected_pis": 0,
+                        "average_velocity": 0.0
+                    }
+                },
+                "message": "No completed PIs found"
+            }
+        
+        # Extract PI names and build response structure for pis_analyzed
+        pi_names = []
+        pis_analyzed = []
+        for row in pis_rows:
+            pi_name = row[0]
+            end_date = row[1]
+            pi_names.append(pi_name)
+            
+            # Format end_date if it exists
+            if end_date and hasattr(end_date, 'strftime'):
+                end_date_str = end_date.strftime('%Y-%m-%d')
+            else:
+                end_date_str = str(end_date) if end_date else None
+            
+            pis_analyzed.append({
+                "pi_name": pi_name,
+                "end_date": end_date_str
+            })
+        
+        actual_num_pis = len(pi_names)
+        
+        # Step 2: Count epics per PI per team
+        where_conditions = [
+            "issue_type = 'Epic'",
+            "quarter_pi = ANY(CAST(:pi_names AS text[]))"
+        ]
+        params = {
+            "pi_names": pi_names
+        }
+        
+        # Add team filter if provided
+        if team_names_list:
+            where_conditions.append("team_name = ANY(CAST(:team_names AS text[]))")
+            params["team_names"] = team_names_list
+        
+        where_clause = " AND ".join(where_conditions)
+        
+        epics_query = text(f"""
+            SELECT 
+                quarter_pi AS pi_name,
+                team_name,
+                COUNT(CASE WHEN status_category = 'Done' THEN 1 END) AS completed_epics
+            FROM public.jira_issues
+            WHERE {where_clause}
+            GROUP BY quarter_pi, team_name
+            ORDER BY quarter_pi DESC, team_name
+        """)
+        
+        logger.info(f"Executing query to get epic counts: num_pis={actual_num_pis}, team_names={team_names_list}")
+        epics_result = conn.execute(epics_query, params)
+        epics_rows = epics_result.fetchall()
+        
+        # Step 3: Calculate averages (group by team)
+        team_metrics = {}
+        total_completed_all = 0
+        
+        for row in epics_rows:
+            pi_name_row = row[0]
+            team_name_row = row[1]
+            completed_epics = int(row[2]) if row[2] else 0
+            
+            # Initialize team if not exists
+            if team_name_row not in team_metrics:
+                team_metrics[team_name_row] = {
+                    "completed_epics_in_selected_pis": 0
+                }
+            
+            # Accumulate for this team
+            team_metrics[team_name_row]["completed_epics_in_selected_pis"] += completed_epics
+            
+            # Accumulate for overall
+            total_completed_all += completed_epics
+        
+        # Build velocity_by_team array with calculated averages
+        velocity_by_team = []
+        for team_name_key, metrics in team_metrics.items():
+            completed = metrics["completed_epics_in_selected_pis"]
+            team_average_velocity = round(completed / actual_num_pis, 2) if actual_num_pis > 0 else 0.0
+            
+            velocity_by_team.append({
+                "team_name": team_name_key,
+                "completed_epics_in_selected_pis": completed,
+                "team_average_velocity": team_average_velocity
+            })
+        
+        # Sort by team name for consistent output
+        velocity_by_team.sort(key=lambda x: x["team_name"])
+        
+        # Calculate overall average velocity
+        overall_average_velocity = round(total_completed_all / actual_num_pis, 2) if actual_num_pis > 0 else 0.0
+        
+        overall_pi_velocity = {
+            "completed_epics_in_selected_pis": total_completed_all,
+            "average_velocity": overall_average_velocity
+        }
+        
+        # Build response
+        response_data = {
+            "num_pis": actual_num_pis,
+            "pis_analyzed": pis_analyzed,
+            "velocity_by_team": velocity_by_team,
+            "overall_pi_velocity": overall_pi_velocity
+        }
+        
+        # Build message
+        teams_count = len(velocity_by_team)
+        if team_name:
+            if isGroup:
+                message = f"Retrieved epic average velocity for {actual_num_pis} PIs (group '{team_name}', {teams_count} teams)"
+            else:
+                message = f"Retrieved epic average velocity for {actual_num_pis} PIs (team '{team_name}')"
+        else:
+            message = f"Retrieved epic average velocity for {actual_num_pis} PIs ({teams_count} teams)"
+        
+        return {
+            "success": True,
+            "data": response_data,
+            "message": message
+        }
+    
+    except HTTPException:
+        # Re-raise HTTP exceptions (validation errors)
+        raise
+    except Exception as e:
+        logger.error(f"Error fetching epic average velocity: {e}", exc_info=True)
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to fetch epic average velocity: {str(e)}"
+        )
