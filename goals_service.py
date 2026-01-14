@@ -456,7 +456,7 @@ class GoalItem(BaseModel):
 class TeamGoal(BaseModel):
     """Represents team-specific goals."""
     team_name: str
-    goals: List[GoalItem] = Field(min_length=1, max_length=4)
+    goals: List[GoalItem] = Field(min_length=1)
 
 
 class LLMResponse(BaseModel):
