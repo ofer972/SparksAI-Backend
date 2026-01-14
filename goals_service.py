@@ -597,16 +597,11 @@ def enrich_issue_keys_with_issue_details(
                     })
             enriched_goal["issue_keys"] = enriched_issue_keys
             
-            total_issues = len(enriched_issue_keys)
-            done_issues = sum(1 for issue in enriched_issue_keys if issue.get("status_category") == "Done")
-            if total_issues > 0:
-                enriched_goal["goal_progress_by_epics"] = round((done_issues / total_issues) * 100, 2)
-            else:
-                enriched_goal["goal_progress_by_epics"] = 0.0
-            
             # For sprint goals: calculate progress based on connected issues directly
             # For PI goals: calculate progress based on epic children
             if scope_type == 'sprint':
+                # Sprint goals: don't calculate goal_progress_by_epics (not applicable)
+                enriched_goal["goal_progress_by_epics"] = 0.0
                 # Sprint goals: count connected issues with status_category='Done'
                 total_connected_issues = len(enriched_issue_keys)
                 done_connected_issues = sum(1 for issue in enriched_issue_keys if issue.get("status_category") == "Done")
@@ -615,6 +610,14 @@ def enrich_issue_keys_with_issue_details(
                 else:
                     enriched_goal["goal_progress_by_children"] = 0.0
             else:
+                # PI goals: calculate progress by epics (epic completion)
+                total_issues = len(enriched_issue_keys)
+                done_issues = sum(1 for issue in enriched_issue_keys if issue.get("status_category") == "Done")
+                if total_issues > 0:
+                    enriched_goal["goal_progress_by_epics"] = round((done_issues / total_issues) * 100, 2)
+                else:
+                    enriched_goal["goal_progress_by_epics"] = 0.0
+                
                 # PI goals: use epic children (existing logic)
                 total_children = sum(issue.get("number_of_children", 0) for issue in enriched_issue_keys)
                 completed_children = sum(issue.get("number_of_completed_children", 0) for issue in enriched_issue_keys)

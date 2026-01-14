@@ -612,6 +612,28 @@ DEFAULT_REPORT_DEFINITIONS = [
             },
             "allowed_views": ["pi-dashboard", "team-dashboard"]
         }
+    },
+    {
+        "report_id": "goal-progress",
+        "report_name": "Goal Progress",
+        "chart_type": "table",
+        "data_source": "goal_progress",
+        "description": "Shows progress on PI and Sprint goals with progress bars for epics and stories.",
+        "default_filters": {
+            "scope_type": "pi"
+        },
+        "meta_schema": {
+            "required_filters": ["scope_type"],
+            "optional_filters": ["pi_name", "sprint_name", "team_name", "isGroup"],
+            "parameters": {
+                "scope_type": {"type": "string", "description": "Scope type: 'pi' or 'sprint'"},
+                "pi_name": {"type": "string", "description": "PI name (required if scope_type='pi')"},
+                "sprint_name": {"type": "string", "description": "Sprint name (required if scope_type='sprint')"},
+                "team_name": {"type": "string", "description": "Team identifier or group name (if isGroup=true)"},
+                "isGroup": {"type": "boolean", "description": "If true, team_name is treated as a group name"}
+            },
+            "allowed_views": ["pi-dashboard", "team-dashboard"]
+        }
     }
 ]
 

@@ -2357,6 +2357,152 @@ def _fetch_cycle_time_over_time(filters: Dict[str, Any], conn: Connection) -> Re
     }
 
 
+def _fetch_goal_progress(filters: Dict[str, Any], conn: Connection) -> ReportDataResult:
+    """
+    Fetch goal progress data for PI or Sprint goals.
+    Reuses goals_service logic but returns data in report format.
+    """
+    from database_goals import get_goals_filtered
+    from goals_service import (
+        enrich_issue_keys_with_issue_details,
+        enrich_goals_with_group_names,
+        format_goals_response,
+        get_group_id_from_name,
+    )
+    from database_team_metrics import resolve_team_names_from_filter, select_sprint_for_teams
+    
+    scope_type = filters.get("scope_type")
+    team_name = filters.get("team_name")
+    is_group = filters.get("isGroup", False)
+    
+    pi_name = None
+    sprint_id = None
+    
+    sprint_name = None
+    if scope_type == 'pi':
+        pi_name = filters.get("pi_name") or filters.get("pi")
+    elif scope_type == 'sprint':
+        sprint_name = filters.get("sprint_name")
+        sprint_selection = select_sprint_for_teams(team_name, is_group, sprint_name, conn)
+        sprint_id = sprint_selection['selected_sprint_id']
+    
+    # Resolve team names
+    team_names_list = None
+    group_id_for_response = None
+    
+    if team_name:
+        if is_group:
+            group_id_for_response = get_group_id_from_name(team_name, conn)
+            team_names_list = resolve_team_names_from_filter(team_name, is_group, conn)
+        else:
+            team_names_list = resolve_team_names_from_filter(team_name, is_group, conn)
+    
+    # Fetch goals (only user-confirmed, ai=false)
+    filtered_goals = []
+    
+    if is_group and group_id_for_response:
+        group_goals = get_goals_filtered(
+            scope_type=scope_type,
+            pi_name=pi_name,
+            sprint_id=sprint_id,
+            release_id=None,
+            goal_type="group",
+            group_id=group_id_for_response,
+            ai=False,
+            limit=100,
+            conn=conn
+        )
+        filtered_goals.extend(group_goals)
+        
+        if team_names_list:
+            team_goals = get_goals_filtered(
+                scope_type=scope_type,
+                pi_name=pi_name,
+                sprint_id=sprint_id,
+                release_id=None,
+                goal_type="team",
+                team_names_list=team_names_list,
+                ai=False,
+                limit=1000,
+                conn=conn
+            )
+            filtered_goals.extend(team_goals)
+    elif team_name and not is_group:
+        filtered_goals = get_goals_filtered(
+            scope_type=scope_type,
+            pi_name=pi_name,
+            sprint_id=sprint_id,
+            release_id=None,
+            goal_type="team",
+            team_name=team_name,
+            ai=False,
+            limit=100,
+            conn=conn
+        )
+    else:
+        overall_goals = get_goals_filtered(
+            scope_type=scope_type,
+            pi_name=pi_name,
+            sprint_id=sprint_id,
+            release_id=None,
+            goal_type="overall",
+            ai=False,
+            limit=100,
+            conn=conn
+        )
+        team_goals = get_goals_filtered(
+            scope_type=scope_type,
+            pi_name=pi_name,
+            sprint_id=sprint_id,
+            release_id=None,
+            goal_type="team",
+            ai=False,
+            limit=1000,
+            conn=conn
+        )
+        filtered_goals = overall_goals + team_goals
+    
+    # Enrich goals
+    enriched_goals = enrich_issue_keys_with_issue_details(filtered_goals, conn, scope_type=scope_type)
+    enriched_goals = enrich_goals_with_group_names(enriched_goals, conn)
+    
+    # Format response
+    response_data = format_goals_response(
+        goals=enriched_goals,
+        scope_type=scope_type,
+        pi_name=pi_name,
+        sprint_id=sprint_id,
+        release_id=None,
+        group_id=group_id_for_response,
+        team_name=team_name if not is_group else None,
+        isGroup=is_group
+    )
+    
+    # Build metadata
+    meta: Dict[str, Any] = {
+        "scope_type": scope_type,
+        "count": len(enriched_goals),
+    }
+    
+    if pi_name:
+        meta["pi_name"] = pi_name
+    if sprint_id:
+        meta["sprint_id"] = sprint_id
+    sprint_name = filters.get("sprint_name")
+    if sprint_name:
+        meta["sprint_name"] = sprint_name
+    if team_name:
+        if is_group:
+            meta["group_name"] = team_name
+        else:
+            meta["team_name"] = team_name
+    
+    return {
+        "data": response_data,
+        "meta": meta,
+    }
+
+
 _REPORT_DATA_FETCHERS: Dict[str, ReportDataFetcher] = {
     "team_sprint_burndown": _fetch_team_sprint_burndown,
     "team_current_sprint_progress": _fetch_team_current_sprint_progress,
@@ -2379,5 +2525,6 @@ _REPORT_DATA_FETCHERS: Dict[str, ReportDataFetcher] = {
     "active_sprint_summary": _fetch_active_sprint_summary,
     "wip_over_time": _fetch_wip_over_time,
     "cycle_time_over_time": _fetch_cycle_time_over_time,
+    "goal_progress": _fetch_goal_progress,
 }
 
