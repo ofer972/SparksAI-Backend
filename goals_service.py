@@ -174,13 +174,19 @@ def fetch_issues_for_scope(
 async def get_available_sprints(
     team_name: Optional[str] = Query(None, description="Team name or group name (if isGroup=true)"),
     isGroup: bool = Query(False, description="If true, team_name is treated as a group name"),
+    active_only: bool = Query(False, description="If true, return only sprints with state='active' and order by issue count"),
     conn: Connection = Depends(get_db_connection)
 ):
     """
     Get sprints available for goal selection.
-    Returns:
-    - Current sprints: start_date <= today <= end_date
-    - Upcoming sprints: start_date - 14 days <= today < start_date
+    
+    When active_only=False (default):
+    - Returns active sprints OR upcoming sprints (starting within 14 days)
+    - Ordered by start_date (ascending)
+    
+    When active_only=True:
+    - Returns only sprints with state='active'
+    - Ordered by issue count (descending) - sorted in Python after fetch
     """
     try:
         from database_team_metrics import resolve_team_names_from_filter
@@ -191,17 +197,34 @@ async def get_available_sprints(
             team_names_list = resolve_team_names_from_filter(team_name, isGroup, conn)
         
         # Build query to get sprints
-        where_conditions = [
-            # Current sprints: today between start and end
-            # OR Upcoming sprints: today is up to 14 days before start
-            "((s.start_date <= CURRENT_DATE AND s.end_date >= CURRENT_DATE) OR (s.start_date >= CURRENT_DATE AND s.start_date <= CURRENT_DATE + INTERVAL '14 days'))"
-        ]
-        
+        where_conditions = []
         params = {}
+        
+        # Base condition: Always include active sprints
+        # If active_only=True: Only active sprints
+        # If active_only=False: Active sprints OR upcoming sprints (within 14 days)
+        if active_only:
+            where_conditions.append("s.state = 'active'")
+        else:
+            where_conditions.append(
+                "(s.state = 'active' OR (s.start_date >= CURRENT_DATE AND s.start_date <= CURRENT_DATE + INTERVAL '14 days'))"
+            )
+        
+        # Build JOIN condition - add team filter if provided
+        join_conditions = [
+            "s.sprint_id = i.current_sprint_id",
+            "s.sprint_id = ANY(i.sprint_ids)"
+        ]
         
         # Add team filter if provided
         if team_names_list:
             placeholders = ", ".join([f":team_name_{i}" for i in range(len(team_names_list))])
+            # Add team filter to JOIN condition so only issues from specified team are counted
+            join_condition = f"""
+                ({' OR '.join(join_conditions)})
+                AND i.team_name IN ({placeholders})
+            """
+            # Also add team filter to WHERE clause to filter which sprints appear
             where_conditions.append(f"""
                 s.sprint_id IN (
                     SELECT DISTINCT current_sprint_id 
@@ -217,26 +240,28 @@ async def get_available_sprints(
             """)
             for i, name in enumerate(team_names_list):
                 params[f"team_name_{i}"] = name
+        else:
+            join_condition = f"({' OR '.join(join_conditions)})"
         
         where_clause = " AND ".join(where_conditions)
         
+        # Always include issue_count in SELECT, always order by start_date
+        # Sorting by issue_count (when active_only=True) will be done in Python
         query = text(f"""
             SELECT 
                 s.sprint_id,
                 s.name as sprint_name,
                 s.start_date,
-                s.end_date
+                s.end_date,
+                COUNT(DISTINCT i.issue_key) as issue_count
             FROM jira_sprints s
-            JOIN {config.WORK_ITEMS_TABLE} i ON (
-                s.sprint_id = i.current_sprint_id 
-                OR s.sprint_id = ANY(i.sprint_ids)
-            )
+            JOIN {config.WORK_ITEMS_TABLE} i ON {join_condition}
             WHERE {where_clause}
             GROUP BY s.sprint_id, s.name, s.start_date, s.end_date
             ORDER BY s.start_date ASC
         """)
         
-        logger.info(f"Fetching available sprints for goals: team_name={team_name}, isGroup={isGroup}, teams={team_names_list}")
+        logger.info(f"Fetching available sprints for goals: team_name={team_name}, isGroup={isGroup}, active_only={active_only}, teams={team_names_list}")
         
         result = conn.execute(query, params)
         rows = result.fetchall()
@@ -247,8 +272,14 @@ async def get_available_sprints(
                 "sprint_id": row[0],
                 "sprint_name": row[1] or "",
                 "start_date": row[2].isoformat() if row[2] else None,
-                "end_date": row[3].isoformat() if row[3] else None
+                "end_date": row[3].isoformat() if row[3] else None,
+                "issue_count": int(row[4]) if row[4] is not None else 0
             })
+        
+        # Sort by issue count if active_only=True
+        if active_only:
+            sprints.sort(key=lambda x: x.get('issue_count', 0), reverse=True)
+        # else: already sorted by start_date from SQL
         
         return {
             "success": True,
