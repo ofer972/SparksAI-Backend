@@ -6,6 +6,8 @@ from __future__ import annotations
 
 from typing import Any, Dict, Optional, List
 import logging
+import os
+import httpx
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Query
 from sqlalchemy.engine import Connection
@@ -103,6 +105,65 @@ def _normalize_multi_value(values: Optional[List[str] | str]) -> Optional[List[s
         parts = [part.strip() for part in values.split(",") if part.strip()]
         return parts if parts else None
     return [str(values)]
+
+
+async def forward_to_github_service(report_id: str, filters: Dict[str, Any], definition: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    Forward report request to GitHub service.
+    Returns data in the same format as resolve_report_data.
+    GitHub service returns only the data, backend adds definition.
+    """
+    github_service_url = os.getenv("GITHUB_SERVICE_URL", "http://github-service:8084")
+    endpoint = f"/api/v1/github-service/reports/{report_id}"
+    
+    # Build query parameters from filters
+    params: Dict[str, Any] = {}
+    if filters.get("github_repo_ids"):
+        if isinstance(filters["github_repo_ids"], list):
+            # Convert list to comma-separated string
+            params["github_repo_ids"] = ",".join(map(str, filters["github_repo_ids"]))
+        else:
+            params["github_repo_ids"] = str(filters["github_repo_ids"])
+    if filters.get("environment"):
+        params["environment"] = filters["environment"]
+    if filters.get("months"):
+        params["months"] = filters["months"]
+    if filters.get("pr_state"):
+        params["pr_state"] = filters["pr_state"]
+    if filters.get("lookback_days"):
+        params["lookback_days"] = filters["lookback_days"]
+    
+    try:
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            response = await client.get(
+                f"{github_service_url}{endpoint}",
+                params=params
+            )
+            response.raise_for_status()
+            # GitHub service returns only the data (result)
+            result_data = response.json()
+            
+            # Format response with definition from database (single source of truth)
+            return {
+                "data": result_data,
+                "meta": {
+                    "service": "github-service"
+                }
+            }
+    except httpx.HTTPStatusError as e:
+        logger = logging.getLogger(__name__)
+        logger.error(f"GitHub service returned error: {e.response.status_code} - {e.response.text}")
+        raise HTTPException(
+            status_code=e.response.status_code,
+            detail=f"GitHub service error: {e.response.text}"
+        )
+    except httpx.RequestError as e:
+        logger = logging.getLogger(__name__)
+        logger.error(f"Failed to connect to GitHub service: {e}")
+        raise HTTPException(
+            status_code=503,
+            detail=f"Failed to connect to GitHub service: {str(e)}"
+        )
 
 
 @reports_router.get("/reports")
@@ -282,7 +343,11 @@ async def get_report_instance(
             }
 
     try:
-        resolved_payload = resolve_report_data(definition["data_source"], merged_filters, conn)
+        # Check if report should be forwarded to GitHub service
+        if definition["data_source"].startswith("github_service_"):
+            resolved_payload = await forward_to_github_service(report_id, merged_filters, definition)
+        else:
+            resolved_payload = resolve_report_data(definition["data_source"], merged_filters, conn)
     except KeyError as err:
         raise HTTPException(
             status_code=500,

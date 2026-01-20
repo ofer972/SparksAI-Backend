@@ -39,8 +39,8 @@ def get_sprint_progress_status_with_slack(
     
     Returns:
         "green" if ahead of schedule (actual >= expected - slack)
-        "yellow" if slightly behind (expected - 40% <= actual < expected - slack)
-        "red" if significantly behind (actual < expected - 40%)
+        "yellow" if slightly behind (expected - 35% <= actual < expected - slack)
+        "red" if significantly behind (actual < expected - 35%)
         None if unable to calculate (edge cases: missing data, invalid dates, sprint not started)
     """
     # Handle edge cases - return None instead of "green"
@@ -93,10 +93,10 @@ def get_sprint_progress_status_with_slack(
     days_elapsed = (today - start_date).days
     expected_completion = (days_elapsed / total_sprint_days) * 100
     
-    # Determine status with slack (20%)
+    # Determine status with slack (20% for green, 35% threshold for yellow/red)
     if overall_progress_pct >= expected_completion - slack_threshold:
         return "green"
-    elif overall_progress_pct >= expected_completion - 40.0:
+    elif overall_progress_pct >= expected_completion - 35.0:
         return "yellow"
     else:
         return "red"
@@ -182,8 +182,10 @@ def process_active_sprint_summary_data(
     
     This is a reusable helper function that:
     1. Calculates overall_progress_pct from issues_done, issues_at_start, issues_added
-    2. Calculates overall_progress_pct_color based on progress vs timeline
-    3. Formats date/datetime fields
+    2. Calculates ideal_remaining (linear burn-down) with one decimal place
+    3. Calculates progress_delta_pct (similar to PI logic): ((ideal_remaining - issues_remaining) / total_issues) * 100
+    4. Calculates overall_progress_pct_color based on progress vs timeline
+    5. Formats date/datetime fields
     
     This function can be called by endpoints and report functions to ensure consistent calculations.
     
@@ -215,11 +217,72 @@ def process_active_sprint_summary_data(
             denominator = issues_at_start + issues_added
             if denominator > 0:
                 overall_progress_pct = (total_issues_done / denominator) * 100
+                # Round to 2 decimal places
+                overall_progress_pct = round(overall_progress_pct, 2)
             else:
                 overall_progress_pct = 0.0
         
         # Add calculated field to summary_dict
         summary_dict['overall_progress_pct'] = overall_progress_pct
+        
+        # Calculate ideal_remaining and progress_delta_pct (similar to PI logic)
+        issues_remaining = summary_dict.get('issues_remaining')
+        ideal_remaining = None
+        progress_delta_pct = None
+        
+        if start_date_raw is not None and end_date_raw is not None and issues_at_start is not None:
+            # Convert datetime/timestamptz to date if needed
+            start_date = start_date_raw
+            end_date = end_date_raw
+            
+            if isinstance(start_date_raw, datetime):
+                start_date = start_date_raw.date()
+            elif isinstance(start_date_raw, str):
+                try:
+                    start_date = datetime.fromisoformat(start_date_raw.replace('Z', '+00:00')).date()
+                except:
+                    start_date = None
+            
+            if isinstance(end_date_raw, datetime):
+                end_date = end_date_raw.date()
+            elif isinstance(end_date_raw, str):
+                try:
+                    end_date = datetime.fromisoformat(end_date_raw.replace('Z', '+00:00')).date()
+                except:
+                    end_date = None
+            
+            if start_date and end_date:
+                today = date.today()
+                
+                # Calculate ideal_remaining (linear burn-down) - with one decimal place
+                if start_date == end_date:
+                    ideal_remaining = float(issues_at_start)
+                elif today > end_date:
+                    ideal_remaining = 0.0
+                elif today < start_date:
+                    ideal_remaining = float(issues_at_start)
+                else:
+                    total_days = (end_date - start_date).days
+                    days_elapsed = (today - start_date).days
+                    if total_days > 0:
+                        ideal_remaining = max(0.0, float(issues_at_start) - ((float(issues_at_start) / total_days) * days_elapsed))
+                    else:
+                        ideal_remaining = float(issues_at_start)
+                
+                # Round to one decimal place
+                ideal_remaining = round(ideal_remaining, 1)
+                
+                # Calculate progress_delta_pct
+                # Formula: ((ideal_remaining - issues_remaining) / total_issues) * 100
+                total_issues = (issues_at_start or 0) + (issues_added or 0)
+                if total_issues > 0 and issues_remaining is not None:
+                    progress_delta_pct = ((ideal_remaining - float(issues_remaining)) / total_issues) * 100.0
+                    progress_delta_pct = round(progress_delta_pct, 2)
+                elif total_issues == 0:
+                    progress_delta_pct = 0.0
+        
+        summary_dict['ideal_remaining'] = ideal_remaining
+        summary_dict['progress_delta_pct'] = progress_delta_pct
         
         # Calculate overall_progress_pct_color (using existing function)
         if start_date_raw is not None and end_date_raw is not None and overall_progress_pct is not None:
@@ -367,8 +430,10 @@ async def get_active_sprint_summary_by_team(
     If team_name is not provided, returns summaries for all teams.
     If issue_type is not provided, returns summaries for all issue types.
     
-    The function does not return overall_progress_pct, so it is calculated in Python using:
-    overall_progress_pct = (issues_done / (issues_at_start + issues_added)) * 100
+    The function does not return overall_progress_pct, ideal_remaining, or progress_delta_pct, so they are calculated in Python:
+    - overall_progress_pct = (issues_done / (issues_at_start + issues_added)) * 100
+    - ideal_remaining = linear burn-down based on elapsed time (with one decimal place)
+    - progress_delta_pct = ((ideal_remaining - issues_remaining) / total_issues) * 100
     
     This endpoint uses reusable helper functions:
     - get_active_sprint_summary_data_db(): Fetches raw data from database
@@ -380,7 +445,7 @@ async def get_active_sprint_summary_by_team(
         isGroup: If true, team_name is treated as a group name and returns summaries for all teams in that group
     
     Returns:
-        JSON response with active sprint summary (all columns from function + calculated overall_progress_pct)
+        JSON response with active sprint summary (all columns from function + calculated overall_progress_pct, ideal_remaining, progress_delta_pct)
     """
     try:
         from database_team_metrics import resolve_team_names_from_filter

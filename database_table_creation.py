@@ -634,6 +634,182 @@ DEFAULT_REPORT_DEFINITIONS = [
             },
             "allowed_views": ["pi-dashboard", "team-dashboard"]
         }
+    },
+    # DORA Metrics Reports
+    {
+        "report_id": "dora-deployment-frequency",
+        "report_name": "DORA Deployment Frequency",
+        "chart_type": "bar",
+        "data_source": "github_service_dora_deployment_frequency",
+        "description": "Measures how often deployments occur to production",
+        "default_filters": {
+            "github_repo_ids": None,
+            "environment": "production",
+            "months": 1
+        },
+        "meta_schema": {
+            "required_filters": [],
+            "optional_filters": ["github_repo_ids", "environment", "months"],
+            "parameters": {
+                "github_repo_ids": {"type": "array", "description": "Comma-separated GitHub repository IDs (empty = all)"},
+                "environment": {"type": "string", "description": "Filter by environment (empty = all)"},
+                "months": {"type": "integer", "description": "Number of months to look back (1, 2, 3, 4, 6, 9, 12)", "default": 1}
+            },
+            "allowed_views": ["github-dashboard"]
+        }
+    },
+    {
+        "report_id": "dora-recovery-time",
+        "report_name": "DORA Recovery Time",
+        "chart_type": "bar",
+        "data_source": "github_service_dora_recovery_time",
+        "description": "Measures time to recover from failures",
+        "default_filters": {
+            "github_repo_ids": None,
+            "environment": "production",
+            "months": 1
+        },
+        "meta_schema": {
+            "required_filters": [],
+            "optional_filters": ["github_repo_ids", "environment", "months"],
+            "parameters": {
+                "github_repo_ids": {"type": "array", "description": "Comma-separated GitHub repository IDs (empty = all)"},
+                "environment": {"type": "string", "description": "Filter by environment (empty = all)"},
+                "months": {"type": "integer", "description": "Number of months to look back (1, 2, 3, 4, 6, 9, 12)", "default": 1}
+            },
+            "allowed_views": ["github-dashboard"]
+        }
+    },
+    {
+        "report_id": "dora-change-failure-rate",
+        "report_name": "DORA Change Failure Rate",
+        "chart_type": "bar",
+        "data_source": "github_service_dora_change_failure_rate",
+        "description": "Measures percentage of deployments that result in failures",
+        "default_filters": {
+            "github_repo_ids": None,
+            "environment": "production",
+            "months": 1
+        },
+        "meta_schema": {
+            "required_filters": [],
+            "optional_filters": ["github_repo_ids", "environment", "months"],
+            "parameters": {
+                "github_repo_ids": {"type": "array", "description": "Comma-separated GitHub repository IDs (empty = all)"},
+                "environment": {"type": "string", "description": "Filter by environment (empty = all)"},
+                "months": {"type": "integer", "description": "Number of months to look back (1, 2, 3, 4, 6, 9, 12)", "default": 1}
+            },
+            "allowed_views": ["github-dashboard"]
+        }
+    },
+    {
+        "report_id": "dora-lead-time",
+        "report_name": "DORA Lead Time",
+        "chart_type": "bar",
+        "data_source": "github_service_dora_lead_time",
+        "description": "Measures time from commit to deployment",
+        "default_filters": {
+            "github_repo_ids": None,
+            "environment": "production",
+            "months": 1
+        },
+        "meta_schema": {
+            "required_filters": [],
+            "optional_filters": ["github_repo_ids", "environment", "months"],
+            "parameters": {
+                "github_repo_ids": {"type": "array", "description": "Comma-separated GitHub repository IDs (empty = all)"},
+                "environment": {"type": "string", "description": "Filter by environment (empty = all)"},
+                "months": {"type": "integer", "description": "Number of months to look back (1, 2, 3, 4, 6, 9, 12)", "default": 1}
+            },
+            "allowed_views": ["github-dashboard"]
+        }
+    },
+    # PR Workflow Metrics Reports
+    {
+        "report_id": "pr-workflow-pr-size",
+        "report_name": "PR Size",
+        "chart_type": "bar",
+        "data_source": "github_service_pr_workflow_pr_size",
+        "description": "Measures median lines changed per pull request",
+        "default_filters": {
+            "github_repo_ids": None,
+            "months": 1,
+            "pr_state": "all"
+        },
+        "meta_schema": {
+            "required_filters": [],
+            "optional_filters": ["github_repo_ids", "months", "pr_state"],
+            "parameters": {
+                "github_repo_ids": {"type": "array", "description": "Comma-separated GitHub repository IDs (empty = all)"},
+                "months": {"type": "integer", "description": "Number of months to look back (1, 2, 3, 4, 6, 9, 12)", "default": 1},
+                "pr_state": {"type": "string", "description": "PR state filter (all, open, closed)", "default": "all"}
+            },
+            "allowed_views": ["github-dashboard"]
+        }
+    },
+    {
+        "report_id": "pr-workflow-pickup-time",
+        "report_name": "PR Pickup Time",
+        "chart_type": "bar",
+        "data_source": "github_service_pr_workflow_pickup_time",
+        "description": "Measures time from PR creation to first review",
+        "default_filters": {
+            "github_repo_ids": None,
+            "months": 1,
+            "pr_state": "all"
+        },
+        "meta_schema": {
+            "required_filters": [],
+            "optional_filters": ["github_repo_ids", "months", "pr_state"],
+            "parameters": {
+                "github_repo_ids": {"type": "array", "description": "Comma-separated GitHub repository IDs (empty = all)"},
+                "months": {"type": "integer", "description": "Number of months to look back (1, 2, 3, 4, 6, 9, 12)", "default": 1},
+                "pr_state": {"type": "string", "description": "PR state filter (all, open, closed)", "default": "all"}
+            },
+            "allowed_views": ["github-dashboard"]
+        }
+    },
+    {
+        "report_id": "pr-workflow-pr-maturity",
+        "report_name": "PR Maturity",
+        "chart_type": "bar",
+        "data_source": "github_service_pr_workflow_pr_maturity",
+        "description": "Measures percentage of PRs ready on submission",
+        "default_filters": {
+            "github_repo_ids": None,
+            "months": 1,
+            "pr_state": "all"
+        },
+        "meta_schema": {
+            "required_filters": [],
+            "optional_filters": ["github_repo_ids", "months", "pr_state"],
+            "parameters": {
+                "github_repo_ids": {"type": "array", "description": "Comma-separated GitHub repository IDs (empty = all)"},
+                "months": {"type": "integer", "description": "Number of months to look back (1, 2, 3, 4, 6, 9, 12)", "default": 1},
+                "pr_state": {"type": "string", "description": "PR state filter (all, open, closed)", "default": "all"}
+            },
+            "allowed_views": ["github-dashboard"]
+        }
+    },
+    {
+        "report_id": "pr-workflow-rework-rate",
+        "report_name": "PR Rework Rate",
+        "chart_type": "bar",
+        "data_source": "github_service_pr_workflow_rework_rate",
+        "description": "Measures percentage of PRs requiring significant rework",
+        "default_filters": {
+            "github_repo_ids": None,
+            "months": 1
+        },
+        "meta_schema": {
+            "required_filters": [],
+            "optional_filters": ["github_repo_ids", "months"],
+            "parameters": {
+                "github_repo_ids": {"type": "array", "description": "Comma-separated GitHub repository IDs (empty = all)"},
+                "months": {"type": "integer", "description": "Number of months to look back (1, 2, 3, 4, 6, 9, 12)", "default": 1}
+            },
+            "allowed_views": ["github-dashboard"]
+        }
     }
 ]
 
