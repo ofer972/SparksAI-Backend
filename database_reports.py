@@ -1510,25 +1510,27 @@ def _fetch_issue_hierarchy(filters: Dict[str, Any], conn: Connection) -> ReportD
     # Resolve team names if team_name provided (handles isGroup)
     team_names_list = resolve_team_names_from_filter(team_name, is_group, conn) if team_name else None
     
-    # Fetch available teams (always) - still use view for metadata
-    teams_query = text(
-        f"""
-        SELECT DISTINCT "Team Name of Epic"
-        FROM get_issue_hierarchy_advanced
-        WHERE "Team Name of Epic" IS NOT NULL
-        ORDER BY "Team Name of Epic"
-        """
-    )
-    teams_rows = conn.execute(teams_query).fetchall()
-    available_teams = [row[0] for row in teams_rows if row[0]]
+    # Fetch available teams (always) - use standard cached pattern
+    from groups_teams_cache import get_cached_teams, set_cached_teams, load_team_names_from_db, load_all_teams_from_db
     
-    # Fetch available PIs (always) - still use view for metadata
+    cached = get_cached_teams()
+    if cached:
+        available_teams = [t["team_name"] for t in cached.get("teams", [])]
+    else:
+        # Cache miss - load from DB
+        available_teams = load_team_names_from_db(conn)
+        # Also build full teams cache for future use
+        all_teams = load_all_teams_from_db(conn)
+        set_cached_teams({"teams": all_teams, "count": len(all_teams)})
+    
+    # Fetch available PIs (always) - query from jira_issues for epic-specific PIs
     pis_query = text(
         f"""
-        SELECT DISTINCT "Quarter PI of Epic"
-        FROM get_issue_hierarchy_advanced
-        WHERE "Quarter PI of Epic" IS NOT NULL
-        ORDER BY "Quarter PI of Epic" DESC
+        SELECT DISTINCT quarter_pi_of_epic
+        FROM public.jira_issues
+        WHERE issue_type = 'Epic'
+          AND quarter_pi_of_epic IS NOT NULL
+        ORDER BY quarter_pi_of_epic DESC
         """
     )
     pis_rows = conn.execute(pis_query).fetchall()
