@@ -1510,7 +1510,7 @@ def _fetch_issue_hierarchy(filters: Dict[str, Any], conn: Connection) -> ReportD
     # Resolve team names if team_name provided (handles isGroup)
     team_names_list = resolve_team_names_from_filter(team_name, is_group, conn) if team_name else None
     
-    # Fetch available teams (always)
+    # Fetch available teams (always) - still use view for metadata
     teams_query = text(
         f"""
         SELECT DISTINCT "Team Name of Epic"
@@ -1522,7 +1522,7 @@ def _fetch_issue_hierarchy(filters: Dict[str, Any], conn: Connection) -> ReportD
     teams_rows = conn.execute(teams_query).fetchall()
     available_teams = [row[0] for row in teams_rows if row[0]]
     
-    # Fetch available PIs (always)
+    # Fetch available PIs (always) - still use view for metadata
     pis_query = text(
         f"""
         SELECT DISTINCT "Quarter PI of Epic"
@@ -1534,47 +1534,47 @@ def _fetch_issue_hierarchy(filters: Dict[str, Any], conn: Connection) -> ReportD
     pis_rows = conn.execute(pis_query).fetchall()
     available_pis = [row[0] for row in pis_rows if row[0]]
     
-    where_conditions = []
-    params: Dict[str, Any] = {"limit": limit_int}
+    # Call get_epic_hierarchy_by_pi function
+    # Function accepts single PI, so if multiple PIs, call multiple times and combine
+    all_issues = []
+    seen_keys = set()  # To deduplicate if same issue appears in multiple PI calls
     
-    # Hierarchy level filter (less than or equal to)
-    if hierarchy_level is not None:
-        where_conditions.append('"Hierarchy Level" <= :hierarchy_level')
-        params["hierarchy_level"] = hierarchy_level
+    # Determine which PIs to query (if none, query with NULL to get all)
+    pis_to_query = pi_names if pi_names else [None]
     
-    # Team name filter (single team or group) - using "Team Name of Epic" column
-    if team_names_list:
-        if len(team_names_list) == 1:
-            # Single team
-            where_conditions.append('"Team Name of Epic" = :team_name')
-            params["team_name"] = team_names_list[0]
+    for pi in pis_to_query:
+        # Prepare parameters for function call
+        params = {
+            "pi": pi if pi else None,
+            "target_level": hierarchy_level if hierarchy_level is not None else None,
+        }
+        
+        # Call SQL function
+        # Use CAST for array parameter when teams are provided, otherwise pass NULL
+        if team_names_list:
+            params["teams"] = team_names_list
+            query = text("""
+                SELECT *
+                FROM get_epic_hierarchy_by_pi(:pi, CAST(:teams AS text[]), :target_level)
+            """)
         else:
-            # Multiple teams (from group)
-            placeholders = ", ".join([f":team_{i}" for i in range(len(team_names_list))])
-            where_conditions.append(f'"Team Name of Epic" IN ({placeholders})')
-            for i, team in enumerate(team_names_list):
-                params[f"team_{i}"] = team
+            query = text("""
+                SELECT *
+                FROM get_epic_hierarchy_by_pi(:pi, NULL::text[], :target_level)
+            """)
+        
+        rows = conn.execute(query, params).fetchall()
+        
+        # Add issues, avoiding duplicates
+        for row in rows:
+            issue_dict = dict(row._mapping)
+            issue_key = issue_dict.get("Key") or issue_dict.get("key")
+            if issue_key and issue_key not in seen_keys:
+                all_issues.append(issue_dict)
+                seen_keys.add(issue_key)
     
-    # PI filter (multiple PIs) - using "Quarter PI of Epic" column
-    if pi_names:
-        placeholders = ", ".join([f":pi_{i}" for i in range(len(pi_names))])
-        where_conditions.append(f'"Quarter PI of Epic" IN ({placeholders})')
-        for i, pi in enumerate(pi_names):
-            params[f"pi_{i}"] = pi
-    
-    where_clause = " AND ".join(where_conditions) if where_conditions else "1=1"
-    
-    query = text(
-        f"""
-        SELECT *
-        FROM get_issue_hierarchy_advanced
-        WHERE {where_clause}
-        LIMIT :limit
-        """
-    )
-    
-    rows = conn.execute(query, params).fetchall()
-    issues = [dict(row._mapping) for row in rows]
+    # Apply limit after combining all results
+    issues = all_issues[:limit_int]
     
     # Build meta with appropriate fields (matching pattern from other reports)
     meta = {

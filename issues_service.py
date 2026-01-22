@@ -167,50 +167,63 @@ async def get_issues(
 @issues_router.get("/issues/epics-hierarchy")
 async def get_epics_hierarchy(
     pi: Optional[str] = Query(None, description="Filter by PI (quarter_pi_of_epic)"),
-    team_name: Optional[str] = Query(None, description="Filter by team name (team_name_of_epic)"),
+    team_name: Optional[str] = Query(None, description="Filter by team name or group name (if isGroup=true)"),
+    isGroup: bool = Query(False, description="If true, team_name is treated as a group name"),
     limit: int = Query(500, description="Number of records to return (default: 500, max: 1000)"),
     conn: Connection = Depends(get_db_connection)
 ):
     """
-    Get epic hierarchy data from epic_hierarchy_with_progress view.
+    Get epic hierarchy data from get_epic_hierarchy_by_pi function.
     
-    Returns all columns from the view with optional filtering by PI and/or team name.
+    Returns all columns from the function with optional filtering by PI and/or team name(s).
+    Supports both single team and group filtering (when isGroup=true).
+    Includes Initiatives/Portfolio Epics that have child Epics matching the filters.
     
     Args:
         pi: Optional filter by PI (filters on quarter_pi_of_epic column)
-        team_name: Optional filter by team name (filters on team_name_of_epic column)
+        team_name: Optional filter by team name or group name (if isGroup=true)
+        isGroup: If true, team_name is treated as a group name (expands to multiple teams)
         limit: Number of records to return (default: 500, max: 1000)
     
     Returns:
         JSON response with epic hierarchy data list and metadata
     """
     try:
+        from database_team_metrics import resolve_team_names_from_filter
+        
         # Validate limit
         validated_limit = validate_limit(limit)
         
-        # Build WHERE clause conditions based on provided filters
-        where_conditions = []
-        params = {"limit": validated_limit}
-        
-        if pi:
-            where_conditions.append('"Quarter PI of Epic" = :pi')
-            params["pi"] = pi
-        
+        # Resolve team names if team_name is provided (handles group to teams translation)
+        team_names_list = None
         if team_name:
-            where_conditions.append('"Team Name of Epic" = :team_name')
-            params["team_name"] = team_name
+            team_names_list = resolve_team_names_from_filter(team_name, isGroup, conn)
         
-        # Build SQL query
-        where_clause = " AND ".join(where_conditions) if where_conditions else "1=1"
+        # Prepare parameters for function call
+        params = {
+            "pi": pi if pi else None,
+            "limit": validated_limit
+        }
         
-        query = text(f"""
-            SELECT *
-            FROM epic_hierarchy_with_progress
-            WHERE {where_clause}
-            LIMIT :limit
-        """)
+        # Call SQL function
+        # Use CAST for array parameter when teams are provided, otherwise pass NULL
+        if team_names_list:
+            params["teams"] = team_names_list
+            query = text("""
+                SELECT *
+                FROM get_epic_hierarchy_by_pi(:pi, CAST(:teams AS text[]))
+                LIMIT :limit
+            """)
+        else:
+            query = text("""
+                SELECT *
+                FROM get_epic_hierarchy_by_pi(:pi, NULL::text[])
+                LIMIT :limit
+            """)
         
-        logger.info(f"Executing query to get epic hierarchy: pi={pi}, team_name={team_name}, limit={validated_limit}")
+        logger.info(f"Executing query to get epic hierarchy: pi={pi}, team_name={team_name}, isGroup={isGroup}, limit={validated_limit}")
+        if team_names_list:
+            logger.info(f"Resolved team names: {team_names_list}")
         
         result = conn.execute(query, params)
         rows = result.fetchall()
