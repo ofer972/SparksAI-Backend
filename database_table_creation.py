@@ -1204,6 +1204,7 @@ def create_ai_summary_table_if_not_exists(engine=None) -> bool:
                     source VARCHAR(255),
                     source_job_id INTEGER,
                     description TEXT NOT NULL,
+                    short_summary TEXT,
                     full_information TEXT,
                     information_json TEXT,
                     created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,

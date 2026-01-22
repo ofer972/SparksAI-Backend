@@ -997,7 +997,7 @@ def create_ai_card(data: Dict[str, Any], conn: Connection = None) -> Dict[str, A
     try:
         allowed_columns = {
             "date", "team_name", "group_name", "card_name", "insight_type", "priority", "source",
-            "source_job_id", "description", "full_information", "information_json", "pi"
+            "source_job_id", "description", "short_summary", "full_information", "information_json", "pi"
         }
 
         # Filter to only allowed columns, but keep None values (they represent NULL in database)
@@ -1037,7 +1037,7 @@ def update_ai_card_by_id(card_id: int, updates: Dict[str, Any], conn: Connection
     try:
         allowed_columns = {
             "date", "team_name", "group_name", "card_name", "insight_type", "priority", "source",
-            "source_job_id", "description", "full_information", "information_json", "pi"
+            "source_job_id", "description", "short_summary", "full_information", "information_json", "pi"
         }
         filtered = {k: v for k, v in updates.items() if k in allowed_columns}
         if not filtered:

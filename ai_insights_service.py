@@ -481,6 +481,7 @@ async def get_ai_insights_collection(
                 card_name,
                 priority,
                 description,
+                short_summary,
                 source_job_id,
                 pi,
                 insight_type,
@@ -530,11 +531,12 @@ async def get_ai_insights_collection(
                 "card_name": row[4],
                 "priority": row[5],
                 "description": description_text,
-                "source_job_id": row[7],
-                "pi": row[8] if len(row) > 8 else None,
-                "insight_type": row[9] if len(row) > 9 else None,
-                "updated_at": row[10] if len(row) > 10 else None,
-                "created_at": row[11] if len(row) > 11 else None
+                "short_summary": row[7],
+                "source_job_id": row[8],
+                "pi": row[9] if len(row) > 9 else None,
+                "insight_type": row[10] if len(row) > 10 else None,
+                "updated_at": row[11] if len(row) > 11 else None,
+                "created_at": row[12] if len(row) > 12 else None
             }
             # Add priority_color
             add_priority_color_to_card(card_dict)
@@ -774,6 +776,7 @@ class AIInsightCreateRequest(BaseModel):
     priority: Optional[str] = None
     source: Optional[str] = None
     source_job_id: Optional[int] = None
+    short_summary: Optional[str] = None
     full_information: Optional[str] = None
     information_json: Optional[str] = None
 
@@ -789,6 +792,7 @@ class AIInsightUpdateRequest(BaseModel):
     priority: Optional[str] = None
     source: Optional[str] = None
     source_job_id: Optional[int] = None
+    short_summary: Optional[str] = None
     full_information: Optional[str] = None
     information_json: Optional[str] = None
 
