@@ -24,6 +24,107 @@ issues_router = APIRouter()
 # Used to filter out very short durations that may not be meaningful
 MIN_DURATION_DAYS = 0.05
 
+def enrich_epic_hierarchy_with_dates(issues: List[Dict[str, Any]], conn: Connection) -> List[Dict[str, Any]]:
+    """
+    Enrich epic hierarchy issues with Start Date and End Date fields.
+    
+    Logic:
+    - Stories: Use Sprint field → sprint dates
+    - Epics: Start Date = PI start date, End Date = sprint end date (if Epic Target Completion is sprint) or PI end date
+    
+    Args:
+        issues: List of issue dictionaries from get_epic_hierarchy_by_pi SQL function
+        conn: Database connection
+    
+    Returns:
+        List of enriched issue dictionaries with Start Date and End Date fields added
+    """
+    # Step 1: Collect unique sprint names and PIs
+    unique_sprint_names = set()
+    unique_pis = set()
+    
+    for issue in issues:
+        # Collect sprint names from stories
+        if issue.get("Sprint"):
+            unique_sprint_names.add(issue["Sprint"])
+        
+        # Collect sprint names from Epic Target Completion
+        if issue.get("Type") == "Epic" and issue.get("Epic Target Completion"):
+            unique_sprint_names.add(issue["Epic Target Completion"])
+        
+        # Collect PIs from epics
+        if issue.get("Type") == "Epic" and issue.get("Quarter PI of Epic"):
+            unique_pis.add(issue["Quarter PI of Epic"])
+    
+    # Step 2: Query sprint dates
+    sprint_dates_dict = {}
+    if unique_sprint_names:
+        sprint_query = text("""
+            SELECT name, start_date, end_date
+            FROM jira_sprints
+            WHERE name = ANY(:sprint_names)
+        """)
+        sprint_result = conn.execute(sprint_query, {"sprint_names": list(unique_sprint_names)})
+        for row in sprint_result:
+            sprint_dates_dict[row.name] = {
+                "start_date": row.start_date,
+                "end_date": row.end_date
+            }
+    
+    # Step 3: Query PI dates
+    pi_dates_dict = {}
+    if unique_pis:
+        pi_query = text("""
+            SELECT pi_name, start_date, end_date
+            FROM pis
+            WHERE pi_name = ANY(:pi_names)
+        """)
+        pi_result = conn.execute(pi_query, {"pi_names": list(unique_pis)})
+        for row in pi_result:
+            pi_dates_dict[row.pi_name] = {
+                "start_date": row.start_date,
+                "end_date": row.end_date
+            }
+    
+    # Step 4: Enrich each issue with Start Date and End Date
+    for issue in issues:
+        issue_type = issue.get("Type")
+        
+        if issue_type in ["Story", "Task", "Bug"]:
+            # Stories: Use Sprint field to get dates
+            sprint_name = issue.get("Sprint")
+            if sprint_name and sprint_name in sprint_dates_dict:
+                sprint_data = sprint_dates_dict[sprint_name]
+                issue["Start Date"] = sprint_data["start_date"]
+                issue["End Date"] = sprint_data["end_date"]
+            else:
+                issue["Start Date"] = None
+                issue["End Date"] = None
+        
+        elif issue_type == "Epic":
+            # Epics: Start Date from PI, End Date from sprint or PI
+            quarter_pi = issue.get("Quarter PI of Epic")
+            if quarter_pi and quarter_pi in pi_dates_dict:
+                pi_data = pi_dates_dict[quarter_pi]
+                issue["Start Date"] = pi_data["start_date"]
+                
+                # End Date: Check if Epic Target Completion is a sprint name
+                epic_target_completion = issue.get("Epic Target Completion")
+                if epic_target_completion and epic_target_completion in sprint_dates_dict:
+                    issue["End Date"] = sprint_dates_dict[epic_target_completion]["end_date"]
+                else:
+                    issue["End Date"] = pi_data["end_date"]
+            else:
+                issue["Start Date"] = None
+                issue["End Date"] = None
+        else:
+            # Ancestors
+            issue["Start Date"] = None
+            issue["End Date"] = None
+    
+    return issues
+
+
 def validate_limit(limit: int) -> int:
     """
     Validate limit parameter to prevent abuse.
@@ -232,6 +333,9 @@ async def get_epics_hierarchy(
         issues = []
         for row in rows:
             issues.append(dict(row._mapping))
+        
+        # Enrich with dates using shared function
+        issues = enrich_epic_hierarchy_with_dates(issues, conn)
         
         return {
             "success": True,

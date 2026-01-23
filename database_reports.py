@@ -1575,6 +1575,10 @@ def _fetch_issue_hierarchy(filters: Dict[str, Any], conn: Connection) -> ReportD
                 all_issues.append(issue_dict)
                 seen_keys.add(issue_key)
     
+    # Enrich with dates using shared function (before applying limit)
+    from issues_service import enrich_epic_hierarchy_with_dates
+    all_issues = enrich_epic_hierarchy_with_dates(all_issues, conn)
+    
     # Apply limit after combining all results
     issues = all_issues[:limit_int]
     
