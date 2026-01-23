@@ -131,24 +131,40 @@ def get_top_ai_cards_filtered(filter_column: str, filter_value: str, limit: int 
             # Use parameterized query with array
             sql_query = f"""
                 WITH ranked_cards AS (
-                    SELECT *,
+                    SELECT ai.*,
                         ROW_NUMBER() OVER (
-                            PARTITION BY insight_type 
+                            PARTITION BY ai.insight_type 
                             ORDER BY 
-                                {build_priority_case_sql()},
-                                created_at DESC
+                                CASE ai.priority 
+                                    WHEN 'Critical' THEN 1
+                                    WHEN 'Warning' THEN 2
+                                    WHEN 'OK' THEN 3
+                                    ELSE 4 
+                                END,
+                                ai.created_at DESC
                         ) as rn
-                    FROM public.ai_summary
-                    WHERE {filter_column} = :filter_value
-                      AND insight_type = ANY(:insight_types)
+                    FROM public.ai_summary ai
+                    WHERE ai.{filter_column} = :filter_value
+                      AND ai.insight_type = ANY(:insight_types)
                       {additional_filter}
                 )
-                SELECT *
-                FROM ranked_cards
-                WHERE rn = 1
+                SELECT rc.*, 
+                       it.report_ids,
+                       it.pi_insight,
+                       it.team_insight,
+                       it.group_insight,
+                       it.sprint_insight
+                FROM ranked_cards rc
+                LEFT JOIN public.insight_types it ON rc.insight_type = it.insight_type
+                WHERE rc.rn = 1
                 ORDER BY 
-                    {build_priority_case_sql()},
-                    created_at DESC
+                    CASE rc.priority 
+                            WHEN 'Critical' THEN 1
+                            WHEN 'Warning' THEN 2
+                            WHEN 'OK' THEN 3
+                            ELSE 4 
+                        END,
+                    rc.created_at DESC
                 LIMIT :limit
             """
             
@@ -161,23 +177,39 @@ def get_top_ai_cards_filtered(filter_column: str, filter_value: str, limit: int 
             # No category filter - original query
             sql_query = f"""
                 WITH ranked_cards AS (
-                    SELECT *,
+                    SELECT ai.*,
                         ROW_NUMBER() OVER (
-                            PARTITION BY insight_type 
+                            PARTITION BY ai.insight_type 
                             ORDER BY 
-                                {build_priority_case_sql()},
-                                created_at DESC
+                                CASE ai.priority 
+                                    WHEN 'Critical' THEN 1
+                                    WHEN 'Warning' THEN 2
+                                    WHEN 'OK' THEN 3
+                                    ELSE 4 
+                                END,
+                                ai.created_at DESC
                         ) as rn
-                    FROM public.ai_summary
-                    WHERE {filter_column} = :filter_value
+                    FROM public.ai_summary ai
+                    WHERE ai.{filter_column} = :filter_value
                       {additional_filter}
                 )
-                SELECT *
-                FROM ranked_cards
-                WHERE rn = 1
+                SELECT rc.*, 
+                       it.report_ids,
+                       it.pi_insight,
+                       it.team_insight,
+                       it.group_insight,
+                       it.sprint_insight
+                FROM ranked_cards rc
+                LEFT JOIN public.insight_types it ON rc.insight_type = it.insight_type
+                WHERE rc.rn = 1
                 ORDER BY 
-                    {build_priority_case_sql()},
-                    created_at DESC
+                    CASE rc.priority 
+                            WHEN 'Critical' THEN 1
+                            WHEN 'Warning' THEN 2
+                            WHEN 'OK' THEN 3
+                            ELSE 4 
+                        END,
+                    rc.created_at DESC
                 LIMIT :limit
             """
             
@@ -195,6 +227,15 @@ def get_top_ai_cards_filtered(filter_column: str, filter_value: str, limit: int 
         ai_cards = []
         for row in result:
             card = dict(row._mapping)
+            # Parse report_ids from JSONB to Python list
+            if 'report_ids' in card:
+                if isinstance(card['report_ids'], str):
+                    try:
+                        card['report_ids'] = json.loads(card['report_ids'])
+                    except:
+                        card['report_ids'] = []
+                elif hasattr(card['report_ids'], '__iter__') and not isinstance(card['report_ids'], str):
+                    card['report_ids'] = list(card['report_ids'])
             add_priority_color_to_card(card)
             ai_cards.append(card)
         
@@ -363,24 +404,40 @@ def get_top_ai_cards_multi_filtered(
         # Branch 1: Filter by single insight_type
         sql_query = f"""
             WITH ranked_cards AS (
-                SELECT *,
+                SELECT ai.*,
                     ROW_NUMBER() OVER (
-                        PARTITION BY insight_type 
+                        PARTITION BY ai.insight_type 
                         ORDER BY 
-                            date DESC,
-                            {build_priority_case_sql()}
+                            ai.date DESC,
+                            CASE ai.priority 
+                                WHEN 'Critical' THEN 1
+                                WHEN 'Warning' THEN 2
+                                WHEN 'OK' THEN 3
+                                ELSE 4 
+                            END
                     ) as rn
-                FROM public.ai_summary
+                FROM public.ai_summary ai
                 WHERE {where_clause}
-                  AND insight_type = :insight_type
+                  AND ai.insight_type = :insight_type
                   {additional_filter}
             )
-            SELECT *
-            FROM ranked_cards
-            WHERE rn = 1
+            SELECT rc.*, 
+                   it.report_ids,
+                   it.pi_insight,
+                   it.team_insight,
+                   it.group_insight,
+                   it.sprint_insight
+            FROM ranked_cards rc
+            LEFT JOIN public.insight_types it ON rc.insight_type = it.insight_type
+            WHERE rc.rn = 1
             ORDER BY 
-                date DESC,
-                {build_priority_case_sql()}
+                rc.date DESC,
+                CASE rc.priority 
+                    WHEN 'Critical' THEN 1
+                    WHEN 'Warning' THEN 2
+                    WHEN 'OK' THEN 3
+                    ELSE 4 
+                END
             LIMIT :limit
         """
         params['insight_type'] = insight_type
@@ -388,24 +445,40 @@ def get_top_ai_cards_multi_filtered(
         # Branch 2: Filter by categories (existing logic)
         sql_query = f"""
             WITH ranked_cards AS (
-                SELECT *,
+                SELECT ai.*,
                     ROW_NUMBER() OVER (
-                        PARTITION BY insight_type 
+                        PARTITION BY ai.insight_type 
                         ORDER BY 
-                            date DESC,
-                            {build_priority_case_sql()}
+                            ai.date DESC,
+                            CASE ai.priority 
+                                WHEN 'Critical' THEN 1
+                                WHEN 'Warning' THEN 2
+                                WHEN 'OK' THEN 3
+                                ELSE 4 
+                            END
                     ) as rn
-                FROM public.ai_summary
+                FROM public.ai_summary ai
                 WHERE {where_clause}
-                  AND insight_type = ANY(:insight_types)
+                  AND ai.insight_type = ANY(:insight_types)
                   {additional_filter}
             )
-            SELECT *
-            FROM ranked_cards
-            WHERE rn = 1
+            SELECT rc.*, 
+                   it.report_ids,
+                   it.pi_insight,
+                   it.team_insight,
+                   it.group_insight,
+                   it.sprint_insight
+            FROM ranked_cards rc
+            LEFT JOIN public.insight_types it ON rc.insight_type = it.insight_type
+            WHERE rc.rn = 1
             ORDER BY 
-                date DESC,
-                {build_priority_case_sql()}
+                rc.date DESC,
+                CASE rc.priority 
+                    WHEN 'Critical' THEN 1
+                    WHEN 'Warning' THEN 2
+                    WHEN 'OK' THEN 3
+                    ELSE 4 
+                END
             LIMIT :limit
         """
         params['insight_types'] = insight_types_list
@@ -413,23 +486,39 @@ def get_top_ai_cards_multi_filtered(
         # Branch 3: No insight_type filter (existing logic)
         sql_query = f"""
             WITH ranked_cards AS (
-                SELECT *,
+                SELECT ai.*,
                     ROW_NUMBER() OVER (
-                        PARTITION BY insight_type 
+                        PARTITION BY ai.insight_type 
                         ORDER BY 
-                            date DESC,
-                            {build_priority_case_sql()}
+                            ai.date DESC,
+                            CASE ai.priority 
+                                WHEN 'Critical' THEN 1
+                                WHEN 'Warning' THEN 2
+                                WHEN 'OK' THEN 3
+                                ELSE 4 
+                            END
                     ) as rn
-                FROM public.ai_summary
+                FROM public.ai_summary ai
                 WHERE {where_clause}
                   {additional_filter}
             )
-            SELECT *
-            FROM ranked_cards
-            WHERE rn = 1
+            SELECT rc.*, 
+                   it.report_ids,
+                   it.pi_insight,
+                   it.team_insight,
+                   it.group_insight,
+                   it.sprint_insight
+            FROM ranked_cards rc
+            LEFT JOIN public.insight_types it ON rc.insight_type = it.insight_type
+            WHERE rc.rn = 1
             ORDER BY 
-                date DESC,
-                {build_priority_case_sql()}
+                rc.date DESC,
+                CASE rc.priority 
+                    WHEN 'Critical' THEN 1
+                    WHEN 'Warning' THEN 2
+                    WHEN 'OK' THEN 3
+                    ELSE 4 
+                END
             LIMIT :limit
         """
     
@@ -437,16 +526,22 @@ def get_top_ai_cards_multi_filtered(
     result = conn.execute(text(sql_query), params)
     cards = [dict(row._mapping) for row in result]
     
-    # Add priority_color to each card
+    # Parse report_ids from JSONB to Python list
     for card in cards:
+        if 'report_ids' in card:
+            if isinstance(card['report_ids'], str):
+                try:
+                    card['report_ids'] = json.loads(card['report_ids'])
+                except:
+                    card['report_ids'] = []
+            elif hasattr(card['report_ids'], '__iter__') and not isinstance(card['report_ids'], str):
+                card['report_ids'] = list(card['report_ids'])
         add_priority_color_to_card(card)
     
     return cards
 
 
 def get_top_ai_cards_with_recommendations_from_json(
-    insight_type: Optional[str] = None,
-    filter_value: Optional[str] = None,
     pi: Optional[str] = None,
     team_name: Optional[str] = None,
     group_name: Optional[str] = None,
@@ -458,20 +553,18 @@ def get_top_ai_cards_with_recommendations_from_json(
 ) -> List[Dict[str, Any]]:
     """
     Get top AI cards with recommendations extracted from information_json field.
-    Supports both legacy single-filter mode and new multi-filter mode.
     
     Returns the most recent + highest priority card for each type (max 1 per type),
     with recommendations parsed from the card's information_json field.
     
     Args:
-        insight_type (Optional[str]): Type of insight - 'team', 'group', or 'pi' (legacy mode)
-        filter_value (Optional[str]): Value to filter by (legacy mode)
-        pi (Optional[str]): PI name (new multi-filter mode)
-        team_name (Optional[str]): Team name (new multi-filter mode)
-        group_name (Optional[str]): Group name (new multi-filter mode)
+        pi (Optional[str]): PI name
+        team_name (Optional[str]): Team name
+        group_name (Optional[str]): Group name
         limit (int): Number of AI cards to return (default: 4)
         recommendations_limit (int): Maximum recommendations per card (default: 3, max: 3)
         categories (Optional[List[str]]): Optional category filter
+        insight_type_name (Optional[str]): Optional filter by specific insight type name
         conn (Connection): Database connection from FastAPI dependency
     
     Returns:
@@ -480,33 +573,20 @@ def get_top_ai_cards_with_recommendations_from_json(
     import json
     
     try:
-        # Determine which mode to use
-        if pi is not None or team_name is not None or group_name is not None:
-            # New multi-filter mode
-            ai_cards = get_top_ai_cards_multi_filtered(
-                pi=pi,
-                team_name=team_name,
-                group_name=group_name,
-                limit=limit,
-                categories=categories,
-                insight_type=insight_type_name,
-                conn=conn
-            )
-        elif insight_type and filter_value:
-            # Legacy single-filter mode (backward compatibility)
-            filter_column_map = {
-                'team': 'team_name',
-                'group': 'group_name',
-                'pi': 'pi'
-            }
-            
-            if insight_type not in filter_column_map:
-                raise ValueError(f"Invalid insight_type: {insight_type}. Must be 'team', 'group', or 'pi'")
-            
-            filter_column = filter_column_map[insight_type]
-            ai_cards = get_top_ai_cards_filtered(filter_column, filter_value, limit, categories=categories, conn=conn)
-        else:
-            raise ValueError("Either (insight_type and filter_value) or (pi/team_name/group_name) must be provided")
+        # Validate at least one filter is provided
+        if not pi and not team_name and not group_name:
+            raise ValueError("At least one filter must be provided: pi, team_name, or group_name")
+        
+        # Get AI cards using multi-filter mode
+        ai_cards = get_top_ai_cards_multi_filtered(
+            pi=pi,
+            team_name=team_name,
+            group_name=group_name,
+            limit=limit,
+            categories=categories,
+            insight_type=insight_type_name,
+            conn=conn
+        )
         
         # For each card, add priority_color and parse recommendations from information_json
         for card in ai_cards:
@@ -561,62 +641,6 @@ def get_top_ai_cards_with_recommendations_from_json(
         raise e
 
 
-
-
-def get_top_ai_cards_with_recommendations_filtered(
-    filter_column: str,
-    filter_value: str,
-    limit: int = 4,
-    recommendations_limit: int = 5,
-    categories: Optional[List[str]] = None,
-    conn: Connection = None
-) -> List[Dict[str, Any]]:
-    """
-    Get top AI cards with their recommendations attached.
-    
-    Returns the most recent + highest priority card for each type (max 1 per type),
-    with recommendations linked via source_ai_summary_id.
-    
-    Args:
-        filter_column (str): Column to filter by ('team_name', 'pi', or 'group_name')
-        filter_value (str): Value to filter by
-        limit (int): Number of AI cards to return (default: 4)
-        recommendations_limit (int): Maximum recommendations per card (default: 5)
-        categories (Optional[List[str]]): Optional category filter - only return cards with insight_type matching insight types for any of these categories
-        conn (Connection): Database connection from FastAPI dependency
-    
-    Returns:
-        list: List of AI card dictionaries, each with 'recommendations' array and 'recommendations_count'
-    """
-    try:
-        # Get top AI cards using existing function
-        ai_cards = get_top_ai_cards_filtered(filter_column, filter_value, limit, categories=categories, conn=conn)
-        
-        # For each card, fetch and attach recommendations from database
-        for card in ai_cards:
-            card_id = card.get('id')
-            if card_id:
-                recommendations = get_recommendations_by_ai_summary_id(
-                    card_id,
-                    recommendations_limit,
-                    conn
-                )
-                # Remove full_information and information_json from each recommendation
-                filtered_recommendations = []
-                for rec in recommendations:
-                    filtered_rec = {k: v for k, v in rec.items() if k not in ['full_information', 'information_json']}
-                    filtered_recommendations.append(filtered_rec)
-                card['recommendations'] = filtered_recommendations
-                card['recommendations_count'] = len(filtered_recommendations)
-            else:
-                card['recommendations'] = []
-                card['recommendations_count'] = 0
-        
-        return ai_cards
-            
-    except Exception as e:
-        logger.error(f"Error fetching top AI cards with recommendations filtered by {filter_column}={filter_value}: {e}")
-        raise e
 
 
 def get_ai_card_by_id(card_id: int, conn: Connection = None) -> Optional[Dict[str, Any]]:
@@ -1551,6 +1575,15 @@ def get_insight_type_by_id(insight_type_id: int, conn: Connection = None) -> Opt
                     row_dict['insight_categories'] = []
             elif hasattr(row_dict['insight_categories'], '__iter__') and not isinstance(row_dict['insight_categories'], str):
                 row_dict['insight_categories'] = list(row_dict['insight_categories'])
+        # Convert JSONB report_ids to Python list
+        if 'report_ids' in row_dict:
+            if isinstance(row_dict['report_ids'], str):
+                try:
+                    row_dict['report_ids'] = json.loads(row_dict['report_ids'])
+                except:
+                    row_dict['report_ids'] = []
+            elif hasattr(row_dict['report_ids'], '__iter__') and not isinstance(row_dict['report_ids'], str):
+                row_dict['report_ids'] = list(row_dict['report_ids'])
         return row_dict
         
     except Exception as e:
@@ -1639,6 +1672,15 @@ def get_insight_types(
                 elif hasattr(row_dict['insight_categories'], '__iter__') and not isinstance(row_dict['insight_categories'], str):
                     # Already a list/array
                     row_dict['insight_categories'] = list(row_dict['insight_categories'])
+            # Convert JSONB report_ids to Python list
+            if 'report_ids' in row_dict:
+                if isinstance(row_dict['report_ids'], str):
+                    try:
+                        row_dict['report_ids'] = json.loads(row_dict['report_ids'])
+                    except:
+                        row_dict['report_ids'] = []
+                elif hasattr(row_dict['report_ids'], '__iter__') and not isinstance(row_dict['report_ids'], str):
+                    row_dict['report_ids'] = list(row_dict['report_ids'])
             insight_types.append(row_dict)
         
         return insight_types
@@ -1662,7 +1704,7 @@ def create_insight_type(data: Dict[str, Any], conn: Connection = None) -> Dict[s
     try:
         import json
         allowed_columns = {
-            "insight_type", "insight_description", "insight_categories", "active", "pi_insight", "team_insight", "group_insight", "sprint_insight", "cron_config"
+            "insight_type", "insight_description", "insight_categories", "report_ids", "active", "pi_insight", "team_insight", "group_insight", "sprint_insight", "cron_config"
         }
         
         filtered = {k: v for k, v in data.items() if k in allowed_columns}
@@ -1672,6 +1714,10 @@ def create_insight_type(data: Dict[str, Any], conn: Connection = None) -> Dict[s
         # Convert insight_categories list to JSON string for JSONB
         if "insight_categories" in filtered and isinstance(filtered["insight_categories"], list):
             filtered["insight_categories"] = json.dumps(filtered["insight_categories"])
+        
+        # Convert report_ids list to JSON string for JSONB
+        if "report_ids" in filtered and isinstance(filtered["report_ids"], list):
+            filtered["report_ids"] = json.dumps(filtered["report_ids"])
         
         # Convert cron_config dict to JSON string for JSONB (or None)
         if "cron_config" in filtered:
@@ -1686,6 +1732,8 @@ def create_insight_type(data: Dict[str, Any], conn: Connection = None) -> Dict[s
         for k in filtered.keys():
             if k == "insight_categories":
                 values_sql_parts.append("CAST(:insight_categories AS jsonb)")
+            elif k == "report_ids":
+                values_sql_parts.append("CAST(:report_ids AS jsonb)")
             elif k == "cron_config":
                 values_sql_parts.append("CAST(:cron_config AS jsonb)")
             else:
@@ -1712,6 +1760,15 @@ def create_insight_type(data: Dict[str, Any], conn: Connection = None) -> Dict[s
                     row_dict['insight_categories'] = []
             elif hasattr(row_dict['insight_categories'], '__iter__') and not isinstance(row_dict['insight_categories'], str):
                 row_dict['insight_categories'] = list(row_dict['insight_categories'])
+        
+        if 'report_ids' in row_dict:
+            if isinstance(row_dict['report_ids'], str):
+                try:
+                    row_dict['report_ids'] = json.loads(row_dict['report_ids'])
+                except:
+                    row_dict['report_ids'] = []
+            elif hasattr(row_dict['report_ids'], '__iter__') and not isinstance(row_dict['report_ids'], str):
+                row_dict['report_ids'] = list(row_dict['report_ids'])
         
         if 'cron_config' in row_dict and row_dict['cron_config'] is not None:
             if isinstance(row_dict['cron_config'], str):
@@ -1742,7 +1799,7 @@ def update_insight_type_by_id(insight_type_id: int, updates: Dict[str, Any], con
     try:
         import json
         allowed_columns = {
-            "insight_type", "insight_description", "insight_categories", "active", "pi_insight", "team_insight", "group_insight", "sprint_insight", "cron_config"
+            "insight_type", "insight_description", "insight_categories", "report_ids", "active", "pi_insight", "team_insight", "group_insight", "sprint_insight", "cron_config"
         }
         filtered = {k: v for k, v in updates.items() if k in allowed_columns}
         if not filtered:
@@ -1751,6 +1808,10 @@ def update_insight_type_by_id(insight_type_id: int, updates: Dict[str, Any], con
         # Convert insight_categories list to JSON string for JSONB
         if "insight_categories" in filtered and isinstance(filtered["insight_categories"], list):
             filtered["insight_categories"] = json.dumps(filtered["insight_categories"])
+        
+        # Convert report_ids list to JSON string for JSONB
+        if "report_ids" in filtered and isinstance(filtered["report_ids"], list):
+            filtered["report_ids"] = json.dumps(filtered["report_ids"])
         
         # Convert cron_config dict to JSON string for JSONB (or None)
         if "cron_config" in filtered:
@@ -1764,6 +1825,8 @@ def update_insight_type_by_id(insight_type_id: int, updates: Dict[str, Any], con
         for k in filtered.keys():
             if k == "insight_categories":
                 set_clauses_parts.append("insight_categories = CAST(:insight_categories AS jsonb)")
+            elif k == "report_ids":
+                set_clauses_parts.append("report_ids = CAST(:report_ids AS jsonb)")
             elif k == "cron_config":
                 set_clauses_parts.append("cron_config = CAST(:cron_config AS jsonb)")
             else:
@@ -1796,6 +1859,15 @@ def update_insight_type_by_id(insight_type_id: int, updates: Dict[str, Any], con
                     row_dict['insight_categories'] = []
             elif hasattr(row_dict['insight_categories'], '__iter__') and not isinstance(row_dict['insight_categories'], str):
                 row_dict['insight_categories'] = list(row_dict['insight_categories'])
+        
+        if 'report_ids' in row_dict:
+            if isinstance(row_dict['report_ids'], str):
+                try:
+                    row_dict['report_ids'] = json.loads(row_dict['report_ids'])
+                except:
+                    row_dict['report_ids'] = []
+            elif hasattr(row_dict['report_ids'], '__iter__') and not isinstance(row_dict['report_ids'], str):
+                row_dict['report_ids'] = list(row_dict['report_ids'])
         
         if 'cron_config' in row_dict and row_dict['cron_config'] is not None:
             if isinstance(row_dict['cron_config'], str):

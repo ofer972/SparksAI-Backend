@@ -22,6 +22,7 @@ DEFAULT_INSIGHT_TYPES = [
         "insight_type": "PI Sync",
         "insight_description": "Insights from the PI Sync (data + transcipts)",
         "insight_categories": ["PI Events"],
+        "report_ids": ["pi-burndown", "pi-metrics-summary"],
         "active": True,
         "pi_insight": True,
         "team_insight": False,
@@ -33,6 +34,7 @@ DEFAULT_INSIGHT_TYPES = [
         "insight_type": "PI Dependencies",
         "insight_description": "Analysis of Epic dependencies (inward and outward)",
         "insight_categories": ["PI Status","PI Events"],
+        "report_ids": ["issues-epic-dependencies", "issues-epics-hierarchy"],
         "active": True,
         "pi_insight": True,
         "team_insight": False,
@@ -44,6 +46,7 @@ DEFAULT_INSIGHT_TYPES = [
         "insight_type": "PI Planning Gaps",
         "insight_description": "Identifies gaps and issues in PI planning",
         "insight_categories": ["PI Status"],
+        "report_ids": ["goal-progress", "pi-burndown", "epic-scope-changes"],
         "active": True,
         "pi_insight": True,
         "team_insight": False,
@@ -55,6 +58,7 @@ DEFAULT_INSIGHT_TYPES = [
         "insight_type": "Daily Progress",
         "insight_description": "Analysis of team progress in the sprint",
         "insight_categories": ["Sprint Events"],
+        "report_ids": ["team-sprint-burndown", "goal-progress"],
         "active": True,
         "pi_insight": False,
         "team_insight": True,
@@ -66,6 +70,7 @@ DEFAULT_INSIGHT_TYPES = [
         "insight_type": "Sprint Goal",
         "insight_description": "Assesses the team progress towards the defined sprint goal",
         "insight_categories": ["Sprint Events"],
+        "report_ids": ["team-sprint-burndown", "goal-progress"],
         "active": True,
         "pi_insight": False,
         "team_insight": True,
@@ -77,6 +82,7 @@ DEFAULT_INSIGHT_TYPES = [
         "insight_type": "Team Retro Topics",
         "insight_description": "Suggests focus topics for the next retrospective",
         "insight_categories": ["Sprint Events"],
+        "report_ids": ["team-closed-sprints", "sprint-velocity-advanced"],
         "active": True,
         "pi_insight": False,
         "team_insight": True,
@@ -88,6 +94,7 @@ DEFAULT_INSIGHT_TYPES = [
         "insight_type": "Team PI Insight",
         "insight_description": "Evaluates progress toward sprint goals",
         "insight_categories": ["PI Events", "PI Status"],
+        "report_ids": ["pi-burndown", "goal-progress"],
         "active": True,
         "pi_insight": True,
         "team_insight": True,
@@ -99,6 +106,7 @@ DEFAULT_INSIGHT_TYPES = [
         "insight_type": "Group Sprint Flow",
         "insight_description": "Analyzes GROUP progress in the active sprint",
         "insight_categories": ["Sprint Events"],
+        "report_ids": ["active-sprint-summary", "sprint-predictability"],
         "active": True,
         "pi_insight": False,
         "team_insight": False,
@@ -110,6 +118,7 @@ DEFAULT_INSIGHT_TYPES = [
         "insight_type": "Group Sprint Predictability",
         "insight_description": "Evaluates GROUP forecast stability",
         "insight_categories": ["Sprint Events"],
+        "report_ids": ["team-closed-sprints"],
         "active": True,
         "pi_insight": False,
         "team_insight": False,
@@ -119,8 +128,9 @@ DEFAULT_INSIGHT_TYPES = [
     },
     {
         "insight_type": "Group Sprint Dependency",
-        "insight_description": "Current sprint - cross-team dependency analysis",
+        "insight_description": "Current sprint - cross-team dependency analysis",
         "insight_categories": ["Sprint Events"],
+        "report_ids": ["issues-epic-dependencies", "issues-epics-hierarchy"],
         "active": True,
         "pi_insight": False,
         "team_insight": False,
@@ -132,6 +142,7 @@ DEFAULT_INSIGHT_TYPES = [
         "insight_type": "WIP Level",
         "insight_description": "Monitors active work items",
         "insight_categories": ["Sprint Status"],
+        "report_ids": ["wip-over-time", "active-sprint-summary"],
         "active": False,
         "pi_insight": False,
         "team_insight": False,
@@ -1655,6 +1666,7 @@ def create_insight_types_table_if_not_exists(engine=None) -> bool:
                     insight_type VARCHAR(255) NOT NULL,
                     insight_description TEXT,
                     insight_categories JSONB NOT NULL DEFAULT '[]'::jsonb,
+                    report_ids JSONB NOT NULL DEFAULT '[]'::jsonb,
                     active BOOLEAN DEFAULT TRUE NOT NULL,
                     pi_insight BOOLEAN DEFAULT FALSE NOT NULL,
                     team_insight BOOLEAN DEFAULT TRUE NOT NULL,
@@ -1881,6 +1893,7 @@ def insert_default_insight_types(engine=None):
                     insight_type = insight_type_data.get("insight_type", "")
                     insight_description = insight_type_data.get("insight_description")
                     insight_categories = insight_type_data.get("insight_categories", [])
+                    report_ids = insight_type_data.get("report_ids", [])
                     active = insight_type_data.get("active", True)
                     pi_insight = insight_type_data.get("pi_insight", False)
                     team_insight = insight_type_data.get("team_insight", True)
@@ -1908,13 +1921,14 @@ def insert_default_insight_types(engine=None):
                         # Convert list to JSON string for JSONB column
                         insert_sql = """
                         INSERT INTO public.insight_types 
-                        (insight_type, insight_description, insight_categories, active, pi_insight, team_insight, group_insight, sprint_insight, cron_config) 
-                        VALUES (:insight_type, :insight_description, CAST(:insight_categories AS jsonb), :active, :pi_insight, :team_insight, :group_insight, :sprint_insight, CAST(:cron_config AS jsonb))
+                        (insight_type, insight_description, insight_categories, report_ids, active, pi_insight, team_insight, group_insight, sprint_insight, cron_config) 
+                        VALUES (:insight_type, :insight_description, CAST(:insight_categories AS jsonb), CAST(:report_ids AS jsonb), :active, :pi_insight, :team_insight, :group_insight, :sprint_insight, CAST(:cron_config AS jsonb))
                         """
                         conn.execute(text(insert_sql), {
                             "insight_type": insight_type,
                             "insight_description": insight_description,
                             "insight_categories": json.dumps(insight_categories),
+                            "report_ids": json.dumps(report_ids),
                             "active": active,
                             "pi_insight": pi_insight,
                             "team_insight": team_insight,

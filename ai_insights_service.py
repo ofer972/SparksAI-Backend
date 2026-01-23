@@ -18,6 +18,7 @@ from database_connection import get_db_connection
 from database_general import (
     get_top_ai_cards,
     get_top_ai_cards_filtered,
+    get_top_ai_cards_multi_filtered,
     get_ai_card_by_id,
     create_ai_card,
     update_ai_card_by_id,
@@ -133,82 +134,155 @@ def validate_limit_large(limit: int) -> int:
 
 @ai_insights_router.get("/ai-insights/getTopCards")
 async def get_ai_insights(
-    insight_type: str = Query(..., description="Type of insight: 'team', 'group', or 'pi'"),
-    team_name: Optional[str] = Query(None, description="Team name (required if insight_type='team')"),
-    group_name: Optional[str] = Query(None, description="Group name (required if insight_type='group')"),
-    pi: Optional[str] = Query(None, description="PI name (required if insight_type='pi')"),
+    insight_type: Optional[str] = Query(None, description="Filter by a specific insight type (e.g., 'PI Sync', 'Daily Progress'). Mutually exclusive with category parameter."),
+    team_name: Optional[str] = Query(None, description="Team name"),
+    group_name: Optional[str] = Query(None, description="Group name"),
+    pi: Optional[str] = Query(None, description="PI name (quarter)"),
     limit: int = Query(4, description="Number of AI cards to return (default: 4, max: 50)"),
+    category: Optional[List[str]] = Query(None, description="Filter by insight category/categories (e.g., 'PI Events', 'Sprint Status'). Can specify multiple: ?category=PI Events&category=Sprint Status"),
     conn: Connection = Depends(get_db_connection)
 ):
     """
     Get AI summary cards for a specific team, group, or PI.
     
+    Supports multiple filter combinations:
+    - PI only: pi=<PI_NAME>
+    - PI + Team: pi=<PI_NAME>&team_name=<TEAM_NAME>
+    - PI + Group: pi=<PI_NAME>&group_name=<GROUP_NAME>
+    - Team only: team_name=<TEAM_NAME>
+    - Group only: group_name=<GROUP_NAME>
+    
     Returns the most recent + highest priority card for each type (max 1 per type).
     Cards are ordered by:
-    1. Priority (Critical > High > Medium)
+    1. Priority (Critical > Warning > OK)
     2. Date (newest first)
     
     Args:
-        insight_type: Type of insight - 'team', 'group', or 'pi'
-        team_name: Team name (required if insight_type='team')
-        group_name: Group name (required if insight_type='group')
-        pi: PI name (required if insight_type='pi')
+        insight_type: Optional filter by specific insight type (e.g., 'PI Sync', 'Daily Progress'). Mutually exclusive with category.
+        team_name: Team name
+        group_name: Group name
+        pi: PI name (quarter)
         limit: Number of AI cards to return (default: 4)
+        category: Optional category filter(s) - PI Events, PI Status, Sprint Status, Sprint Events. Mutually exclusive with insight_type.
     
     Returns:
         JSON response with AI cards list and metadata
     """
     try:
-        # Validate insight_type
-        if insight_type not in [InsightType.TEAM, InsightType.GROUP, InsightType.PI]:
-            raise HTTPException(status_code=400, detail=f"Invalid insight_type: {insight_type}. Must be 'team', 'group', or 'pi'")
+        validated_pi = None
+        validated_team_name = None
+        validated_group_name = None
         
-        # Determine identifier based on insight_type
-        if insight_type == InsightType.TEAM:
-            if not team_name:
-                raise HTTPException(status_code=400, detail="team_name is required when insight_type='team'")
-            identifier = validate_team_name(team_name)
-            filter_column = 'team_name'
-        elif insight_type == InsightType.GROUP:
-            if not group_name:
-                raise HTTPException(status_code=400, detail="group_name is required when insight_type='group'")
-            identifier = validate_group_name(group_name, conn)
-            filter_column = 'group_name'
-        else:  # PI
-            if not pi:
-                raise HTTPException(status_code=400, detail="pi is required when insight_type='pi'")
-            identifier = validate_pi_name(pi)
-            filter_column = 'pi'
+        # Validate and set PI if provided
+        if pi:
+            validated_pi = validate_pi_name(pi)
+        
+        # Validate and set team_name if provided
+        if team_name:
+            validated_team_name = validate_team_name(team_name)
+        
+        # Validate and set group_name if provided
+        if group_name:
+            validated_group_name = validate_group_name(group_name, conn)
+        
+        # Validate that we don't have both team and group
+        if validated_team_name and validated_group_name:
+            raise HTTPException(status_code=400, detail="Cannot specify both team_name and group_name")
+        
+        # Ensure at least one filter is provided
+        if not validated_pi and not validated_team_name and not validated_group_name:
+            raise HTTPException(
+                status_code=400, 
+                detail="At least one filter must be provided: pi, team_name, or group_name"
+            )
         
         validated_limit = validate_limit(limit)
         
-        # Get AI cards from database function
-        if insight_type == InsightType.TEAM:
-            # Use get_top_ai_cards for team (no filter needed, uses team_name directly)
-            ai_cards = get_top_ai_cards(identifier, validated_limit, conn)
-        else:
-            # Use get_top_ai_cards_filtered for group and PI
-            ai_cards = get_top_ai_cards_filtered(filter_column, identifier, validated_limit, categories=None, conn=conn)
+        # Validate that insight_type and category are mutually exclusive
+        if insight_type and category:
+            raise HTTPException(
+                status_code=400,
+                detail="Cannot specify both insight_type and category parameters. They are mutually exclusive."
+            )
         
-        # Build response identifier name
-        identifier_key = 'team_name' if insight_type == InsightType.TEAM else ('group_name' if insight_type == InsightType.GROUP else 'pi')
+        # Validate and sanitize insight_type if provided
+        validated_insight_type = None
+        if insight_type:
+            validated_insight_type = insight_type.strip()
+            if not validated_insight_type:
+                raise HTTPException(
+                    status_code=400,
+                    detail="insight_type cannot be empty"
+                )
+        
+        # Validate categories if provided
+        validated_categories = None
+        if category:
+            allowed_categories = get_insight_category_names()
+            validated_categories = []
+            seen = set()
+            for cat in category:
+                cat = cat.strip()
+                if cat not in allowed_categories:
+                    raise HTTPException(
+                        status_code=400,
+                        detail=f"Invalid insight category: '{cat}'. Allowed categories: {allowed_categories}"
+                    )
+                # Deduplicate categories
+                if cat not in seen:
+                    validated_categories.append(cat)
+                    seen.add(cat)
+            validated_categories = validated_categories if validated_categories else None
+        
+        # Get AI cards using multi-filter mode (same as getTopCardsWithRecommendations, but without recommendations)
+        ai_cards = get_top_ai_cards_multi_filtered(
+            pi=validated_pi,
+            team_name=validated_team_name,
+            group_name=validated_group_name,
+            limit=validated_limit,
+            categories=validated_categories,
+            insight_type=validated_insight_type,
+            conn=conn
+        )
+        
+        # Remove information_json and full_information fields from each card
+        for card in ai_cards:
+            card.pop('information_json', None)
+            card.pop('full_information', None)
+        
+        # Build response with all provided filters
+        response_data = {
+            "ai_cards": ai_cards,
+            "count": len(ai_cards),
+            "limit": validated_limit
+        }
+        if validated_pi:
+            response_data["pi"] = validated_pi
+        if validated_team_name:
+            response_data["team_name"] = validated_team_name
+        if validated_group_name:
+            response_data["group_name"] = validated_group_name
+        
+        # Build message
+        filter_parts = []
+        if validated_pi:
+            filter_parts.append(f"PI '{validated_pi}'")
+        if validated_team_name:
+            filter_parts.append(f"team '{validated_team_name}'")
+        if validated_group_name:
+            filter_parts.append(f"group '{validated_group_name}'")
+        filter_str = " and ".join(filter_parts)
         
         return {
             "success": True,
-            "data": {
-                "ai_cards": ai_cards,
-                "count": len(ai_cards),
-                insight_type: identifier,
-                identifier_key: identifier,
-                "limit": validated_limit
-            },
-            "message": f"Retrieved {len(ai_cards)} AI cards for {insight_type} '{identifier}'"
+            "data": response_data,
+            "message": f"Retrieved {len(ai_cards)} AI cards for {filter_str}"
         }
     
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"Error fetching AI cards for {insight_type}: {e}")
+        logger.error(f"Error fetching AI cards: {e}")
         raise HTTPException(
             status_code=500,
             detail=f"Failed to fetch AI cards: {str(e)}"

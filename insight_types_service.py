@@ -237,6 +237,7 @@ class InsightTypeCreateRequest(BaseModel):
     insight_type: str
     insight_description: Optional[str] = None
     insight_categories: List[str]  # Now a list instead of single string
+    report_ids: Optional[List[str]] = []
     active: bool = True
     pi_insight: bool = False
     team_insight: bool = True
@@ -249,6 +250,7 @@ class InsightTypeUpdateRequest(BaseModel):
     insight_type: Optional[str] = None
     insight_description: Optional[str] = None
     insight_categories: Optional[List[str]] = None  # Now a list instead of single string
+    report_ids: Optional[List[str]] = None
     active: Optional[bool] = None
     pi_insight: Optional[bool] = None
     team_insight: Optional[bool] = None
@@ -283,6 +285,7 @@ async def create_insight_type_endpoint(
         data = {
             "insight_type": validated_insight_type,
             "insight_categories": validated_categories,
+            "report_ids": request.report_ids if request.report_ids is not None else [],
             "active": request.active,
             "pi_insight": request.pi_insight,
             "team_insight": request.team_insight,
@@ -346,6 +349,7 @@ async def update_insight_type_full(
         updates = {
             "insight_type": validated_insight_type,
             "insight_categories": validated_categories,
+            "report_ids": request.report_ids if request.report_ids is not None else [],
             "active": request.active,
             "pi_insight": request.pi_insight,
             "team_insight": request.team_insight,
