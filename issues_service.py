@@ -411,7 +411,7 @@ def enrich_epic_hierarchy_with_dates(issues: List[Dict[str, Any]], conn: Connect
             for sprint_name, sprint_data in sprint_dates_dict.items()
         ]
         # Sort by original start_date (earliest first), handling None values
-        sprints_with_dates.sort(key=lambda x: x["_sort_date"] if x["_sort_date"] is not None else datetime.max)
+        sprints_with_dates.sort(key=lambda x: normalize_date_for_comparison(x["_sort_date"]) if x["_sort_date"] is not None else datetime.max)
         
         # DEBUG: Log sprints before limit
         logger.info(f"[SPRINT DEBUG] Total sprints before limit: {len(sprints_with_dates)}")
@@ -447,7 +447,7 @@ def enrich_epic_hierarchy_with_dates(issues: List[Dict[str, Any]], conn: Connect
             for pi_name, pi_data in pi_dates_dict.items()
         ]
         # Sort by original start_date (earliest first), handling None values
-        pis_with_dates.sort(key=lambda x: x["_sort_date"] if x["_sort_date"] is not None else datetime.max)
+        pis_with_dates.sort(key=lambda x: normalize_date_for_comparison(x["_sort_date"]) if x["_sort_date"] is not None else datetime.max)
         # Remove sort helper field
         pis_list = [
             {k: v for k, v in pi.items() if k != "_sort_date"}
@@ -468,7 +468,7 @@ def enrich_epic_hierarchy_with_dates(issues: List[Dict[str, Any]], conn: Connect
             for release_id, release_data in release_dates_dict.items()
         ]
         # Sort by original start_date (earliest first), handling None values
-        releases_with_dates.sort(key=lambda x: x["_sort_date"] if x["_sort_date"] is not None else datetime.max)
+        releases_with_dates.sort(key=lambda x: normalize_date_for_comparison(x["_sort_date"]) if x["_sort_date"] is not None else datetime.max)
         # Remove sort helper field
         releases_list = [
             {k: v for k, v in release.items() if k != "_sort_date"}
