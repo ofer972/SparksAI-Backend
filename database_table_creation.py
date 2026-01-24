@@ -446,6 +446,32 @@ DEFAULT_REPORT_DEFINITIONS = [
         }
     },
     {
+        "report_id": "pi-roadmap",
+        "report_name": "PI Roadmap",
+        "chart_type": "gantt",
+        "data_source": "issues_hierarchy",
+        "description": "PI Roadmap with Initiative/Epic Hierarchy",
+        "default_filters": {
+            "pi": None,
+            "hierarchy_level": None,
+            "team_name": None,
+            "isGroup": False,
+            "limit": 500
+        },
+        "meta_schema": {
+            "required_filters": [],
+            "optional_filters": ["pi", "hierarchy_level", "team_name", "isGroup", "limit"],
+            "parameters": {
+                "hierarchy_level": {"type": "integer", "description": "Filter by hierarchy level (less than or equal to)"},
+                "pi": {"type": "string", "description": "PI name filter (supports multiple PIs)"},
+                "team_name": {"type": "string", "description": "Team name filter (or group name if isGroup=true)"},
+                "isGroup": {"type": "boolean", "description": "If true, team_name is treated as a group name"},
+                "limit": {"type": "integer", "description": "Maximum number of records to return (up to 1000)"}
+            },
+            "allowed_views": ["pi-dashboard", "team-dashboard"]
+        }
+    },
+    {
         "report_id": "issues-epic-dependencies",
         "report_name": "Epic Dependencies",
         "chart_type": "table",

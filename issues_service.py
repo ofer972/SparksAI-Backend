@@ -75,8 +75,6 @@ def enrich_epic_hierarchy_with_dates(issues: List[Dict[str, Any]], conn: Connect
         if sprint_name:
             unique_sprint_names.add(sprint_name)
             sprints_from_stories.add(sprint_name)
-            # DEBUG: Log which issue contributed this sprint
-            logger.debug(f"[SPRINT DEBUG] Found sprint '{sprint_name}' from issue {issue_key} (Type: {issue_type}) - Sprint field")
         
         # Collect sprint names from Epic Target Completion
         if issue_type == "Epic":
@@ -86,18 +84,13 @@ def enrich_epic_hierarchy_with_dates(issues: List[Dict[str, Any]], conn: Connect
                 unique_sprint_names.add(epic_target_completion)
                 sprints_from_epic_target.add(epic_target_completion)
                 epics_with_target_completion += 1
-                # DEBUG: Log which epic contributed this sprint
-                logger.info(f"[SPRINT DEBUG] Found sprint '{epic_target_completion}' from Epic {issue_key} - Epic Target Completion field")
             else:
                 epics_without_target_completion += 1
-                logger.debug(f"[SPRINT DEBUG] Epic {issue_key} has no Epic Target Completion value")
             
             # Also collect Original Epic Target Completion sprint names
             original_epic_target_completion = issue.get("Original Epic Target Completion")
             if original_epic_target_completion:
                 unique_sprint_names.add(original_epic_target_completion)
-                # DEBUG: Log which epic contributed this sprint
-                logger.debug(f"[SPRINT DEBUG] Found sprint '{original_epic_target_completion}' from Epic {issue_key} - Original Epic Target Completion field")
         
         # Collect PIs from epics
         if issue_type == "Epic" and issue.get("Quarter PI of Epic"):
@@ -111,28 +104,11 @@ def enrich_epic_hierarchy_with_dates(issues: List[Dict[str, Any]], conn: Connect
                 if release_id is not None:
                     unique_fix_version_ids.add(release_id)
     
-    # DEBUG: Log summary of issue types and epic analysis
-    logger.info(f"[SPRINT DEBUG] Total issues processed: {len(issues)}")
-    logger.info(f"[SPRINT DEBUG] Issue types found: {sorted(list(issue_types_found))}")
-    logger.info(f"[SPRINT DEBUG] Total Epics found: {epic_count}")
-    logger.info(f"[SPRINT DEBUG] Epics WITH Epic Target Completion: {epics_with_target_completion}")
-    logger.info(f"[SPRINT DEBUG] Epics WITHOUT Epic Target Completion: {epics_without_target_completion}")
-    
-    # DEBUG: Log collected sprint names with source breakdown
-    logger.info(f"[SPRINT DEBUG] Collected {len(unique_sprint_names)} unique sprint names from issues")
-    logger.info(f"[SPRINT DEBUG] Sprints from 'Sprint' field (Stories/Tasks/Bugs): {len(sprints_from_stories)} - {sorted(list(sprints_from_stories))}")
-    logger.info(f"[SPRINT DEBUG] Sprints from 'Epic Target Completion' field (Epics): {len(sprints_from_epic_target)} - {sorted(list(sprints_from_epic_target))}")
-    if unique_sprint_names:
-        logger.info(f"[SPRINT DEBUG] All collected sprint names (combined): {sorted(list(unique_sprint_names))}")
     
     # Step 3: Query sprint dates
     sprint_dates_dict = {}
     if unique_sprint_names:
         sprint_names_list = list(unique_sprint_names)
-        # DEBUG: Log exact query parameters
-        logger.info(f"[SPRINT DEBUG] Querying database for sprints with EXACT parameters: {sprint_names_list}")
-        logger.info(f"[SPRINT DEBUG] Query: SELECT name, start_date, end_date FROM jira_sprints WHERE name = ANY(:sprint_names)")
-        logger.info(f"[SPRINT DEBUG] Parameter count: {len(sprint_names_list)} sprint names")
         
         sprint_query = text("""
             SELECT name, start_date, end_date
@@ -145,16 +121,6 @@ def enrich_epic_hierarchy_with_dates(issues: List[Dict[str, Any]], conn: Connect
                 "start_date": row.start_date,
                 "end_date": row.end_date
             }
-        
-        # DEBUG: Log sprints found in database
-        logger.info(f"[SPRINT DEBUG] Found {len(sprint_dates_dict)} sprints in database (out of {len(unique_sprint_names)} collected)")
-        if sprint_dates_dict:
-            logger.info(f"[SPRINT DEBUG] Sprints found in database: {sorted(list(sprint_dates_dict.keys()))}")
-        
-        # DEBUG: Log sprints NOT found in database
-        missing_sprints = unique_sprint_names - set(sprint_dates_dict.keys())
-        if missing_sprints:
-            logger.info(f"[SPRINT DEBUG] Sprints NOT found in database: {sorted(list(missing_sprints))}")
     
     # Step 4: Query PI dates
     pi_dates_dict = {}
@@ -397,6 +363,15 @@ def enrich_epic_hierarchy_with_dates(issues: List[Dict[str, Any]], conn: Connect
             return date_value.isoformat()
         return date_value
     
+    # Step 8.5: Format all date fields on issues to YYYY-MM-DD strings (same format as End Date in sprints/pis/releases)
+    for issue in issues:
+        if "Start Date" in issue:
+            issue["Start Date"] = format_date_only(issue["Start Date"])
+        if "End Date" in issue:
+            issue["End Date"] = format_date_only(issue["End Date"])
+        if "Original Epic End Date" in issue:
+            issue["Original Epic End Date"] = format_date_only(issue["Original Epic End Date"])
+    
     # Step 9: Convert sprint_dates_dict to array format (max 20, sorted by start_date)
     sprints_list = []
     if sprint_dates_dict:
@@ -413,25 +388,11 @@ def enrich_epic_hierarchy_with_dates(issues: List[Dict[str, Any]], conn: Connect
         # Sort by original start_date (earliest first), handling None values
         sprints_with_dates.sort(key=lambda x: normalize_date_for_comparison(x["_sort_date"]) if x["_sort_date"] is not None else datetime.max)
         
-        # DEBUG: Log sprints before limit
-        logger.info(f"[SPRINT DEBUG] Total sprints before limit: {len(sprints_with_dates)}")
-        if sprints_with_dates:
-            sprint_names_before_limit = [s["Sprint name"] for s in sprints_with_dates]
-            logger.info(f"[SPRINT DEBUG] Sprint names before limit (sorted by start_date): {sprint_names_before_limit}")
-        
         # Remove sort helper field and limit to 20 sprints
         sprints_list = [
             {k: v for k, v in sprint.items() if k != "_sort_date"}
             for sprint in sprints_with_dates[:20]
         ]
-        
-        # DEBUG: Log final sprints returned
-        logger.info(f"[SPRINT DEBUG] Final sprints returned (after limit of 20): {len(sprints_list)}")
-        if sprints_list:
-            sprint_names_final = [s["Sprint name"] for s in sprints_list]
-            logger.info(f"[SPRINT DEBUG] Final sprint names returned: {sprint_names_final}")
-        if len(sprints_with_dates) > 20:
-            logger.info(f"[SPRINT DEBUG] WARNING: {len(sprints_with_dates) - 20} sprints were excluded due to 20 sprint limit")
     
     # Step 10: Convert pi_dates_dict to array format (sorted by start_date)
     pis_list = []
