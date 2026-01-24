@@ -24,54 +24,139 @@ issues_router = APIRouter()
 # Used to filter out very short durations that may not be meaningful
 MIN_DURATION_DAYS = 0.05
 
-def enrich_epic_hierarchy_with_dates(issues: List[Dict[str, Any]], conn: Connection) -> List[Dict[str, Any]]:
+def enrich_epic_hierarchy_with_dates(issues: List[Dict[str, Any]], conn: Connection) -> Dict[str, Any]:
     """
-    Enrich epic hierarchy issues with Start Date and End Date fields.
+    Enrich epic hierarchy issues with Start Date, End Date, and Progress % fields.
     
     Logic:
     - Stories: Use Sprint field → sprint dates
     - Epics: Start Date = PI start date, End Date = sprint end date (if Epic Target Completion is sprint) or PI end date
+    - Level 2: Progress and dates calculated from Epics (Level 1) children
+    - Level 3: Progress and dates calculated from Level 2 children
     
     Args:
         issues: List of issue dictionaries from get_epic_hierarchy_by_pi SQL function
         conn: Database connection
     
     Returns:
-        List of enriched issue dictionaries with Start Date and End Date fields added
+        Dictionary with:
+        - issues: List of enriched issue dictionaries with Start Date, End Date, and Progress % fields added
+        - sprints: List of sprint dictionaries with "Sprint name", "start date", "end date" (max 20, sorted by start_date)
+        - pis: List of PI dictionaries with "PI name", "start date", "end date" (sorted by start_date)
+        - releases: List of release dictionaries with "Release name", "start date", "end date" (sorted by start_date)
     """
-    # Step 1: Collect unique sprint names and PIs
+    # Step 1: Rename "Epic Progress %" to "Progress %" for all issues
+    for issue in issues:
+        if "Epic Progress %" in issue:
+            issue["Progress %"] = issue.pop("Epic Progress %")
+        elif "Progress %" not in issue:
+            issue["Progress %"] = None
+    
+    # Step 2: Collect unique sprint names, PIs, and fix version IDs
     unique_sprint_names = set()
     unique_pis = set()
+    unique_fix_version_ids = set()
+    sprints_from_stories = set()  # DEBUG: Track sprints from "Sprint" field
+    sprints_from_epic_target = set()  # DEBUG: Track sprints from "Epic Target Completion"
+    
+    # DEBUG: Track issue types and epic target completion values
+    issue_types_found = set()
+    epic_count = 0
+    epics_with_target_completion = 0
+    epics_without_target_completion = 0
     
     for issue in issues:
+        issue_type = issue.get("Type")
+        issue_key = issue.get("Key")
+        issue_types_found.add(issue_type)
+        
         # Collect sprint names from stories
-        if issue.get("Sprint"):
-            unique_sprint_names.add(issue["Sprint"])
+        sprint_name = issue.get("Sprint")
+        if sprint_name:
+            unique_sprint_names.add(sprint_name)
+            sprints_from_stories.add(sprint_name)
+            # DEBUG: Log which issue contributed this sprint
+            logger.debug(f"[SPRINT DEBUG] Found sprint '{sprint_name}' from issue {issue_key} (Type: {issue_type}) - Sprint field")
         
         # Collect sprint names from Epic Target Completion
-        if issue.get("Type") == "Epic" and issue.get("Epic Target Completion"):
-            unique_sprint_names.add(issue["Epic Target Completion"])
+        if issue_type == "Epic":
+            epic_count += 1
+            epic_target_completion = issue.get("Epic Target Completion")
+            if epic_target_completion:
+                unique_sprint_names.add(epic_target_completion)
+                sprints_from_epic_target.add(epic_target_completion)
+                epics_with_target_completion += 1
+                # DEBUG: Log which epic contributed this sprint
+                logger.info(f"[SPRINT DEBUG] Found sprint '{epic_target_completion}' from Epic {issue_key} - Epic Target Completion field")
+            else:
+                epics_without_target_completion += 1
+                logger.debug(f"[SPRINT DEBUG] Epic {issue_key} has no Epic Target Completion value")
+            
+            # Also collect Original Epic Target Completion sprint names
+            original_epic_target_completion = issue.get("Original Epic Target Completion")
+            if original_epic_target_completion:
+                unique_sprint_names.add(original_epic_target_completion)
+                # DEBUG: Log which epic contributed this sprint
+                logger.debug(f"[SPRINT DEBUG] Found sprint '{original_epic_target_completion}' from Epic {issue_key} - Original Epic Target Completion field")
         
         # Collect PIs from epics
-        if issue.get("Type") == "Epic" and issue.get("Quarter PI of Epic"):
+        if issue_type == "Epic" and issue.get("Quarter PI of Epic"):
             unique_pis.add(issue["Quarter PI of Epic"])
+        
+        # Collect fix version IDs from all issues
+        fix_version_ids = issue.get("Fix Version IDs")
+        if fix_version_ids:  # Check if not None and not empty
+            # fix_version_ids is an array (int4[]), so iterate through it
+            for release_id in fix_version_ids:
+                if release_id is not None:
+                    unique_fix_version_ids.add(release_id)
     
-    # Step 2: Query sprint dates
+    # DEBUG: Log summary of issue types and epic analysis
+    logger.info(f"[SPRINT DEBUG] Total issues processed: {len(issues)}")
+    logger.info(f"[SPRINT DEBUG] Issue types found: {sorted(list(issue_types_found))}")
+    logger.info(f"[SPRINT DEBUG] Total Epics found: {epic_count}")
+    logger.info(f"[SPRINT DEBUG] Epics WITH Epic Target Completion: {epics_with_target_completion}")
+    logger.info(f"[SPRINT DEBUG] Epics WITHOUT Epic Target Completion: {epics_without_target_completion}")
+    
+    # DEBUG: Log collected sprint names with source breakdown
+    logger.info(f"[SPRINT DEBUG] Collected {len(unique_sprint_names)} unique sprint names from issues")
+    logger.info(f"[SPRINT DEBUG] Sprints from 'Sprint' field (Stories/Tasks/Bugs): {len(sprints_from_stories)} - {sorted(list(sprints_from_stories))}")
+    logger.info(f"[SPRINT DEBUG] Sprints from 'Epic Target Completion' field (Epics): {len(sprints_from_epic_target)} - {sorted(list(sprints_from_epic_target))}")
+    if unique_sprint_names:
+        logger.info(f"[SPRINT DEBUG] All collected sprint names (combined): {sorted(list(unique_sprint_names))}")
+    
+    # Step 3: Query sprint dates
     sprint_dates_dict = {}
     if unique_sprint_names:
+        sprint_names_list = list(unique_sprint_names)
+        # DEBUG: Log exact query parameters
+        logger.info(f"[SPRINT DEBUG] Querying database for sprints with EXACT parameters: {sprint_names_list}")
+        logger.info(f"[SPRINT DEBUG] Query: SELECT name, start_date, end_date FROM jira_sprints WHERE name = ANY(:sprint_names)")
+        logger.info(f"[SPRINT DEBUG] Parameter count: {len(sprint_names_list)} sprint names")
+        
         sprint_query = text("""
             SELECT name, start_date, end_date
             FROM jira_sprints
             WHERE name = ANY(:sprint_names)
         """)
-        sprint_result = conn.execute(sprint_query, {"sprint_names": list(unique_sprint_names)})
+        sprint_result = conn.execute(sprint_query, {"sprint_names": sprint_names_list})
         for row in sprint_result:
             sprint_dates_dict[row.name] = {
                 "start_date": row.start_date,
                 "end_date": row.end_date
             }
+        
+        # DEBUG: Log sprints found in database
+        logger.info(f"[SPRINT DEBUG] Found {len(sprint_dates_dict)} sprints in database (out of {len(unique_sprint_names)} collected)")
+        if sprint_dates_dict:
+            logger.info(f"[SPRINT DEBUG] Sprints found in database: {sorted(list(sprint_dates_dict.keys()))}")
+        
+        # DEBUG: Log sprints NOT found in database
+        missing_sprints = unique_sprint_names - set(sprint_dates_dict.keys())
+        if missing_sprints:
+            logger.info(f"[SPRINT DEBUG] Sprints NOT found in database: {sorted(list(missing_sprints))}")
     
-    # Step 3: Query PI dates
+    # Step 4: Query PI dates
     pi_dates_dict = {}
     if unique_pis:
         pi_query = text("""
@@ -86,7 +171,36 @@ def enrich_epic_hierarchy_with_dates(issues: List[Dict[str, Any]], conn: Connect
                 "end_date": row.end_date
             }
     
-    # Step 4: Enrich each issue with Start Date and End Date
+    # Step 4.5: Query release dates
+    release_dates_dict = {}
+    if unique_fix_version_ids:
+        release_query = text("""
+            SELECT release_id, name, start_date, release_date
+            FROM jira_releases
+            WHERE release_id = ANY(:release_ids)
+        """)
+        release_result = conn.execute(release_query, {"release_ids": list(unique_fix_version_ids)})
+        for row in release_result:
+            release_dates_dict[row.release_id] = {
+                "name": row.name,
+                "start_date": row.start_date,
+                "end_date": row.release_date  # release_date is the end date
+            }
+    
+    # Helper function to normalize dates for comparison (needed for resolved_at logic)
+    def normalize_date_for_comparison(date_value):
+        """Convert date to naive datetime for comparison, handling both date and datetime objects."""
+        if isinstance(date_value, datetime):
+            # Convert to naive datetime if it's timezone-aware
+            if date_value.tzinfo is not None:
+                # Remove timezone info by converting to UTC then removing tzinfo
+                return date_value.astimezone().replace(tzinfo=None)
+            return date_value
+        elif isinstance(date_value, date):
+            return datetime.combine(date_value, datetime.min.time())
+        return date_value
+    
+    # Step 5: Enrich each issue with Start Date and End Date (existing logic)
     for issue in issues:
         issue_type = issue.get("Type")
         
@@ -114,15 +228,259 @@ def enrich_epic_hierarchy_with_dates(issues: List[Dict[str, Any]], conn: Connect
                     issue["End Date"] = sprint_dates_dict[epic_target_completion]["end_date"]
                 else:
                     issue["End Date"] = pi_data["end_date"]
+                
+                # Original Epic End Date: Add if Original Epic Target Completion is different, matches sprint, and has value
+                original_epic_target_completion = issue.get("Original Epic Target Completion")
+                # First check: if different from Epic Target Completion (if same, skip)
+                if original_epic_target_completion != epic_target_completion:
+                    # Second check: if it matches a sprint name
+                    if original_epic_target_completion and original_epic_target_completion in sprint_dates_dict:
+                        # Third check: if it has a value (already checked above, but being explicit)
+                        issue["Original Epic End Date"] = sprint_dates_dict[original_epic_target_completion]["end_date"]
             else:
                 issue["Start Date"] = None
                 issue["End Date"] = None
         else:
-            # Ancestors
+            # Ancestors (Level 2/3) - will be calculated below
             issue["Start Date"] = None
             issue["End Date"] = None
+        
+        # Apply resolved_at logic: If status is Done and resolved_at < end_date, use resolved_at
+        status_category = issue.get("status_category")
+        resolved_at = issue.get("Resolved At")
+        end_date = issue.get("End Date")
+        
+        if (status_category == "Done" and 
+            resolved_at is not None and 
+            end_date is not None):
+            # Normalize both dates for comparison
+            resolved_normalized = normalize_date_for_comparison(resolved_at)
+            end_date_normalized = normalize_date_for_comparison(end_date)
+            
+            # If resolved_at < end_date, use resolved_at as end_date
+            if resolved_normalized < end_date_normalized:
+                # Return resolved_at in the same type as original end_date
+                if isinstance(end_date, date) and not isinstance(end_date, datetime):
+                    issue["End Date"] = resolved_at.date() if isinstance(resolved_at, datetime) else resolved_at
+                else:
+                    # If end_date was datetime, return resolved_at as datetime (naive if original was naive)
+                    if isinstance(end_date, datetime) and end_date.tzinfo is None:
+                        # Original was naive datetime, return naive
+                        if isinstance(resolved_at, datetime) and resolved_at.tzinfo is not None:
+                            issue["End Date"] = resolved_at.astimezone().replace(tzinfo=None)
+                        else:
+                            issue["End Date"] = resolved_at
+                    else:
+                        issue["End Date"] = resolved_at
     
-    return issues
+    # Helper function to normalize dates for comparison (handles both date and datetime, naive and aware)
+    def normalize_date_for_comparison(date_value):
+        """Convert date to naive datetime for comparison, handling both date and datetime objects."""
+        if isinstance(date_value, datetime):
+            # Convert to naive datetime if it's timezone-aware
+            if date_value.tzinfo is not None:
+                # Remove timezone info by converting to UTC then removing tzinfo
+                return date_value.astimezone().replace(tzinfo=None)
+            return date_value
+        elif isinstance(date_value, date):
+            return datetime.combine(date_value, datetime.min.time())
+        return date_value
+    
+    # Helper function to get min/max from mixed date types
+    def get_min_date(dates_list):
+        """Get minimum date from list that may contain both date and datetime objects (naive/aware)."""
+        if not dates_list:
+            return None
+        normalized = [normalize_date_for_comparison(d) for d in dates_list]
+        min_val = min(normalized)
+        # Return in the same type as the first date in the list
+        first_date = dates_list[0]
+        if isinstance(first_date, date) and not isinstance(first_date, datetime):
+            return min_val.date() if isinstance(min_val, datetime) else min_val
+        elif isinstance(first_date, datetime):
+            # Return as naive datetime (matching normalized form)
+            return min_val
+        return min_val
+    
+    def get_max_date(dates_list):
+        """Get maximum date from list that may contain both date and datetime objects (naive/aware)."""
+        if not dates_list:
+            return None
+        normalized = [normalize_date_for_comparison(d) for d in dates_list]
+        max_val = max(normalized)
+        # Return in the same type as the first date in the list
+        first_date = dates_list[0]
+        if isinstance(first_date, date) and not isinstance(first_date, datetime):
+            return max_val.date() if isinstance(max_val, datetime) else max_val
+        elif isinstance(first_date, datetime):
+            # Return as naive datetime (matching normalized form)
+            return max_val
+        return max_val
+    
+    # Step 6: Build parent-child relationships
+    children_by_parent = {}
+    for issue in issues:
+        parent_key = issue.get("Parent Key")
+        if parent_key:
+            if parent_key not in children_by_parent:
+                children_by_parent[parent_key] = []
+            children_by_parent[parent_key].append(issue)
+    
+    # Step 7: Calculate Progress % and dates for Level 2 (from Epics - Level 1)
+    for issue in issues:
+        hierarchy_level = issue.get("Hierarchy Level")
+        
+        if hierarchy_level == 2:
+            issue_key = issue.get("Key")
+            children = children_by_parent.get(issue_key, [])
+            
+            # Filter for Epics (Level 1)
+            epic_children = [c for c in children if c.get("Hierarchy Level") == 1]
+            
+            # Calculate Progress %
+            if not epic_children:
+                issue["Progress %"] = None  # Empty if no children
+            else:
+                total = len(epic_children)
+                completed = len([c for c in epic_children if c.get("status_category") == "Done"])
+                if total > 0:
+                    issue["Progress %"] = (completed / total * 100.0)
+                else:
+                    issue["Progress %"] = None
+            
+            # Calculate Start Date (min of children's Start Dates)
+            start_dates = [c.get("Start Date") for c in epic_children if c.get("Start Date") is not None]
+            issue["Start Date"] = get_min_date(start_dates) if start_dates else None
+            
+            # Calculate End Date (max of children's End Dates)
+            end_dates = [c.get("End Date") for c in epic_children if c.get("End Date") is not None]
+            issue["End Date"] = get_max_date(end_dates) if end_dates else None
+    
+    # Step 8: Calculate Progress % and dates for Level 3 (from Level 2)
+    for issue in issues:
+        hierarchy_level = issue.get("Hierarchy Level")
+        
+        if hierarchy_level == 3:
+            issue_key = issue.get("Key")
+            children = children_by_parent.get(issue_key, [])
+            
+            # Filter for Level 2 items
+            level2_children = [c for c in children if c.get("Hierarchy Level") == 2]
+            
+            # Calculate Progress %
+            if not level2_children:
+                issue["Progress %"] = None  # Empty if no children
+            else:
+                total = len(level2_children)
+                completed = len([c for c in level2_children if c.get("status_category") == "Done"])
+                if total > 0:
+                    issue["Progress %"] = (completed / total * 100.0)
+                else:
+                    issue["Progress %"] = None
+            
+            # Calculate Start Date (min of children's Start Dates)
+            start_dates = [c.get("Start Date") for c in level2_children if c.get("Start Date") is not None]
+            issue["Start Date"] = get_min_date(start_dates) if start_dates else None
+            
+            # Calculate End Date (max of children's End Dates)
+            end_dates = [c.get("End Date") for c in level2_children if c.get("End Date") is not None]
+            issue["End Date"] = get_max_date(end_dates) if end_dates else None
+    
+    # Helper function to format dates as YYYY-MM-DD strings
+    def format_date_only(date_value):
+        """Convert datetime or date to YYYY-MM-DD string format."""
+        if date_value is None:
+            return None
+        if isinstance(date_value, datetime):
+            return date_value.date().isoformat()
+        elif isinstance(date_value, date):
+            return date_value.isoformat()
+        return date_value
+    
+    # Step 9: Convert sprint_dates_dict to array format (max 20, sorted by start_date)
+    sprints_list = []
+    if sprint_dates_dict:
+        # Create list with original dates for sorting
+        sprints_with_dates = [
+            {
+                "Sprint name": sprint_name,
+                "start date": format_date_only(sprint_data["start_date"]),
+                "end date": format_date_only(sprint_data["end_date"]),
+                "_sort_date": sprint_data["start_date"]  # Keep original for sorting
+            }
+            for sprint_name, sprint_data in sprint_dates_dict.items()
+        ]
+        # Sort by original start_date (earliest first), handling None values
+        sprints_with_dates.sort(key=lambda x: x["_sort_date"] if x["_sort_date"] is not None else datetime.max)
+        
+        # DEBUG: Log sprints before limit
+        logger.info(f"[SPRINT DEBUG] Total sprints before limit: {len(sprints_with_dates)}")
+        if sprints_with_dates:
+            sprint_names_before_limit = [s["Sprint name"] for s in sprints_with_dates]
+            logger.info(f"[SPRINT DEBUG] Sprint names before limit (sorted by start_date): {sprint_names_before_limit}")
+        
+        # Remove sort helper field and limit to 20 sprints
+        sprints_list = [
+            {k: v for k, v in sprint.items() if k != "_sort_date"}
+            for sprint in sprints_with_dates[:20]
+        ]
+        
+        # DEBUG: Log final sprints returned
+        logger.info(f"[SPRINT DEBUG] Final sprints returned (after limit of 20): {len(sprints_list)}")
+        if sprints_list:
+            sprint_names_final = [s["Sprint name"] for s in sprints_list]
+            logger.info(f"[SPRINT DEBUG] Final sprint names returned: {sprint_names_final}")
+        if len(sprints_with_dates) > 20:
+            logger.info(f"[SPRINT DEBUG] WARNING: {len(sprints_with_dates) - 20} sprints were excluded due to 20 sprint limit")
+    
+    # Step 10: Convert pi_dates_dict to array format (sorted by start_date)
+    pis_list = []
+    if pi_dates_dict:
+        # Create list with original dates for sorting
+        pis_with_dates = [
+            {
+                "PI name": pi_name,
+                "start date": format_date_only(pi_data["start_date"]),
+                "end date": format_date_only(pi_data["end_date"]),
+                "_sort_date": pi_data["start_date"]  # Keep original for sorting
+            }
+            for pi_name, pi_data in pi_dates_dict.items()
+        ]
+        # Sort by original start_date (earliest first), handling None values
+        pis_with_dates.sort(key=lambda x: x["_sort_date"] if x["_sort_date"] is not None else datetime.max)
+        # Remove sort helper field
+        pis_list = [
+            {k: v for k, v in pi.items() if k != "_sort_date"}
+            for pi in pis_with_dates
+        ]
+    
+    # Step 10.5: Convert release_dates_dict to array format (sorted by start_date)
+    releases_list = []
+    if release_dates_dict:
+        # Create list with original dates for sorting
+        releases_with_dates = [
+            {
+                "Release name": release_data["name"],
+                "start date": format_date_only(release_data["start_date"]),
+                "end date": format_date_only(release_data["end_date"]),
+                "_sort_date": release_data["start_date"]  # Keep original for sorting
+            }
+            for release_id, release_data in release_dates_dict.items()
+        ]
+        # Sort by original start_date (earliest first), handling None values
+        releases_with_dates.sort(key=lambda x: x["_sort_date"] if x["_sort_date"] is not None else datetime.max)
+        # Remove sort helper field
+        releases_list = [
+            {k: v for k, v in release.items() if k != "_sort_date"}
+            for release in releases_with_dates
+        ]
+    
+    return {
+        "issues": issues,
+        "sprints": sprints_list,
+        "pis": pis_list,
+        "releases": releases_list
+    }
 
 
 def validate_limit(limit: int) -> int:
@@ -335,14 +693,21 @@ async def get_epics_hierarchy(
             issues.append(dict(row._mapping))
         
         # Enrich with dates using shared function
-        issues = enrich_epic_hierarchy_with_dates(issues, conn)
+        enrichment_result = enrich_epic_hierarchy_with_dates(issues, conn)
+        issues = enrichment_result["issues"]
+        sprints = enrichment_result["sprints"]
+        pis = enrichment_result["pis"]
+        releases = enrichment_result["releases"]
         
         return {
             "success": True,
             "data": {
                 "issues": issues,
                 "count": len(issues),
-                "limit": validated_limit
+                "limit": validated_limit,
+                "sprints": sprints,
+                "pis": pis,
+                "releases": releases
             },
             "message": f"Retrieved {len(issues)} epic hierarchy records"
         }

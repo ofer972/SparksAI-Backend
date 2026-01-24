@@ -1577,7 +1577,11 @@ def _fetch_issue_hierarchy(filters: Dict[str, Any], conn: Connection) -> ReportD
     
     # Enrich with dates using shared function (before applying limit)
     from issues_service import enrich_epic_hierarchy_with_dates
-    all_issues = enrich_epic_hierarchy_with_dates(all_issues, conn)
+    enrichment_result = enrich_epic_hierarchy_with_dates(all_issues, conn)
+    all_issues = enrichment_result["issues"]
+    sprints = enrichment_result["sprints"]
+    pis = enrichment_result["pis"]
+    releases = enrichment_result["releases"]
     
     # Apply limit after combining all results
     issues = all_issues[:limit_int]
@@ -1608,6 +1612,9 @@ def _fetch_issue_hierarchy(filters: Dict[str, Any], conn: Connection) -> ReportD
             "issues": issues,
             "count": len(issues),
             "limit": limit_int,
+            "sprints": sprints,
+            "pis": pis,
+            "releases": releases
         },
         "meta": meta,
     }
