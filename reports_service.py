@@ -232,12 +232,12 @@ async def get_report_instance(
     team_name: Optional[str] = Query(None),
     issue_type: Optional[str] = Query(None),
     sprint_name: Optional[str] = Query(None),
-    pi: Optional[str] = Query(None),
+    pi: Optional[str] = Query(None, description="PI name filter. For pi-roadmap report, supports multiple PIs: use comma-separated format '2026-Q1,2026-Q2' OR repeat the parameter '?pi=2026-Q1&pi=2026-Q2'. In Swagger UI: Enter comma-separated values like '2026-Q1,2026-Q2' in the pi field."),
     release: Optional[str] = Query(None, description="Release name filter (for release-burndown report)"),
     project: Optional[str] = Query(None),
     team: Optional[str] = Query(None),
     months: Optional[int] = Query(None),
-    pi_names: Optional[List[str]] = Query(None),
+    pi_names: Optional[List[str]] = Query(None, description="PI name(s) filter as a list. For multiple PIs, use comma-separated format: '2026-Q1,2026-Q2' OR repeat the parameter: '?pi_names=2026-Q1&pi_names=2026-Q2'. In Swagger UI: Enter comma-separated values like '2026-Q1,2026-Q2' in a single input field."),
     status_category: Optional[List[str]] = Query(None), # Status category filter (array)
     include_done: Optional[bool] = Query(None), # New filter
     view_mode: Optional[str] = Query(None), # New filter
@@ -270,9 +270,14 @@ async def get_report_instance(
     - sprint-predictability
     - pi-metrics-summary
     - pi-metrics-summary-by-team
+    - pi-roadmap (supports multiple PIs - see pi parameter documentation)
     - active-sprint-summary
     - wip-over-time
     - cycle-time-over-time
+    
+    **PI Roadmap Report (pi-roadmap):**
+    - Supports filtering by single or multiple PIs
+    - Use `pi_names` parameter with comma-separated values (e.g., `2026-Q1,2026-Q2`)
     """
     definition = get_report_definition_by_id(report_id, conn)
     if not definition:
@@ -307,6 +312,25 @@ async def get_report_instance(
             override_filters[target_key] = normalized
 
     _assign_multi("pi_names", "pi_names", "pi_name")
+
+    # Handle pi parameter specially to support both single-PI and multi-PI reports
+    # Single-PI reports (pi-burndown, pi-metrics-summary) expect pi as a string
+    # Multi-PI reports (pi-roadmap) can use pi_names (list) or pi (string/list)
+    if "pi" in raw_params:
+        pi_values = raw_params.pop("pi")
+        normalized_pi = _normalize_multi_value(pi_values)
+        if normalized_pi:
+            if len(normalized_pi) == 1:
+                # Single PI: keep as string for single-PI reports, also add to pi_names for multi-PI reports
+                override_filters["pi"] = normalized_pi[0]
+                # Only add to pi_names if it wasn't already set by _assign_multi above
+                if "pi_names" not in override_filters:
+                    override_filters["pi_names"] = normalized_pi
+            else:
+                # Multiple PIs: convert to pi_names (list) for multi-PI reports
+                # Set pi to first value for backward compatibility with single-PI reports
+                override_filters["pi_names"] = normalized_pi
+                override_filters["pi"] = normalized_pi[0]  # First PI as string for single-PI reports
 
     # Remaining parameters: collapse repeated values, trim whitespace
     for key, values in raw_params.items():
