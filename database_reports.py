@@ -1489,7 +1489,7 @@ def _fetch_issues_flow_status_duration(filters: Dict[str, Any], conn: Connection
 def _fetch_issue_hierarchy(filters: Dict[str, Any], conn: Connection) -> ReportDataResult:
     from database_team_metrics import resolve_team_names_from_filter
     
-    pi_names = _parse_list(filters.get("pi") or filters.get("pi_names") or filters.get("pi_name"))
+    pi_names = _parse_list(filters.get("pi_names") or filters.get("pi_name") or filters.get("pi"))
     team_name = (filters.get("team_name") or "").strip() or None
     is_group = filters.get("isGroup", False)
     hierarchy_level = filters.get("hierarchy_level")
@@ -1623,7 +1623,7 @@ def _fetch_issue_hierarchy(filters: Dict[str, Any], conn: Connection) -> ReportD
 def _fetch_epic_dependencies(filters: Dict[str, Any], conn: Connection) -> ReportDataResult:
     from database_team_metrics import resolve_team_names_from_filter
 
-    pi_names = _parse_list(filters.get("pi") or filters.get("pi_names") or filters.get("pi_name"))
+    pi_names = _parse_list(filters.get("pi_names") or filters.get("pi_name") or filters.get("pi"))
 
     # Extract team filter parameters - only use team_name (removed legacy team parameter)
     team_name = (filters.get("team_name") or "").strip() or None
