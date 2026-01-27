@@ -252,32 +252,28 @@ async def get_report_instance(
     Resolve a specific report by ID, merging defaults with provided filters.
     
     Available report IDs (copy/paste for testing):
-    - team-sprint-burndown
-    - team-current-sprint-progress
-    - pi-burndown
-    - release-burndown
-    - team-closed-sprints
-    - sprint-velocity-advanced
-    - team-issues-trend
-    - pi-predictability
-    - epic-scope-changes
-    - issues-bugs-by-priority
-    - issues-bugs-by-team
-    - issues-flow-status-duration
-    - issues-epics-hierarchy
-    - issues-epic-dependencies
-    - issues-release-predictability
-    - sprint-predictability
-    - pi-metrics-summary
-    - pi-metrics-summary-by-team
-    - pi-roadmap (supports multiple PIs - see pi parameter documentation)
-    - active-sprint-summary
-    - wip-over-time
-    - cycle-time-over-time
-    
-    **PI Roadmap Report (pi-roadmap):**
-    - Supports filtering by single or multiple PIs
-    - Use `pi_names` parameter with comma-separated values (e.g., `2026-Q1,2026-Q2`)
+    - team-sprint-burndown - Tracks remaining work across a sprint for a given team
+    - team-current-sprint-progress - Displays the progress of the current sprint for a given team
+    - pi-burndown - Displays program increment burndown for epics and features
+    - release-burndown - Displays release burndown for issues that are part of a defined release
+    - team-closed-sprints - Displays completed sprint metrics for a given team across recent months
+    - sprint-velocity-advanced - Displays sprint velocity chart with planned, added, completed, and removed issues
+    - team-issues-trend - Shows monthly counts of issues created, resolved, and remaining open
+    - pi-predictability - Summarizes predictability metrics for program increments
+    - epic-scope-changes - Compares epic scope adjustments across selected PI quarters
+    - issues-bugs-by-priority - Visualizes open bugs by priority level
+    - issues-bugs-by-team - Visualizes open bugs grouped by team with priority breakdown
+    - issues-flow-status-duration - Shows average time spent in each workflow status
+    - issues-epics-hierarchy - Displays the hierarchy of issues with status and dependency information
+    - issues-epic-dependencies - Summarizes inbound and outbound epic dependencies for a PI
+    - issues-release-predictability - Highlights release progress across epics and other issues over recent months
+    - sprint-predictability - Provides sprint predictability metrics, cycle time, and completion breakdown
+    - pi-metrics-summary - Aggregates PI closure progress and WIP metrics for leadership review
+    - pi-metrics-summary-by-team - Displays PI closure progress and WIP metrics broken down by team
+    - pi-roadmap - PI Roadmap with Initiative/Epic Hierarchy (supports multiple PIs - see pi parameter documentation)
+    - active-sprint-summary - Displays active sprint summary by team with progress metrics and completion status
+    - wip-over-time - Displays work in progress metrics over time by issue type
+    - cycle-time-over-time - Displays average cycle time and issue count over time by issue type
     """
     definition = get_report_definition_by_id(report_id, conn)
     if not definition:
