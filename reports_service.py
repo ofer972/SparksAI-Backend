@@ -166,16 +166,82 @@ async def forward_to_github_service(report_id: str, filters: Dict[str, Any], def
         )
 
 
+async def forward_to_audit_service(report_id: str, filters: Dict[str, Any], definition: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    Forward report request to Audit service.
+    Returns data in the same format as resolve_report_data.
+    Audit service returns only the data, backend adds definition.
+    """
+    audit_service_url = os.getenv("AUDIT_SERVICE_URL", "http://audit-service:8083")
+    endpoint = f"/api/v1/audit-service/reports/{report_id}"
+    
+    # Build query parameters from filters
+    params: Dict[str, Any] = {}
+    if filters.get("months"):
+        params["months"] = filters["months"]
+    if filters.get("user_id"):
+        params["user_id"] = filters["user_id"]
+    if filters.get("http_method"):
+        params["http_method"] = filters["http_method"]
+    if filters.get("action"):
+        params["action"] = filters["action"]
+    if filters.get("min_tokens"):
+        params["min_tokens"] = filters["min_tokens"]
+    if filters.get("min_response_time"):
+        params["min_response_time"] = filters["min_response_time"]
+    if filters.get("status_code"):
+        params["status_code"] = filters["status_code"]
+    if filters.get("status_code_min"):
+        params["status_code_min"] = filters["status_code_min"]
+    if filters.get("status_code_max"):
+        params["status_code_max"] = filters["status_code_max"]
+    if filters.get("search_query"):
+        params["search_query"] = filters["search_query"]
+    
+    try:
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            response = await client.get(
+                f"{audit_service_url}{endpoint}",
+                params=params
+            )
+            response.raise_for_status()
+            result_data = response.json()
+            
+            return {
+                "data": result_data,
+                "meta": {
+                    "service": "audit-service"
+                }
+            }
+    except httpx.HTTPStatusError as e:
+        logger = logging.getLogger(__name__)
+        logger.error(f"Audit service returned error: {e.response.status_code} - {e.response.text}")
+        raise HTTPException(
+            status_code=e.response.status_code,
+            detail=f"Audit service error: {e.response.text}"
+        )
+    except httpx.RequestError as e:
+        logger = logging.getLogger(__name__)
+        logger.error(f"Failed to connect to audit service: {e}")
+        raise HTTPException(
+            status_code=503,
+            detail=f"Failed to connect to audit service: {str(e)}"
+        )
+
+
 @reports_router.get("/reports")
 async def list_reports(
     conn: Connection = Depends(get_db_connection),
     bypass_cache: Optional[bool] = Query(False, description="Skip cache lookup"),
+    include_audit: Optional[bool] = Query(False, description="Include audit reports in results"),
+    audit_only: Optional[bool] = Query(False, description="Return only audit reports"),
 ):
     """
     Return all available report definitions.
+    Filtering by naming convention: audit reports have report_id starting with "audit-"
     """
-    # Try cache first (definitions change rarely, so use a long TTL)
-    cache_key = "report:definitions:all"
+    # Build cache key with filter parameters
+    cache_key = f"report:definitions:all:include_audit={include_audit}:audit_only={audit_only}"
     
     if not bypass_cache:
         cached_data = get_cached_report(cache_key)
@@ -189,6 +255,13 @@ async def list_reports(
             }
     
     definitions = get_all_report_definitions(conn)
+    
+    # Filter by naming convention
+    if audit_only:
+        definitions = [d for d in definitions if d["report_id"].startswith("audit-")]
+    elif not include_audit:
+        definitions = [d for d in definitions if not d["report_id"].startswith("audit-")]
+    
     summaries = [
         {
             "report_id": definition["report_id"],
@@ -363,9 +436,11 @@ async def get_report_instance(
             }
 
     try:
-        # Check if report should be forwarded to GitHub service
+        # Check if report should be forwarded to external service
         if definition["data_source"].startswith("github_service_"):
             resolved_payload = await forward_to_github_service(report_id, merged_filters, definition)
+        elif definition["data_source"].startswith("audit_"):
+            resolved_payload = await forward_to_audit_service(report_id, merged_filters, definition)
         else:
             resolved_payload = resolve_report_data(definition["data_source"], merged_filters, conn)
     except KeyError as err:
