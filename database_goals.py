@@ -144,7 +144,7 @@ def _prepare_goal_data_for_db(data: Dict[str, Any]) -> Dict[str, Any]:
         "group_id": group_id,
         "goal_text": data.get("goal_text"),
         "issue_keys": json.dumps(data.get("issue_keys", [])) if data.get("issue_keys") is not None else None,
-        "status": data.get("status", "Draft"),
+        "status": data.get("status", "Defined"),
         "priority_bv": data.get("priority_bv"),
         "ai": data.get("ai", False)
     }

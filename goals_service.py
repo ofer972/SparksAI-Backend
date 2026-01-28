@@ -736,7 +736,7 @@ class GoalCreateRequest(BaseModel):
     group_name: Optional[str] = None  # UI sends name, we convert to group_id
     goal_text: str
     issue_keys: List[str]  # Changed from epic_keys
-    status: Optional[str] = "Draft"
+    status: Optional[str] = "Defined"
     priority_bv: Optional[int] = None
 
 
@@ -1242,7 +1242,7 @@ async def create_goal_endpoint(
             "group_id": group_id,
             "goal_text": request.goal_text,
             "issue_keys": request.issue_keys,
-            "status": request.status or "Draft",
+            "status": request.status or "Defined",
             "priority_bv": request.priority_bv,
             "ai": False,
             "is_overall": is_overall
@@ -1277,7 +1277,7 @@ async def move_goals_ai_to_user_endpoint(
     conn: Connection = Depends(get_db_connection)
 ):
     """
-    Move multiple goals from AI-generated to user-modified by setting ai = False and status = 'Draft'.
+    Move multiple goals from AI-generated to user-modified by setting ai = False and status = 'Defined'.
     Same logic as pi_goals.
     """
     try:
@@ -1294,7 +1294,7 @@ async def move_goals_ai_to_user_endpoint(
         
         query = text(f"""
             UPDATE {config.GOALS_TABLE}
-            SET ai = false, status = 'Draft', updated_at = CURRENT_TIMESTAMP
+            SET ai = false, status = 'Defined', updated_at = CURRENT_TIMESTAMP
             WHERE id IN ({placeholders})
         """)
         
