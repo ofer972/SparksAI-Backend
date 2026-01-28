@@ -5,6 +5,7 @@ Adapted from pi_goals_service.py - same logic, extended for Sprint and Release.
 """
 
 from fastapi import APIRouter, HTTPException, Depends, Query
+from fastapi.responses import JSONResponse
 from sqlalchemy import text
 from sqlalchemy.engine import Connection
 from typing import List, Dict, Any, Optional
@@ -1037,10 +1038,19 @@ async def generate_ai_goals(
         
         logger.info(f"Response summary: {len(saved_overall_goals)} overall goals, {len(saved_team_goals_by_team)} teams with goals")
         
-        return {
+        # Extract tokens_used from LLM response for audit tracking
+        tokens_value = llm_response.get("data", {}).get("tokens_used", 0)
+        
+        response_data = {
             "success": True,
             "message": f"Generated and saved goals for {scope_type}"
         }
+        
+        headers = {}
+        if tokens_value:
+            headers["SA-Token"] = str(tokens_value)
+        
+        return JSONResponse(content=response_data, headers=headers)
     
     except HTTPException:
         raise
@@ -1079,10 +1089,22 @@ async def get_goals(
                 # team_name is actually a group name - convert to group_id
                 group_id_for_response = get_group_id_from_name(team_name, conn)
                 if not group_id_for_response:
-                    raise HTTPException(
-                        status_code=404,
-                        detail=f"Group '{team_name}' not found"
-                    )
+                    # Group doesn't exist - return empty results (query operation, not an error)
+                    logger.info(f"Group '{team_name}' not found - returning empty goals")
+                    return {
+                        "success": True,
+                        "data": format_goals_response(
+                            goals=[],
+                            scope_type=scope_type,
+                            pi_name=pi_name,
+                            sprint_id=sprint_id,
+                            release_id=release_id,
+                            group_id=None,
+                            team_name=None,
+                            isGroup=isGroup
+                        ),
+                        "message": f"No goals found - group '{team_name}' does not exist"
+                    }
                 team_names_list = resolve_team_names_from_filter(team_name, isGroup, conn)
             else:
                 team_names_list = resolve_team_names_from_filter(team_name, isGroup, conn)

@@ -92,7 +92,7 @@ DEFAULT_INSIGHT_TYPES = [
     },
     {
         "insight_type": "Team PI Insight",
-        "insight_description": "Evaluates progress toward sprint goals",
+        "insight_description": "Evaluates progress of the teams towards completion of PI content that was planned",
         "insight_categories": ["PI Events", "PI Status"],
         "report_ids": ["pi-burndown", "goal-progress"],
         "active": True,
@@ -846,6 +846,155 @@ DEFAULT_REPORT_DEFINITIONS = [
                 "months": {"type": "integer", "description": "Number of months to look back (1, 2, 3, 4, 6, 9, 12)", "default": 1}
             },
             "allowed_views": ["github-dashboard"]
+        }
+    },
+    # Audit Reports
+    {
+        "report_id": "audit-frequently-used-actions",
+        "report_name": "Frequently Used Actions",
+        "chart_type": "table",
+        "data_source": "audit_frequently_used_actions",
+        "description": "Shows all actions/endpoints sorted by usage count",
+        "default_filters": {
+            "months": 1
+        },
+        "meta_schema": {
+            "required_filters": [],
+            "optional_filters": ["months", "user_id", "http_method"],
+            "parameters": {
+                "months": {"type": "integer", "description": "Number of months to look back (1, 2, 3, 4, 6, 9, 12)", "default": 1},
+                "user_id": {"type": "string", "description": "Filter by user ID"},
+                "http_method": {"type": "string", "description": "Filter by HTTP method"}
+            }
+        }
+    },
+    {
+        "report_id": "audit-issues-synced-trend",
+        "report_name": "Issues Synced Over Time",
+        "chart_type": "bar",
+        "data_source": "audit_issues_synced_trend",
+        "description": "Shows average issues synced per day over time",
+        "default_filters": {
+            "months": 1
+        },
+        "meta_schema": {
+            "required_filters": [],
+            "optional_filters": ["months", "action"],
+            "parameters": {
+                "months": {"type": "integer", "description": "Number of months to look back (1, 2, 3, 4, 6, 9, 12)", "default": 1},
+                "action": {"type": "string", "description": "Filter by action"}
+            }
+        }
+    },
+    {
+        "report_id": "audit-token-usage",
+        "report_name": "Token Usage Analysis",
+        "chart_type": "bar",
+        "data_source": "audit_token_usage",
+        "description": "Shows token usage by action with bar chart and detailed table",
+        "default_filters": {
+            "months": 1
+        },
+        "meta_schema": {
+            "required_filters": [],
+            "optional_filters": ["months", "min_tokens", "action"],
+            "parameters": {
+                "months": {"type": "integer", "description": "Number of months to look back (1, 2, 3, 4, 6, 9, 12)", "default": 1},
+                "min_tokens": {"type": "integer", "description": "Minimum tokens threshold"},
+                "action": {"type": "string", "description": "Filter by action"}
+            }
+        }
+    },
+    {
+        "report_id": "audit-slow-actions",
+        "report_name": "Slow Actions",
+        "chart_type": "table",
+        "data_source": "audit_slow_actions",
+        "description": "Shows endpoints with slow response times",
+        "default_filters": {
+            "months": 1
+        },
+        "meta_schema": {
+            "required_filters": [],
+            "optional_filters": ["months", "min_response_time", "status_code"],
+            "parameters": {
+                "months": {"type": "integer", "description": "Number of months to look back (1, 2, 3, 4, 6, 9, 12)", "default": 1},
+                "min_response_time": {"type": "float", "description": "Minimum response time in seconds"},
+                "status_code": {"type": "integer", "description": "Filter by status code"}
+            }
+        }
+    },
+    {
+        "report_id": "audit-failed-endpoints",
+        "report_name": "Failed Endpoints",
+        "chart_type": "table",
+        "data_source": "audit_failed_endpoints",
+        "description": "Shows endpoints with failed requests (status code >= 400)",
+        "default_filters": {
+            "months": 1
+        },
+        "meta_schema": {
+            "required_filters": [],
+            "optional_filters": ["months", "status_code_min", "status_code_max", "http_method"],
+            "parameters": {
+                "months": {"type": "integer", "description": "Number of months to look back (1, 2, 3, 4, 6, 9, 12)", "default": 1},
+                "status_code_min": {"type": "integer", "description": "Minimum status code (default: 400)"},
+                "status_code_max": {"type": "integer", "description": "Maximum status code (default: 599)"},
+                "http_method": {"type": "string", "description": "Filter by HTTP method"}
+            }
+        }
+    },
+    {
+        "report_id": "audit-user-questions",
+        "report_name": "User Questions",
+        "chart_type": "table",
+        "data_source": "audit_user_questions",
+        "description": "Shows user questions from AI chat requests",
+        "default_filters": {
+            "months": 1
+        },
+        "meta_schema": {
+            "required_filters": [],
+            "optional_filters": ["months", "user_id", "search_query"],
+            "parameters": {
+                "months": {"type": "integer", "description": "Number of months to look back (1, 2, 3, 4, 6, 9, 12)", "default": 1},
+                "user_id": {"type": "string", "description": "Filter by user ID"},
+                "search_query": {"type": "string", "description": "Search in question text"}
+            }
+        }
+    },
+    {
+        "report_id": "audit-most-active-users",
+        "report_name": "Most Active Users",
+        "chart_type": "bar",
+        "data_source": "audit_most_active_users",
+        "description": "Shows top 15 most active users by request count",
+        "default_filters": {
+            "months": 1
+        },
+        "meta_schema": {
+            "required_filters": [],
+            "optional_filters": ["months"],
+            "parameters": {
+                "months": {"type": "integer", "description": "Number of months to look back (1, 2, 3, 4, 6, 9, 12)", "default": 1}
+            }
+        }
+    },
+    {
+        "report_id": "audit-daily-active-users",
+        "report_name": "Daily Active Users",
+        "chart_type": "bar",
+        "data_source": "audit_daily_active_users",
+        "description": "Shows count of unique users per day for a selected month",
+        "default_filters": {
+            "month": None
+        },
+        "meta_schema": {
+            "required_filters": [],
+            "optional_filters": ["month"],
+            "parameters": {
+                "month": {"type": "string", "description": "Month in YYYY-MM format (e.g., '2026-01'). Defaults to current month."}
+            }
         }
     }
 ]
