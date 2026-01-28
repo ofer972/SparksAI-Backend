@@ -179,6 +179,8 @@ async def forward_to_audit_service(report_id: str, filters: Dict[str, Any], defi
     params: Dict[str, Any] = {}
     if filters.get("months"):
         params["months"] = filters["months"]
+    if filters.get("month"):
+        params["month"] = filters["month"]
     if filters.get("user_id"):
         params["user_id"] = filters["user_id"]
     if filters.get("http_method"):
@@ -310,6 +312,7 @@ async def get_report_instance(
     project: Optional[str] = Query(None),
     team: Optional[str] = Query(None),
     months: Optional[int] = Query(None),
+    month: Optional[str] = Query(None, description="Specific month in YYYY-MM format (e.g., '2026-01')"),
     pi_names: Optional[List[str]] = Query(None, description="PI name(s) filter as a list. For multiple PIs, use comma-separated format: '2026-Q1,2026-Q2' OR repeat the parameter: '?pi_names=2026-Q1&pi_names=2026-Q2'. In Swagger UI: Enter comma-separated values like '2026-Q1,2026-Q2' in a single input field."),
     status_category: Optional[List[str]] = Query(None), # Status category filter (array)
     include_done: Optional[bool] = Query(None), # New filter

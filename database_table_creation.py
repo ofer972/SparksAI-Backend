@@ -979,6 +979,23 @@ DEFAULT_REPORT_DEFINITIONS = [
                 "months": {"type": "integer", "description": "Number of months to look back (1, 2, 3, 4, 6, 9, 12)", "default": 1}
             }
         }
+    },
+    {
+        "report_id": "audit-daily-active-users",
+        "report_name": "Daily Active Users",
+        "chart_type": "bar",
+        "data_source": "audit_daily_active_users",
+        "description": "Shows count of unique users per day for a selected month",
+        "default_filters": {
+            "month": None
+        },
+        "meta_schema": {
+            "required_filters": [],
+            "optional_filters": ["month"],
+            "parameters": {
+                "month": {"type": "string", "description": "Month in YYYY-MM format (e.g., '2026-01'). Defaults to current month."}
+            }
+        }
     }
 ]
 
