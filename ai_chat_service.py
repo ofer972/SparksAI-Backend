@@ -1365,6 +1365,7 @@ async def fetch_dashboard_reports_data(
     from datetime import datetime, date
     from decimal import Decimal
     from database_reports import get_report_definition_by_id, resolve_report_data
+    from reports_service import forward_to_github_service
     from cache_utils import generate_cache_key, get_cached_report, set_cached_report, get_report_cache_ttl
     
     # Custom JSON encoder to handle datetime and Decimal objects
@@ -1501,7 +1502,11 @@ async def fetch_dashboard_reports_data(
             else:
                 # Fetch fresh data
                 logger.info(f"  → Fetching fresh data for report '{report_id}'")
-                resolved_payload = resolve_report_data(definition["data_source"], merged_filters, conn)
+                # Check if report should be forwarded to external service
+                if definition["data_source"].startswith("github_service_"):
+                    resolved_payload = await forward_to_github_service(report_id, merged_filters, definition)
+                else:
+                    resolved_payload = resolve_report_data(definition["data_source"], merged_filters, conn)
                 
                 report_data = {
                     "definition": {
@@ -1556,6 +1561,40 @@ async def fetch_dashboard_reports_data(
     return final_context
 
 
+def format_metric_data_for_llm(metric: Dict[str, Any]) -> str:
+    """
+    Format KPI metric data for LLM context.
+    
+    Args:
+        metric: Metric object from dashboard_data containing:
+            - description: str
+            - tooltip: str
+            - trend: dict with direction, improved, percentage, label
+    
+    Returns:
+        Formatted string for LLM context
+    """
+    formatted_parts = []
+    
+    # Add description
+    if metric.get('description'):
+        formatted_parts.append(f"Description: {metric['description']}")
+    
+    # Add tooltip
+    if metric.get('tooltip'):
+        formatted_parts.append(f"Tooltip: {metric['tooltip']}")
+    
+    # Format trend
+    trend = metric.get('trend')
+    if trend:
+        direction = trend.get('direction', 'unknown')
+        improved = trend.get('improved', False)
+        improved_text = "yes" if improved else "no"
+        formatted_parts.append(f"Trend: direction={direction}, improved={improved_text}")
+    
+    return "\n".join(formatted_parts)
+
+
 async def fetch_insight_type_reports_data(
     insight_type_name: str,
     filters: Dict[str, Any],
@@ -1576,6 +1615,7 @@ async def fetch_insight_type_reports_data(
     from datetime import datetime, date
     from decimal import Decimal
     from database_reports import get_report_definition_by_id, resolve_report_data
+    from reports_service import forward_to_github_service
     from cache_utils import generate_cache_key, get_cached_report, set_cached_report, get_report_cache_ttl
     
     # Custom JSON encoder to handle datetime and Decimal objects
@@ -1645,7 +1685,11 @@ async def fetch_insight_type_reports_data(
             else:
                 # Fetch fresh data
                 logger.info(f"  → Fetching fresh data for report '{report_id}'")
-                resolved_payload = resolve_report_data(definition["data_source"], merged_filters, conn)
+                # Check if report should be forwarded to external service
+                if definition["data_source"].startswith("github_service_"):
+                    resolved_payload = await forward_to_github_service(report_id, merged_filters, definition)
+                else:
+                    resolved_payload = resolve_report_data(definition["data_source"], merged_filters, conn)
                 
                 report_data = {
                     "definition": {
@@ -2058,6 +2102,13 @@ async def ai_chat(
         if request.dashboard_data and conversation_context is None:
             logger.info("Processing dashboard data for AI chat")
             try:
+                # Check if metric exists in dashboard_data (for KPI dashboards)
+                metric_context = ""
+                if request.dashboard_data.get('metric'):
+                    logger.info("Found metric in dashboard_data, formatting for LLM")
+                    metric_context = format_metric_data_for_llm(request.dashboard_data['metric'])
+                    metric_context = "=== KPI METRIC INFORMATION ===\n" + metric_context + "\n\n"
+                
                 dashboard_context = await fetch_dashboard_reports_data(request.dashboard_data, conn)
                 
                 # Get content intro prompt from DB
@@ -2084,8 +2135,8 @@ async def ai_chat(
                 if not content_intro:
                     content_intro = "Here is the current dashboard data. Please analyze it and provide insights."
                 
-                # Build conversation context
-                conversation_context = content_intro + '\n\n=== DASHBOARD DATA STARTS HERE ===\n\n' + dashboard_context
+                # Build conversation context with metric BEFORE report data
+                conversation_context = content_intro + '\n\n=== DASHBOARD DATA STARTS HERE ===\n\n' + metric_context + dashboard_context
                 logger.info(f"Built dashboard conversation context (length: {len(conversation_context)} chars)")
                 
             except Exception as e:
