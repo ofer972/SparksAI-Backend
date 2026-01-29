@@ -19,7 +19,7 @@ import os
 import re
 from datetime import datetime, date
 from database_connection import get_db_connection
-from database_general import get_ai_card_by_id, get_recommendation_by_id, get_prompt_by_email_and_name, get_formatted_job_data_for_llm_followup_insight, get_formatted_job_data_for_llm_followup_recommendation
+from database_general import get_ai_card_by_id, get_recommendation_by_id, get_prompt_by_email_and_name, get_formatted_job_data_for_llm_followup_insight, get_formatted_job_data_for_llm_followup_recommendation, get_insight_types
 from database_team_metrics import (
     get_closed_sprints_data_db,
     get_sprint_burndown_data_db,
@@ -1556,6 +1556,150 @@ async def fetch_dashboard_reports_data(
     return final_context
 
 
+async def fetch_insight_type_reports_data(
+    insight_type_name: str,
+    filters: Dict[str, Any],
+    conn: Connection
+) -> str:
+    """
+    Fetch and format reports data for an insight type.
+    
+    Args:
+        insight_type_name: Name of the insight type (e.g., "Daily Progress")
+        filters: Dictionary of filters (team_name, pi, etc.)
+        conn: Database connection
+        
+    Returns:
+        Formatted string containing all report data, or empty string if no reports
+    """
+    import json
+    from datetime import datetime, date
+    from decimal import Decimal
+    from database_reports import get_report_definition_by_id, resolve_report_data
+    from cache_utils import generate_cache_key, get_cached_report, set_cached_report, get_report_cache_ttl
+    
+    # Custom JSON encoder to handle datetime and Decimal objects
+    class DateTimeEncoder(json.JSONEncoder):
+        def default(self, obj):
+            if isinstance(obj, (datetime, date)):
+                return obj.isoformat()
+            if isinstance(obj, Decimal):
+                return float(obj)
+            return super().default(obj)
+    
+    logger.info(f"INSIGHT TYPE REPORTS DATA COLLECTION - Starting for insight_type: {insight_type_name}")
+    
+    # Fetch insight type record to get report_ids
+    try:
+        insight_type_records = get_insight_types(insight_type=insight_type_name, conn=conn, limit=1)
+        if not insight_type_records or len(insight_type_records) == 0:
+            logger.warning(f"Insight type '{insight_type_name}' not found, skipping reports data")
+            return ""
+        
+        insight_type_record = insight_type_records[0]
+        report_ids = insight_type_record.get('report_ids', [])
+        
+        # Handle case where report_ids might be None or empty
+        if not report_ids:
+            logger.info(f"Insight type '{insight_type_name}' has no report_ids, skipping reports data")
+            return ""
+        
+        # Ensure report_ids is a list
+        if not isinstance(report_ids, list):
+            logger.warning(f"report_ids for '{insight_type_name}' is not a list, skipping reports data")
+            return ""
+        
+        logger.info(f"Found {len(report_ids)} report(s) for insight type '{insight_type_name}': {report_ids}")
+    except Exception as e:
+        logger.error(f"Error fetching insight type '{insight_type_name}': {e}")
+        return ""
+    
+    # Fetch data for each report
+    formatted_reports = []
+    for idx, report_id in enumerate(report_ids, 1):
+        # TEMPORARY FIX: Skip Epic Hierarchy report for LLM context (same as dashboard)
+        if report_id == "issues-epics-hierarchy":
+            logger.info(f"Skipping report '{report_id}' for LLM context (temporary fix)")
+            continue
+        
+        try:
+            logger.info(f"[{idx}/{len(report_ids)}] Processing report: {report_id}")
+            
+            # Get report definition
+            definition = get_report_definition_by_id(report_id, conn)
+            if not definition:
+                logger.warning(f"Report '{report_id}' not found, skipping")
+                continue
+            
+            # Merge filters: default < request filters
+            default_filters = definition.get("default_filters", {})
+            merged_filters = {**default_filters, **filters}
+            
+            # Check cache first
+            cache_key = generate_cache_key(report_id, merged_filters)
+            cached_data = get_cached_report(cache_key)
+            
+            if cached_data:
+                logger.info(f"  ✓ Using cached data for report '{report_id}'")
+                report_data = cached_data
+            else:
+                # Fetch fresh data
+                logger.info(f"  → Fetching fresh data for report '{report_id}'")
+                resolved_payload = resolve_report_data(definition["data_source"], merged_filters, conn)
+                
+                report_data = {
+                    "definition": {
+                        "report_id": definition["report_id"],
+                        "report_name": definition["report_name"],
+                        "chart_type": definition["chart_type"],
+                        "description": definition.get("description"),
+                    },
+                    "filters": merged_filters,
+                    "result": resolved_payload.get("data"),
+                    "meta": resolved_payload.get("meta", {}),
+                }
+                
+                # Cache the result
+                ttl = get_report_cache_ttl(report_id)
+                set_cached_report(cache_key, report_data, ttl=ttl)
+                logger.info(f"  ✓ Cached report data with TTL: {ttl}s")
+            
+            # Format report data for LLM
+            report_name = report_data["definition"]["report_name"]
+            report_desc = report_data["definition"].get("description", "")
+            report_result = report_data.get("result", [])
+            
+            # Truncate data if max_records_for_llm is set (to limit LLM context size)
+            max_records = definition.get("max_records_for_llm")
+            if max_records and isinstance(report_result, list) and len(report_result) > max_records:
+                original_count = len(report_result)
+                report_result = report_result[:max_records]
+                logger.info(f"  Truncated report '{report_id}' data from {original_count} to {max_records} records for LLM")
+            
+            formatted_report = f"\n## {report_name}\n"
+            if report_desc:
+                formatted_report += f"Description: {report_desc}\n"
+            formatted_report += f"Filters: {json.dumps(merged_filters, indent=2, cls=DateTimeEncoder)}\n"
+            formatted_report += f"Data: {json.dumps(report_result, indent=2, cls=DateTimeEncoder)}\n"
+            
+            formatted_reports.append(formatted_report)
+            
+        except Exception as e:
+            logger.error(f"Error fetching report '{report_id}': {e}")
+            formatted_reports.append(f"\n## {report_id}\nError: Failed to fetch data - {str(e)}\n")
+    
+    final_context = "\n".join(formatted_reports)
+    total_chars = len(final_context)
+    # ANSI color codes for bold/color
+    BOLD = '\033[1m'
+    CYAN = '\033[96m'
+    RESET = '\033[0m'
+    logger.info(f"Successfully formatted {len(formatted_reports)} reports for LLM context")
+    logger.info(f"{BOLD}{CYAN}Total reports context length: {total_chars} characters{RESET}")
+    logger.info("INSIGHT TYPE REPORTS DATA COLLECTION - Complete")
+    return final_context
+
+
 @ai_chat_router.post("/ai-chat")
 async def ai_chat(
     request: AIChatRequest,
@@ -1696,6 +1840,51 @@ async def ai_chat(
                 # Build conversation_context: content_intro + marker + full_information + input_sent
                 # Add marker to separate prompt from data
                 conversation_context = content_intro + '\n\n=== DATA_STARTS_HERE ===\n\n' + full_information + '\n\n' + formatted_job_data
+                
+                # NEW: Fetch and append reports data from insight type
+                try:
+                    insight_type_name = card.get('insight_type')
+                    if insight_type_name:
+                        # Build filters from request parameters (prefer request, fallback to card)
+                        filters = {}
+                        if request.selected_team:
+                            filters['team_name'] = request.selected_team
+                        elif card.get('team_name'):
+                            filters['team_name'] = card.get('team_name')
+                        
+                        if request.selected_pi:
+                            filters['pi'] = request.selected_pi
+                            filters['pi_names'] = [request.selected_pi]
+                        elif card.get('pi'):
+                            filters['pi'] = card.get('pi')
+                            filters['pi_names'] = [card.get('pi')]
+                        
+                        # Add group filter if card has group_name
+                        if card.get('group_name'):
+                            filters['isGroup'] = True
+                            filters['group_name'] = card.get('group_name')
+                        
+                        # Fetch reports data for this insight type
+                        reports_data = await fetch_insight_type_reports_data(
+                            insight_type_name=insight_type_name,
+                            filters=filters,
+                            conn=conn
+                        )
+                        
+                        # Append reports data to conversation context if available
+                        if reports_data:
+                            conversation_context += '\n\n=== REPORTS DATA STARTS HERE ===\n\n'
+                            conversation_context += reports_data
+                            logger.info(f"Added reports data to conversation context (length: {len(reports_data)} chars)")
+                        else:
+                            logger.info(f"No reports data available for insight type '{insight_type_name}'")
+                    else:
+                        logger.warning(f"AI card {insights_id_int} has no insight_type, skipping reports data")
+                except Exception as e:
+                    # Don't fail the request if reports data fetching fails
+                    logger.error(f"Error fetching reports data for Team_insights: {e}")
+                    # Continue without reports data
+                
                 logger.info(f"Built conversation context from team AI card {insights_id_int} with intro (length: {len(conversation_context)} chars)")
             except ValueError:
                 raise HTTPException(
