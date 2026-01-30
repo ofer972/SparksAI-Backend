@@ -314,7 +314,7 @@ async def claim_next_pending_job(
         
         if not row:
             # No job available
-            logger.info(f"Claim job finished - Status: 204 (No pending jobs available)")
+            logger.debug(f"Claim job finished - Status: 204 (No pending jobs available)")
             return Response(status_code=204)
 
         job = dict(row._mapping)

@@ -147,6 +147,7 @@ def get_pi_percent_completed_status(
 def get_wip_count_status(in_progress_count: int, total_count: int) -> str:
     """
     Calculate WIP count status color based on percentage of epics in progress.
+    UPDATED THRESHOLDS for Epic WIP tier system.
     
     Args:
         in_progress_count: Number of epics in progress
@@ -154,9 +155,9 @@ def get_wip_count_status(in_progress_count: int, total_count: int) -> str:
     
     Returns:
         str: "green", "yellow", or "red" based on the percentage
-        - "green" if in-progress epics <= 30% of total
-        - "yellow" if in-progress epics > 30% and <= 50% of total
-        - "red" if in-progress epics > 50% of total
+        - "green" if in-progress epics <= 30% of total (high tier)
+        - "yellow" if in-progress epics > 30% and <= 60% of total (medium tier)
+        - "red" if in-progress epics > 60% of total (low tier)
     """
     # Handle edge cases
     if total_count == 0:
@@ -164,12 +165,13 @@ def get_wip_count_status(in_progress_count: int, total_count: int) -> str:
     
     in_progress_percent = (in_progress_count / total_count) * 100
     
+    # Updated thresholds: 30% / 60%
     if in_progress_percent <= 30:
-        return "green"
-    elif in_progress_percent <= 50:
-        return "yellow"
-    else:  # > 50%
-        return "red"
+        return "green"  # High tier
+    elif in_progress_percent <= 60:
+        return "yellow"  # Medium tier
+    else:  # > 60%
+        return "red"  # Low tier
 
 
 def get_progress_delta_pct_status(progress_delta_pct: Optional[float]) -> str:
@@ -1388,114 +1390,6 @@ async def get_pi_progress(
         raise HTTPException(
             status_code=500,
             detail=f"Failed to fetch PI progress: {str(e)}"
-        )
-
-
-@pis_router.get("/pis/top-dependencies-summary")
-async def get_top_dependencies_summary(
-    pi: str = Query(..., description="PI name (quarter_pi_of_epic) - required"),
-    team_name: Optional[str] = Query(None, description="Filter by team name or group name (if isGroup=true)"),
-    isGroup: bool = Query(False, description="If true, team_name is treated as a group name"),
-    conn: Connection = Depends(get_db_connection)
-):
-    """
-    Get top 3 teams with most uncompleted dependencies (inbound and outbound) for a PI.
-    
-    Fetches all rows from dependency views, calculates uncompleted issues in Python,
-    then returns top 3 teams by uncompleted count.
-    
-    Args:
-        pi: PI name (required) - filters on quarter_pi_of_epic
-        team_name: Optional team name or group name (if isGroup=true)
-        isGroup: If true, team_name is treated as a group name
-    
-    Returns:
-        JSON response with top 3 inbound and outbound dependencies by team
-    """
-    try:
-        # Resolve team names FIRST
-        team_names_list = resolve_team_names_from_filter(team_name, isGroup, conn)
-        
-        # Fetch ALL rows (each row is already per team - no aggregation needed)
-        inbound_rows = fetch_epic_inbound_dependency_data(pi, team_names_list, conn)
-        outbound_rows = fetch_epic_outbound_dependency_data(pi, team_names_list, conn)
-        
-        # Process inbound dependencies: calculate uncompleted for each row
-        inbound_with_uncompleted = []
-        for row in inbound_rows:
-            volume = int(row.get('volume_of_work_relied_upon', 0) or 0)
-            completed = int(row.get('completed_issues_dependent_count', 0) or 0)
-            uncompleted = volume - completed
-            
-            # Only include rows with uncompleted issues > 0
-            if uncompleted > 0:
-                team_data = {
-                    'assignee_team': row.get('assignee_team'),
-                    'volume_of_work_relied_upon': volume,
-                    'completed_issues_dependent_count': completed,
-                    'uncompleted_issues': uncompleted
-                }
-                inbound_with_uncompleted.append(team_data)
-        
-        # Sort by uncompleted DESC and take top 3
-        inbound_with_uncompleted.sort(key=lambda x: x['uncompleted_issues'], reverse=True)
-        top_inbound = inbound_with_uncompleted[:3]
-        
-        # Process outbound dependencies: calculate uncompleted for each row
-        outbound_with_uncompleted = []
-        for row in outbound_rows:
-            dependent_issues = int(row.get('number_of_dependent_issues', 0) or 0)
-            completed = int(row.get('completed_dependent_issues_count', 0) or 0)
-            uncompleted = dependent_issues - completed
-            
-            # Only include rows with uncompleted issues > 0
-            if uncompleted > 0:
-                team_data = {
-                    'owned_team': row.get('owned_team'),
-                    'number_of_epics_owned': int(row.get('number_of_epics_owned', 0) or 0),
-                    'number_of_dependent_issues': dependent_issues,
-                    'completed_dependent_issues_count': completed,
-                    'uncompleted_issues': uncompleted
-                }
-                outbound_with_uncompleted.append(team_data)
-        
-        # Sort by uncompleted DESC and take top 3
-        outbound_with_uncompleted.sort(key=lambda x: x['uncompleted_issues'], reverse=True)
-        top_outbound = outbound_with_uncompleted[:3]
-        
-        # Build response data
-        response_data = {
-            "top_inbound_dependencies": top_inbound,
-            "top_outbound_dependencies": top_outbound,
-            "pi": pi,
-            "count": {
-                "inbound": len(top_inbound),
-                "outbound": len(top_outbound)
-            }
-        }
-        
-        # Add team/group metadata (same pattern as other endpoints)
-        if team_name:
-            if isGroup:
-                response_data["group_name"] = team_name
-                response_data["teams_in_group"] = team_names_list
-            else:
-                response_data["team_name"] = team_name
-        
-        return {
-            "success": True,
-            "data": response_data,
-            "message": f"Retrieved top {len(top_inbound)} inbound and top {len(top_outbound)} outbound dependencies"
-        }
-    
-    except HTTPException:
-        # Re-raise HTTP exceptions (validation errors)
-        raise
-    except Exception as e:
-        logger.error(f"Error fetching top dependencies summary: {e}")
-        raise HTTPException(
-            status_code=500,
-            detail=f"Failed to fetch top dependencies summary: {str(e)}"
         )
 
 

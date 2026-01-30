@@ -15,6 +15,258 @@ import config
 logger = logging.getLogger(__name__)
 
 
+def get_cycle_time_for_period(
+    team_names: Optional[List[str]], 
+    start_date: date, 
+    end_date: date,
+    conn: Connection = None
+) -> Optional[float]:
+    """
+    Get average cycle time for issues completed in a date range.
+    
+    Uses direct SQL query to jira_issues table (not sprint-based).
+    The cycle_time_days field is already calculated and stored in jira_issues table.
+    
+    Args:
+        team_names: List of team names, or None for all teams
+        start_date: Start date (inclusive)
+        end_date: End date (inclusive)
+        conn: Database connection
+    
+    Returns:
+        Average cycle time in days, or None if no issues found
+    """
+    try:
+        # Build WHERE conditions
+        where_conditions = [
+            "status_category = 'Done'",
+            "resolved_at IS NOT NULL",
+            "cycle_time_days IS NOT NULL",
+            "cycle_time_days >= (5.0 / (24.0 * 60.0))",  # Cycle time >= 5 minutes (filter out invalid)
+            "sprint_ids IS NOT NULL",  # Only issues associated with sprints (excludes Epics and non-sprint issues)
+            "resolved_at >= :start_date",
+            "resolved_at <= :end_date"
+        ]
+        
+        params = {
+            "start_date": start_date,
+            "end_date": end_date
+        }
+        
+        # Add team filter if provided
+        if team_names:
+            placeholders = ", ".join([f":team_name_{i}" for i in range(len(team_names))])
+            where_conditions.append(f"team_name IN ({placeholders})")
+            for i, name in enumerate(team_names):
+                params[f"team_name_{i}"] = name
+        
+        where_clause = " AND ".join(where_conditions)
+        
+        sql_query = f"""
+            SELECT 
+                AVG(cycle_time_days) as avg_cycle_time,
+                COUNT(*) as issue_count
+            FROM jira_issues
+            WHERE {where_clause}
+        """
+        
+        logger.info(f"Calculating cycle time for period: {start_date} to {end_date}, teams: {team_names}")
+        
+        result = conn.execute(text(sql_query), params)
+        row = result.fetchone()
+        
+        if row and row[0] is not None and row[1] > 0:
+            avg_cycle_time = float(row[0])
+            issue_count = int(row[1])
+            logger.info(f"Found {issue_count} issues with average cycle time: {avg_cycle_time:.2f} days")
+            return avg_cycle_time
+        else:
+            logger.info(f"No issues found for period: {start_date} to {end_date}")
+            return None
+            
+    except Exception as e:
+        logger.error(f"Error calculating cycle time for period: {e}")
+        logger.exception(e)
+        return None
+
+
+def get_cycle_time_for_period_by_issue_type(
+    team_names: Optional[List[str]], 
+    start_date: date, 
+    end_date: date,
+    issue_type: str,
+    conn: Connection = None
+) -> Optional[float]:
+    """
+    Get average cycle time for issues of a specific type completed in a date range.
+    
+    Similar to get_cycle_time_for_period but filters by issue_type.
+    
+    Args:
+        team_names: List of team names, or None for all teams
+        start_date: Start date (inclusive)
+        end_date: End date (inclusive)
+        issue_type: Issue type to filter (e.g., 'Epic', 'Story')
+        conn: Database connection
+    
+    Returns:
+        Average cycle time in days, or None if no issues found
+    """
+    try:
+        # Build WHERE conditions
+        where_conditions = [
+            "issue_type = :issue_type",
+            "status_category = 'Done'",
+            "resolved_at IS NOT NULL",
+            "cycle_time_days IS NOT NULL",
+            "cycle_time_days > 1",  # Filter out very short cycle times (likely data issues)
+            "resolved_at >= :start_date",
+            "resolved_at <= :end_date"
+        ]
+        
+        params = {
+            "start_date": start_date,
+            "end_date": end_date,
+            "issue_type": issue_type
+        }
+        
+        # Add team filter if provided
+        if team_names:
+            placeholders = ", ".join([f":team_name_{i}" for i in range(len(team_names))])
+            where_conditions.append(f"team_name IN ({placeholders})")
+            for i, name in enumerate(team_names):
+                params[f"team_name_{i}"] = name
+        
+        where_clause = " AND ".join(where_conditions)
+        
+        sql_query = f"""
+            SELECT 
+                AVG(cycle_time_days) as avg_cycle_time,
+                COUNT(*) as issue_count
+            FROM jira_issues
+            WHERE {where_clause}
+        """
+        
+        logger.info(f"Calculating {issue_type} cycle time for period: {start_date} to {end_date}, teams: {team_names}")
+        
+        result = conn.execute(text(sql_query), params)
+        row = result.fetchone()
+        
+        if row and row[0] is not None and row[1] > 0:
+            avg_cycle_time = float(row[0])
+            issue_count = int(row[1])
+            logger.info(f"Found {issue_count} {issue_type} issues with average cycle time: {avg_cycle_time:.2f} days")
+            return avg_cycle_time
+        else:
+            logger.info(f"No {issue_type} issues found for period: {start_date} to {end_date}")
+            return None
+            
+    except Exception as e:
+        logger.error(f"Error calculating {issue_type} cycle time for period: {e}")
+        logger.exception(e)
+        return None
+
+
+def get_open_bugs_with_trend(
+    team_names: Optional[List[str]],
+    bug_types: List[str],
+    start_date: date,
+    end_date: date,
+    conn: Connection = None
+) -> Dict[str, int]:
+    """
+    Get open bugs count and trend (created vs resolved) in one efficient query.
+    
+    Uses single SQL with conditional aggregation for better performance.
+    
+    Args:
+        team_names: List of team names, or None for all teams
+        bug_types: List of issue types to consider as bugs (e.g., ["Bug", "Defect"])
+        start_date: Start date for trend period
+        end_date: End date for trend period
+        conn: Database connection
+    
+    Returns:
+        {
+            "current_open_bugs": int,  # Current count of open bugs
+            "bugs_created": int,        # Bugs created in period
+            "bugs_resolved": int        # Bugs resolved in period
+        }
+    """
+    try:
+        # Build WHERE conditions
+        where_conditions = [
+            "issue_type = ANY(:bug_types)"
+        ]
+        
+        params = {
+            "bug_types": bug_types,
+            "start_date": start_date,
+            "end_date": end_date
+        }
+        
+        # Add team filter if provided
+        if team_names:
+            placeholders = ", ".join([f":team_name_{i}" for i in range(len(team_names))])
+            where_conditions.append(f"team_name IN ({placeholders})")
+            for i, name in enumerate(team_names):
+                params[f"team_name_{i}"] = name
+        
+        where_clause = " AND ".join(where_conditions)
+        
+        # Single query with conditional aggregation (PostgreSQL FILTER syntax)
+        sql_query = f"""
+            SELECT 
+                COUNT(*) FILTER (WHERE status_category != 'Done') as current_open_bugs,
+                COUNT(*) FILTER (
+                    WHERE created_at >= :start_date 
+                      AND created_at <= :end_date
+                ) as bugs_created,
+                COUNT(*) FILTER (
+                    WHERE status_category = 'Done' 
+                      AND resolved_at >= :start_date 
+                      AND resolved_at <= :end_date
+                      AND resolved_at IS NOT NULL
+                ) as bugs_resolved
+            FROM jira_issues
+            WHERE {where_clause}
+        """
+        
+        logger.info(f"Calculating open bugs with trend for period: {start_date} to {end_date}, teams: {team_names}, bug_types: {bug_types}")
+        
+        result = conn.execute(text(sql_query), params)
+        row = result.fetchone()
+        
+        if row:
+            current_open_bugs = int(row[0]) if row[0] is not None else 0
+            bugs_created = int(row[1]) if row[1] is not None else 0
+            bugs_resolved = int(row[2]) if row[2] is not None else 0
+            
+            logger.info(f"Open bugs: {current_open_bugs}, Created: {bugs_created}, Resolved: {bugs_resolved}")
+            
+            return {
+                "current_open_bugs": current_open_bugs,
+                "bugs_created": bugs_created,
+                "bugs_resolved": bugs_resolved
+            }
+        else:
+            logger.info("No bug data found")
+            return {
+                "current_open_bugs": 0,
+                "bugs_created": 0,
+                "bugs_resolved": 0
+            }
+            
+    except Exception as e:
+        logger.error(f"Error calculating open bugs with trend: {e}")
+        logger.exception(e)
+        return {
+            "current_open_bugs": 0,
+            "bugs_created": 0,
+            "bugs_resolved": 0
+        }
+
+
 def get_team_avg_sprint_metrics(sprint_count: int = 5, team_names: Optional[List[str]] = None, conn: Connection = None) -> List[Dict[str, Any]]:
     """
     Get sprint metrics trend data for team(s) over the last N sprints.
@@ -184,9 +436,7 @@ def get_team_current_sprint_progress(team_names: Optional[List[str]], conn: Conn
                     COUNT(*) as total_issues,
                     COUNT(CASE WHEN i.status_category = 'Done' THEN 1 END) as completed_issues,
                     COUNT(CASE WHEN i.status_category = 'In Progress' THEN 1 END) as in_progress_issues,
-                    COUNT(CASE WHEN i.status_category = 'To Do' THEN 1 END) as todo_issues,
-                    (COUNT(CASE WHEN i.status_category = 'Done' THEN 1 END)::numeric * 100) 
-                        / NULLIF(COUNT(*), 0) as percent_completed
+                    COUNT(CASE WHEN i.status_category = 'To Do' THEN 1 END) as todo_issues
                 FROM 
                     public.jira_issues AS i
                 INNER JOIN 
@@ -214,9 +464,7 @@ def get_team_current_sprint_progress(team_names: Optional[List[str]], conn: Conn
                     COUNT(*) as total_issues,
                     COUNT(CASE WHEN i.status_category = 'Done' THEN 1 END) as completed_issues,
                     COUNT(CASE WHEN i.status_category = 'In Progress' THEN 1 END) as in_progress_issues,
-                    COUNT(CASE WHEN i.status_category = 'To Do' THEN 1 END) as todo_issues,
-                    (COUNT(CASE WHEN i.status_category = 'Done' THEN 1 END)::numeric * 100) 
-                        / NULLIF(COUNT(*), 0) as percent_completed
+                    COUNT(CASE WHEN i.status_category = 'To Do' THEN 1 END) as todo_issues
                 FROM 
                     public.jira_issues AS i
                 INNER JOIN 
@@ -246,17 +494,24 @@ def get_team_current_sprint_progress(team_names: Optional[List[str]], conn: Conn
             sprint_name = str(row[1]) if row[1] else None
             start_date = row[2] if row[2] and hasattr(row[2], 'strftime') else None
             end_date = row[3] if row[3] and hasattr(row[3], 'strftime') else None
+            total_issues = int(row[4]) if row[4] else 0
+            completed_issues = int(row[5]) if row[5] else 0
+            in_progress_issues = int(row[6]) if row[6] else 0
+            todo_issues = int(row[7]) if row[7] else 0
+            
+            # Calculate percentage in Python (not SQL) - more efficient
+            percent_completed = (completed_issues / total_issues * 100) if total_issues > 0 else 0.0
             
             return {
                 'sprint_id': sprint_id,
                 'sprint_name': sprint_name,
                 'start_date': start_date,
                 'end_date': end_date,
-                'total_issues': int(row[4]) if row[4] else 0,
-                'completed_issues': int(row[5]) if row[5] else 0,
-                'in_progress_issues': int(row[6]) if row[6] else 0,
-                'todo_issues': int(row[7]) if row[7] else 0,
-                'percent_completed': float(row[8]) if row[8] is not None else 0.0
+                'total_issues': total_issues,
+                'completed_issues': completed_issues,
+                'in_progress_issues': in_progress_issues,
+                'todo_issues': todo_issues,
+                'percent_completed': percent_completed
             }
         
         # Multiple rows - different sprints
@@ -272,17 +527,24 @@ def get_team_current_sprint_progress(team_names: Optional[List[str]], conn: Conn
             sprint_name = str(max_issues_row[1]) if max_issues_row[1] else None
             start_date = max_issues_row[2] if max_issues_row[2] and hasattr(max_issues_row[2], 'strftime') else None
             end_date = max_issues_row[3] if max_issues_row[3] and hasattr(max_issues_row[3], 'strftime') else None
+            total_issues = int(max_issues_row[4]) if max_issues_row[4] else 0
+            completed_issues = int(max_issues_row[5]) if max_issues_row[5] else 0
+            in_progress_issues = int(max_issues_row[6]) if max_issues_row[6] else 0
+            todo_issues = int(max_issues_row[7]) if max_issues_row[7] else 0
+            
+            # Calculate percentage in Python (not SQL) - more efficient
+            percent_completed = (completed_issues / total_issues * 100) if total_issues > 0 else 0.0
             
             return {
                 'sprint_id': sprint_id,
                 'sprint_name': sprint_name,
                 'start_date': start_date,
                 'end_date': end_date,
-                'total_issues': int(max_issues_row[4]) if max_issues_row[4] else 0,
-                'completed_issues': int(max_issues_row[5]) if max_issues_row[5] else 0,
-                'in_progress_issues': int(max_issues_row[6]) if max_issues_row[6] else 0,
-                'todo_issues': int(max_issues_row[7]) if max_issues_row[7] else 0,
-                'percent_completed': float(max_issues_row[8]) if max_issues_row[8] is not None else 0.0
+                'total_issues': total_issues,
+                'completed_issues': completed_issues,
+                'in_progress_issues': in_progress_issues,
+                'todo_issues': todo_issues,
+                'percent_completed': percent_completed
             }
         else:
             # Group with multiple sprints - aggregate the data

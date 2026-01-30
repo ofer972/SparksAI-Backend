@@ -8,7 +8,7 @@ Uses FastAPI dependencies for clean connection management and SQL injection prot
 from fastapi import APIRouter, HTTPException, Depends, Query
 from sqlalchemy import text
 from sqlalchemy.engine import Connection
-from typing import Dict, Any, Optional
+from typing import Dict, Any, Optional, List
 from datetime import date, datetime
 import logging
 from database_connection import get_db_connection
@@ -22,7 +22,10 @@ from database_team_metrics import (
     get_issues_trend_data_db,
     get_average_sprint_velocity_per_team,
     resolve_team_names_from_filter,
-    select_sprint_for_teams
+    select_sprint_for_teams,
+    get_cycle_time_for_period,
+    get_cycle_time_for_period_by_issue_type,
+    get_open_bugs_with_trend
 )
 from database_pi import get_pi_participating_teams_db
 from pis_service import validate_pi
@@ -31,6 +34,84 @@ import config
 logger = logging.getLogger(__name__)
 
 team_metrics_router = APIRouter()
+
+# ============================================================================
+# CYCLE TIME TIER THRESHOLDS (configurable in one place)
+# ============================================================================
+
+# Story/Sprint Issue Cycle Time Tiers (in days)
+STORY_CYCLE_TIME_ELITE = 10    # <= 10 days = Elite
+STORY_CYCLE_TIME_HIGH = 20     # 10-20 days = High
+STORY_CYCLE_TIME_MEDIUM = 30   # 20-30 days = Medium
+                               # > 30 days = Low
+
+# Epic Cycle Time Tiers (in days)
+EPIC_CYCLE_TIME_ELITE = 40     # <= 40 days = Elite/High
+EPIC_CYCLE_TIME_MEDIUM = 75    # 40-75 days = Medium
+                               # > 75 days = Low
+
+# Cycle Time Measurement Periods (in days)
+CYCLE_TIME_PERIOD_DAYS = 30              # Stories: 30-day period
+EPIC_CYCLE_TIME_PERIOD_DAYS = 90         # Epics: 90-day period (3 months)
+
+# ============================================================================
+# WIP TIER THRESHOLDS (configurable in one place)
+# ============================================================================
+
+# Sprint WIP Tiers (percentage of total sprint issues)
+SPRINT_WIP_HIGH_THRESHOLD = 30      # <= 30% = High (green)
+SPRINT_WIP_MEDIUM_THRESHOLD = 50    # 30-50% = Medium (yellow)
+                                    # > 50% = Low (red)
+
+# Sprint Completion & Predictability Tiers (percentage completed/predictability)
+SPRINT_COMPLETION_HIGH_THRESHOLD = 80    # >= 80% = High (green)
+SPRINT_COMPLETION_MEDIUM_THRESHOLD = 60  # 60-79.9% = Medium (yellow)
+                                         # < 60% = Low (red)
+
+# Epic WIP Tiers (percentage of total epics in PI)
+EPIC_WIP_HIGH_THRESHOLD = 30        # <= 30% = High (green)
+EPIC_WIP_MEDIUM_THRESHOLD = 60      # 30-60% = Medium (yellow)
+                                    # > 60% = Low (red)
+
+# PI Completion Tiers (percentage completed) - More relaxed than Sprint
+PI_COMPLETION_HIGH_THRESHOLD = 75    # >= 75% = High (green)
+PI_COMPLETION_MEDIUM_THRESHOLD = 55  # 55-74.9% = Medium (yellow)
+                                     # < 55% = Low (red)
+
+# ============================================================================
+# OPEN BUGS KPI CONFIGURATION
+# ============================================================================
+# The Open Bugs KPI uses intelligent tier-based logic to prevent false alarms
+# from small number fluctuations while still alerting when there's a real problem.
+#
+# HOW IT WORKS:
+# 1. Tier Calculation: Thresholds scale with team count (6/15 bugs per team)
+#    - Single team: High ≤6, Medium 7-15, Low >15
+#    - 5-team group: High ≤30, Medium 31-75, Low >75
+#
+# 2. Tier-Based Trend Display:
+#    - HIGH TIER (green): Shows neutral/flat trend (no red arrows)
+#      → At low bug counts, small changes (+1, +2) are normal noise
+#      → Users don't need alarms when health is excellent
+#    
+#    - MEDIUM/LOW TIER (yellow/red): Shows full trend with arrows
+#      → Already have too many bugs - direction matters!
+#      → Users need to know if improving (green ↓) or worsening (red ↑)
+#
+# This prevents scenarios like "2 bugs → 4 bugs = RED ALARM!" while still
+# showing meaningful trends when bug counts are actually problematic.
+# ============================================================================
+
+# Bug Issue Types (configurable - different orgs may use different names)
+BUG_ISSUE_TYPES = ["Bug", "Defect"]      # Add more as needed: "Incident", "Issue", etc.
+
+# Open Bugs Measurement Period
+OPEN_BUGS_TREND_PERIOD_DAYS = 30         # Period to calculate bug creation/resolution trend
+
+# Open Bugs Tier Thresholds (PER TEAM - multiplied by team count for groups)
+OPEN_BUGS_HIGH_PER_TEAM = 6              # <= 6 bugs per team = High (green)
+OPEN_BUGS_MEDIUM_PER_TEAM = 15           # 7-15 bugs per team = Medium (yellow)
+                                         # > 15 bugs per team = Low (red)
 
 
 def validate_team_name(team_name: str) -> str:
@@ -97,6 +178,443 @@ def get_cycle_time_status(cycle_time: float) -> str:
         return "yellow"
     else:
         return "red"
+
+
+def get_cycle_time_tier(cycle_time: float) -> str:
+    """
+    Determine tier for story/sprint cycle time.
+    Uses 3-tier system (high/medium/low) for Sprint metrics.
+    
+    Tiers (based on STORY_CYCLE_TIME constants):
+    - high: <= 10 days (best performance)
+    - medium: 10-30 days
+    - low: > 30 days
+    
+    Args:
+        cycle_time: Cycle time in days
+    
+    Returns:
+        Tier string: 'high', 'medium', or 'low'
+    """
+    if cycle_time <= 0:
+        return "low"  # No data or invalid = low tier
+    
+    if cycle_time <= STORY_CYCLE_TIME_ELITE:
+        return "high"  # Best tier for Sprint metrics is "high" (green)
+    elif cycle_time <= STORY_CYCLE_TIME_MEDIUM:
+        return "medium"  # Acceptable performance
+    else:
+        return "low"  # Needs improvement
+
+
+def get_epic_cycle_time_tier(cycle_time: float) -> str:
+    """
+    Determine tier for epic cycle time.
+    Uses 3-tier system (high/medium/low) for PI metrics.
+    
+    Tiers (based on EPIC_CYCLE_TIME constants):
+    - high: <= 40 days (best performance)
+    - medium: 40-75 days
+    - low: > 75 days
+    
+    Args:
+        cycle_time: Average epic cycle time in days
+        
+    Returns:
+        Tier string: 'high', 'medium', or 'low'
+    """
+    if cycle_time <= 0:
+        return "low"  # No data or invalid = low tier
+    
+    if cycle_time <= EPIC_CYCLE_TIME_ELITE:
+        return "high"  # Best tier for PI metrics is "high" (green)
+    elif cycle_time <= EPIC_CYCLE_TIME_MEDIUM:
+        return "medium"
+    else:
+        return "low"
+
+
+def get_sprint_wip_tier(wip_percentage: float) -> str:
+    """
+    Determine tier for sprint WIP percentage.
+    Uses 3-tier system (high/medium/low) for Sprint metrics.
+    
+    Tiers:
+    - high: <= 30% (healthy WIP)
+    - medium: 30-50% (moderate WIP)
+    - low: > 50% (too much WIP - bottleneck risk)
+    
+    Args:
+        wip_percentage: WIP as percentage of total sprint issues
+    
+    Returns:
+        Tier string: 'high', 'medium', or 'low'
+    """
+    if wip_percentage < 0:
+        return "low"  # Invalid data
+    
+    if wip_percentage <= SPRINT_WIP_HIGH_THRESHOLD:
+        return "high"  # Healthy WIP
+    elif wip_percentage <= SPRINT_WIP_MEDIUM_THRESHOLD:
+        return "medium"  # Moderate WIP
+    else:
+        return "low"  # Too much WIP
+
+
+def get_epic_wip_tier(wip_percentage: float) -> str:
+    """
+    Determine tier for epic WIP percentage.
+    Uses 3-tier system (high/medium/low) for PI metrics.
+    
+    Tiers:
+    - high: <= 30% (healthy epic WIP)
+    - medium: 30-60% (moderate epic WIP)
+    - low: > 60% (too much epic WIP - focus issues)
+    
+    Args:
+        wip_percentage: WIP as percentage of total epics in PI
+    
+    Returns:
+        Tier string: 'high', 'medium', or 'low'
+    """
+    if wip_percentage < 0:
+        return "low"  # Invalid data
+    
+    if wip_percentage <= EPIC_WIP_HIGH_THRESHOLD:
+        return "high"  # Healthy epic WIP
+    elif wip_percentage <= EPIC_WIP_MEDIUM_THRESHOLD:
+        return "medium"  # Moderate epic WIP
+    else:
+        return "low"  # Too much epic WIP
+
+
+def get_pi_completion_tier(
+    percent_completed: float,
+    start_date: date = None,
+    end_date: date = None
+) -> Optional[str]:
+    """
+    Determine tier for PI completion percentage.
+    Returns None (no tier) for first 15% of PI, then uses timeline-based logic.
+    
+    Early PI (first 15% of PI duration):
+    - Returns None (no tier badge shown)
+    
+    Rest of PI:
+    - Uses timeline-based logic comparing actual vs expected completion
+    - high: ahead of schedule (actual >= expected - 15% slack)
+    - medium: slightly behind (expected - 25% <= actual < expected - 15%)
+    - low: significantly behind (actual < expected - 25%)
+    
+    After PI ends OR if dates unavailable:
+    - high: >= 75%
+    - medium: 55-74.9%
+    - low: < 55%
+    
+    Args:
+        percent_completed: Actual completion percentage (0-100)
+        start_date: PI start date (optional, for timeline-based calc)
+        end_date: PI end date (optional, for timeline-based calc)
+    
+    Returns:
+        Tier string: 'high', 'medium', 'low', or None (no tier for early PI)
+    """
+    # If dates not provided, use simple thresholds
+    if start_date is None or end_date is None:
+        if percent_completed >= PI_COMPLETION_HIGH_THRESHOLD:
+            return "high"
+        elif percent_completed >= PI_COMPLETION_MEDIUM_THRESHOLD:
+            return "medium"
+        else:
+            return "low"
+    
+    # Convert datetime to date if needed
+    if isinstance(start_date, datetime):
+        start_date = start_date.date()
+    if isinstance(end_date, datetime):
+        end_date = end_date.date()
+    
+    today = date.today()
+    
+    # If PI hasn't started yet - use simple thresholds
+    if today < start_date:
+        if percent_completed >= PI_COMPLETION_HIGH_THRESHOLD:
+            return "high"
+        elif percent_completed >= PI_COMPLETION_MEDIUM_THRESHOLD:
+            return "medium"
+        else:
+            return "low"
+    
+    # If PI has ended - use simple thresholds
+    if today >= end_date:
+        if percent_completed >= PI_COMPLETION_HIGH_THRESHOLD:
+            return "high"
+        elif percent_completed >= PI_COMPLETION_MEDIUM_THRESHOLD:
+            return "medium"
+        else:
+            return "low"
+    
+    # During active PI - calculate progress percentage
+    total_pi_days = (end_date - start_date).days
+    if total_pi_days <= 0:
+        # Invalid PI duration, use simple thresholds
+        if percent_completed >= PI_COMPLETION_HIGH_THRESHOLD:
+            return "high"
+        elif percent_completed >= PI_COMPLETION_MEDIUM_THRESHOLD:
+            return "medium"
+        else:
+            return "low"
+    
+    days_elapsed = (today - start_date).days
+    progress_pct = (days_elapsed / total_pi_days) * 100
+    
+    # EARLY PI: First 15% - no tier shown
+    if progress_pct <= 15:
+        return None
+    
+    # REST OF PI: Apply timeline-based logic
+    expected_completion = progress_pct
+    slack_threshold = 15.0  # 15% slack
+    yellow_threshold = 25.0  # More relaxed threshold for medium tier
+    
+    if percent_completed >= expected_completion - slack_threshold:
+        return "high"  # On track or ahead
+    elif percent_completed >= expected_completion - yellow_threshold:
+        return "medium"  # Slightly behind
+    else:
+        return "low"  # Significantly behind
+
+
+def get_sprint_completion_tier(
+    percent_completed: float,
+    start_date: date = None,
+    end_date: date = None,
+    slack_threshold: float = 15.0
+) -> str:
+    """
+    Determine tier for sprint completion percentage.
+    Uses timeline-based logic during active sprint, simple thresholds after sprint ends.
+    
+    During active sprint:
+    - Compares actual completion to expected completion based on days elapsed
+    - high: ahead of schedule (actual >= expected - slack)
+    - medium: slightly behind (expected - 25% <= actual < expected - slack)
+    - low: significantly behind (actual < expected - 25%)
+    
+    After sprint ends OR if dates unavailable:
+    - high: >= 80%
+    - medium: 60-79.9%
+    - low: < 60%
+    
+    Args:
+        percent_completed: Actual completion percentage (0-100)
+        start_date: Sprint start date (optional, for timeline-based calc)
+        end_date: Sprint end date (optional, for timeline-based calc)
+        slack_threshold: Percentage slack allowed during active sprint (default: 15%)
+    
+    Returns:
+        Tier string: 'high', 'medium', or 'low'
+    """
+    # If dates not provided, use simple thresholds
+    if start_date is None or end_date is None:
+        if percent_completed >= SPRINT_COMPLETION_HIGH_THRESHOLD:
+            return "high"
+        elif percent_completed >= SPRINT_COMPLETION_MEDIUM_THRESHOLD:
+            return "medium"
+        else:
+            return "low"
+    
+    # Convert datetime to date if needed
+    if isinstance(start_date, datetime):
+        start_date = start_date.date()
+    if isinstance(end_date, datetime):
+        end_date = end_date.date()
+    
+    today = date.today()
+    
+    # If sprint hasn't started yet - use simple thresholds
+    if today < start_date:
+        if percent_completed >= SPRINT_COMPLETION_HIGH_THRESHOLD:
+            return "high"
+        elif percent_completed >= SPRINT_COMPLETION_MEDIUM_THRESHOLD:
+            return "medium"
+        else:
+            return "low"
+    
+    # If sprint has ended - use simple thresholds
+    if today >= end_date:
+        if percent_completed >= SPRINT_COMPLETION_HIGH_THRESHOLD:
+            return "high"
+        elif percent_completed >= SPRINT_COMPLETION_MEDIUM_THRESHOLD:
+            return "medium"
+        else:
+            return "low"
+    
+    # During active sprint - use timeline-based logic
+    total_sprint_days = (end_date - start_date).days
+    if total_sprint_days <= 0:
+        # Invalid sprint duration, use simple thresholds
+        if percent_completed >= SPRINT_COMPLETION_HIGH_THRESHOLD:
+            return "high"
+        elif percent_completed >= SPRINT_COMPLETION_MEDIUM_THRESHOLD:
+            return "medium"
+        else:
+            return "low"
+    
+    days_elapsed = (today - start_date).days
+    expected_completion = (days_elapsed / total_sprint_days) * 100
+    
+    # Determine tier based on comparison to expected
+    yellow_threshold = 25.0  # More relaxed threshold for medium tier
+    if percent_completed >= expected_completion - slack_threshold:
+        return "high"  # On track or ahead
+    elif percent_completed >= expected_completion - yellow_threshold:
+        return "medium"  # Slightly behind
+    else:
+        return "low"  # Significantly behind
+
+
+def get_sprint_predictability_tier(predictability: float) -> str:
+    """
+    Determine tier for sprint predictability percentage.
+    Uses simple thresholds (same as completion after sprint ends).
+    
+    Tiers:
+    - high: >= 80%
+    - medium: 60-79.9%
+    - low: < 60%
+    
+    Args:
+        predictability: Predictability percentage (0-100)
+    
+    Returns:
+        Tier string: 'high', 'medium', or 'low'
+    """
+    if predictability >= SPRINT_COMPLETION_HIGH_THRESHOLD:
+        return "high"
+    elif predictability >= SPRINT_COMPLETION_MEDIUM_THRESHOLD:
+        return "medium"
+    else:
+        return "low"
+
+
+def get_open_bugs_tier(open_bugs_count: int, team_count: int) -> str:
+    """
+    Determine tier for open bugs based on team count.
+    Thresholds are multiplied by team count to adapt to group size.
+    
+    Tiers (based on OPEN_BUGS constants PER TEAM):
+    - high: <= 6 bugs per team (best - green)
+    - medium: 7-15 bugs per team (warning - yellow)
+    - low: > 15 bugs per team (bad - red)
+    
+    For groups, thresholds scale with team count:
+    - Example: 5 teams → high: <=30, medium: 31-75, low: >75
+    
+    Args:
+        open_bugs_count: Current number of open bugs
+        team_count: Number of teams (1 for single team, N for groups)
+        
+    Returns:
+        Tier string: 'high', 'medium', or 'low'
+    """
+    if team_count <= 0 or open_bugs_count < 0:
+        return "low"  # Invalid data = low tier
+    
+    # Adjust thresholds based on team count
+    high_threshold = OPEN_BUGS_HIGH_PER_TEAM * team_count      # e.g., 6 * 5 = 30
+    medium_threshold = OPEN_BUGS_MEDIUM_PER_TEAM * team_count  # e.g., 15 * 5 = 75
+    
+    if open_bugs_count <= high_threshold:
+        return "high"   # Green (good)
+    elif open_bugs_count <= medium_threshold:
+        return "medium" # Yellow (warning)
+    else:
+        return "low"    # Red (bad)
+
+
+def calculate_trend_for_cycle_time(current_value: float, previous_value: float) -> Optional[Dict]:
+    """
+    Calculate trend for cycle time (lower is better).
+    
+    Args:
+        current_value: Current period cycle time
+        previous_value: Previous period cycle time
+    
+    Returns:
+        Trend dict or None if cannot calculate
+    """
+    if previous_value == 0 or current_value == 0:
+        return None
+    
+    TREND_THRESHOLD = 0.1  # 0.1% minimum change
+    
+    percentage_float = ((current_value - previous_value) / previous_value) * 100
+    percentage = int(round(abs(percentage_float)))
+    
+    # Determine direction
+    if percentage_float > TREND_THRESHOLD:
+        direction = "up"
+    elif percentage_float < -TREND_THRESHOLD:
+        direction = "down"
+    else:
+        direction = "flat"
+        percentage = 0
+    
+    # For cycle time: lower is better (down = improved, up = not improved)
+    improved = direction == "down"
+    
+    return {
+        "direction": direction,
+        "percentage": percentage,
+        "label": "vs previous 30 days",
+        "improved": improved
+    }
+
+
+def calculate_trend_for_open_bugs(bugs_created: int, bugs_resolved: int) -> Optional[Dict]:
+    """
+    Calculate trend for open bugs (fewer bugs = better).
+    
+    Formula: net_change = bugs_created - bugs_resolved
+    - Positive (backlog growing): Red Up Arrow (worse)
+    - Negative (backlog shrinking): Green Down Arrow (better)
+    
+    Args:
+        bugs_created: Number of bugs created in period
+        bugs_resolved: Number of bugs resolved in period
+    
+    Returns:
+        Trend dict with direction, count, and improved flag
+    """
+    net_change = bugs_created - bugs_resolved
+    
+    if net_change == 0:
+        return {
+            "direction": "flat",
+            "percentage": 0,
+            "label": "vs previous 30 days",
+            "improved": True  # No change is neutral/acceptable
+        }
+    
+    # Use absolute value for display
+    count = abs(net_change)
+    
+    if net_change > 0:
+        # Backlog growing (more created than resolved) - BAD
+        direction = "up"
+        improved = False  # Getting worse (red up arrow)
+    else:
+        # Backlog shrinking (more resolved than created) - GOOD
+        direction = "down"
+        improved = True  # Getting better (green down arrow)
+    
+    return {
+        "direction": direction,
+        "percentage": count,  # Show actual count difference
+        "label": "vs previous 30 days",
+        "improved": improved
+    }
 
 
 def get_predictability_status(predictability: float) -> str:
@@ -415,37 +933,65 @@ async def get_avg_sprint_metrics(
             logger.exception(e)  # Log full traceback
             trend_data = []  # Return empty array on error
         
-        # Calculate status for each metric
-        velocity_status = get_velocity_status(avg_velocity)
-        cycle_time_status = get_cycle_time_status(avg_cycle_time)
-        predictability_status = get_predictability_status(avg_predictability)
+        # Build response in GitHub service KPI structure (array of MetricResponse objects)
+        # Note: trend_data calculation is kept but not included in response (used for line charts elsewhere)
+        # Note: trend is set to None for now (will be added later)
         
-        # Build response data (same format as closed-sprints)
-        response_data = {
-            "velocity": avg_velocity,
-            "cycle_time": avg_cycle_time,
-            "predictability": avg_predictability,
-            "velocity_status": velocity_status,
-            "cycle_time_status": cycle_time_status,
-            "predictability_status": predictability_status,
-            "sprint_count": validated_sprint_count,
-            "trend_data": trend_data
-        }
+        metrics = [
+            {
+                "metric_id": "velocity",
+                "label": "Avg Sprint Velocity",
+                "value": str(avg_velocity),
+                "tier_status": "",
+                "description": f"Average velocity in the last {validated_sprint_count} closed sprints",
+                "tooltip": f"Average velocity in the last {validated_sprint_count} closed sprints",
+                "trend": None,  # No trend calculation for now
+                "action": {
+                    "type": "report",
+                    "report_ids": ["team-closed-sprints"],
+                    "params": {
+                        "team_name": validated_name,
+                        "isGroup": isGroup
+                    }
+                }
+            },
+            {
+                "metric_id": "cycle_time",
+                "label": "Avg Story/Task Cycle Time",
+                "value": f"{avg_cycle_time:.1f}d",
+                "tier_status": "",
+                "description": f"Average story cycle time in the last {validated_sprint_count} sprints",
+                "tooltip": f"Average story cycle time in the last {validated_sprint_count} sprints",
+                "trend": None,  # No trend calculation for now
+                "action": {
+                    "type": "report",
+                    "report_ids": ["cycle-time-over-time"],
+                    "params": {
+                        "team_name": validated_name,
+                        "isGroup": isGroup
+                    }
+                }
+            },
+            {
+                "metric_id": "predictability",
+                "label": "Avg Sprint Predictability",
+                "value": f"{avg_predictability:.0f}%",
+                "tier_status": "",
+                "description": f"Average sprint predictability over last {validated_sprint_count} sprints",
+                "tooltip": f"Average sprint predictability over last {validated_sprint_count} sprints",
+                "trend": None,  # No trend calculation for now
+                "action": {
+                    "type": "report",
+                    "report_ids": ["sprint-predictability"],
+                    "params": {
+                        "team_name": validated_name,
+                        "isGroup": isGroup
+                    }
+                }
+            }
+        ]
         
-        # Add metadata based on isGroup flag (same as closed-sprints endpoint)
-        if isGroup:
-            response_data["group_name"] = validated_name
-            response_data["teams_in_group"] = team_names_list
-            message = f"Retrieved average sprint metrics for group '{validated_name}'"
-        else:
-            response_data["team_name"] = validated_name
-            message = f"Retrieved average sprint metrics for team '{validated_name}'"
-        
-        return {
-            "success": True,
-            "data": response_data,
-            "message": message
-        }
+        return metrics
     
     except HTTPException:
         raise  # Re-raise FastAPI HTTPExceptions
@@ -1267,4 +1813,1181 @@ async def get_average_sprint_velocity_per_team_endpoint(
         raise HTTPException(
             status_code=500,
             detail=f"Failed to fetch average sprint velocity per team: {str(e)}"
+        )
+
+
+# Helper functions for Sprint KPIs endpoint
+def get_velocity_metric(
+    team_names_list: List[str],
+    validated_sprint_count: int,
+    validated_name: str,
+    isGroup: bool,
+    conn: Connection
+) -> Dict:
+    """Get velocity metric using sprint-based calculation."""
+    raw_data = get_team_avg_sprint_metrics(validated_sprint_count, team_names_list, conn)
+    velocities = [row['issues_completed_count'] for row in raw_data if row.get('issues_completed_count') is not None]
+    avg_velocity = int(round(sum(velocities) / len(velocities), 0)) if velocities else 0
+    
+    # Build chart data from raw_data (last 5 sprints)
+    chart_points = []
+    for row in raw_data:
+        sprint_id = row.get('out_sprint_id')
+        velocity = row.get('issues_completed_count', 0) or 0
+        sprint_date = row.get('sprint_complete_date')
+        
+        # Format date if available
+        date_str = None
+        if sprint_date:
+            if hasattr(sprint_date, 'strftime'):
+                date_str = sprint_date.strftime('%Y-%m-%d')
+            else:
+                date_str = str(sprint_date)
+        
+        chart_points.append({
+            'sprint_id': str(sprint_id) if sprint_id else 'Unknown',
+            'value': int(velocity),
+            'date': date_str
+        })
+    
+    # Sort by date (oldest first) and limit to last 5
+    chart_points.sort(key=lambda x: x['date'] or '0000-00-00')
+    chart_points = chart_points[-5:]
+    
+    return {
+        "metric_id": "sprint_velocity",
+        "label": "Avg Sprint Velocity",
+        "value": str(avg_velocity),
+        "tier_status": "",
+        "metric_type": "sprint",
+        "description": f"Average velocity in the last {validated_sprint_count} closed sprints",
+        "tooltip": f"Average velocity in the last {validated_sprint_count} closed sprints",
+        "trend": None,
+        "chart_data": {
+            "type": "line",
+            "points": chart_points
+        } if chart_points else None,
+        "action": {
+            "type": "report",
+            "report_ids": ["team-closed-sprints"],
+            "params": {
+                "team_name": validated_name,
+                "isGroup": isGroup
+            }
+        }
+    }
+
+
+def get_cycle_time_metric(
+    team_names_list: List[str],
+    validated_name: str,
+    isGroup: bool,
+    conn: Connection
+) -> Dict:
+    """Get cycle time metric using 30-day period calculation."""
+    from datetime import timedelta
+    from database_team_metrics import get_cycle_time_for_period
+    
+    today = date.today()
+    current_end_date = today
+    current_start_date = today - timedelta(days=CYCLE_TIME_PERIOD_DAYS)
+    previous_end_date = current_start_date - timedelta(days=1)
+    previous_start_date = previous_end_date - timedelta(days=CYCLE_TIME_PERIOD_DAYS)
+    
+    avg_cycle_time = get_cycle_time_for_period(team_names_list, current_start_date, current_end_date, conn)
+    if avg_cycle_time is None:
+        avg_cycle_time = 0.0
+    
+    previous_cycle_time = get_cycle_time_for_period(team_names_list, previous_start_date, previous_end_date, conn)
+    
+    cycle_time_trend = None
+    if previous_cycle_time is not None and previous_cycle_time > 0 and avg_cycle_time > 0:
+        cycle_time_trend = calculate_trend_for_cycle_time(avg_cycle_time, previous_cycle_time)
+    
+    cycle_time_tier = get_cycle_time_tier(avg_cycle_time)
+    
+    # Build tooltip similar to DORA metrics format
+    tooltip = f"Average cycle time in the last {CYCLE_TIME_PERIOD_DAYS} days: {avg_cycle_time:.1f}d"
+    if cycle_time_trend and cycle_time_trend.get('direction') and cycle_time_trend['direction'] != 'flat':
+        if cycle_time_trend.get('improved'):
+            tooltip += f"\nThis represents a {cycle_time_trend['percentage']}% improvement compared to the previous {CYCLE_TIME_PERIOD_DAYS} days."
+        else:
+            tooltip += f"\nThis represents a {cycle_time_trend['percentage']}% regression compared to the previous {CYCLE_TIME_PERIOD_DAYS} days."
+    
+    return {
+        "metric_id": "cycle_time",
+        "label": "Avg Cycle Time (sprint issues)",
+        "value": f"{avg_cycle_time:.1f}d",
+        "tier_status": cycle_time_tier,
+        "metric_type": "sprint",
+        "description": f"Average story cycle time in the last {CYCLE_TIME_PERIOD_DAYS} days",
+        "tooltip": tooltip,
+        "trend": cycle_time_trend,
+        "action": {
+            "type": "report",
+            "report_ids": ["cycle-time-over-time"],
+            "params": {
+                "team_name": validated_name,
+                "isGroup": isGroup
+            }
+        }
+    }
+
+
+def get_epic_cycle_time_metric(
+    team_names_list: List[str],
+    validated_name: str,
+    isGroup: bool,
+    conn: Connection
+) -> Dict:
+    """Get epic cycle time metric using 90-day (3 months) period calculation."""
+    from datetime import timedelta
+    
+    today = date.today()
+    current_end_date = today
+    current_start_date = today - timedelta(days=EPIC_CYCLE_TIME_PERIOD_DAYS)
+    previous_end_date = current_start_date - timedelta(days=1)
+    previous_start_date = previous_end_date - timedelta(days=EPIC_CYCLE_TIME_PERIOD_DAYS)
+    
+    # Get epic cycle time for current period
+    avg_cycle_time = get_cycle_time_for_period_by_issue_type(
+        team_names_list, 
+        current_start_date, 
+        current_end_date, 
+        'Epic',
+        conn
+    )
+    if avg_cycle_time is None:
+        avg_cycle_time = 0.0
+    
+    # Get epic cycle time for previous period (for trend)
+    previous_cycle_time = get_cycle_time_for_period_by_issue_type(
+        team_names_list, 
+        previous_start_date, 
+        previous_end_date,
+        'Epic',
+        conn
+    )
+    
+    # Calculate trend
+    cycle_time_trend = None
+    if previous_cycle_time is not None and previous_cycle_time > 0 and avg_cycle_time > 0:
+        cycle_time_trend = calculate_trend_for_cycle_time(avg_cycle_time, previous_cycle_time)
+    
+    # Get tier
+    cycle_time_tier = get_epic_cycle_time_tier(avg_cycle_time)
+    
+    # Build tooltip - mention "3 months" as requested
+    tooltip = f"Average epic cycle time in the last 3 months: {avg_cycle_time:.1f}d"
+    if cycle_time_trend and cycle_time_trend.get('direction') and cycle_time_trend['direction'] != 'flat':
+        if cycle_time_trend.get('improved'):
+            tooltip += f"\nThis represents a {cycle_time_trend['percentage']}% improvement compared to the previous 3 months."
+        else:
+            tooltip += f"\nThis represents a {cycle_time_trend['percentage']}% regression compared to the previous 3 months."
+    
+    return {
+        "metric_id": "epic_cycle_time",
+        "label": "Avg Epic Cycle Time",
+        "value": f"{avg_cycle_time:.1f}d",
+        "tier_status": cycle_time_tier,
+        "metric_type": "pi",
+        "description": "Average epic cycle time in the last 3 months",
+        "tooltip": tooltip,
+        "trend": cycle_time_trend,
+        "action": {
+            "type": "report",
+            "report_ids": ["cycle-time-over-time"],
+            "params": {
+                "team_name": validated_name,
+                "isGroup": isGroup,
+                "issue_type": "Epic"
+            }
+        }
+    }
+
+
+def get_predictability_metric(
+    team_names_list: List[str],
+    validated_sprint_count: int,
+    validated_name: str,
+    isGroup: bool,
+    conn: Connection
+) -> Dict:
+    """
+    Get predictability metric using sprint-based calculation with tier and trend.
+    Measures what percentage of planned sprint work was actually completed.
+    
+    Trend compares last 3 closed sprints vs previous 3 closed sprints (sprints 4-6).
+    Display shows average of last 3 closed sprints.
+    """
+    from collections import defaultdict
+    from datetime import date as date_type
+    
+    logger.info(f"get_predictability_metric called: teams={team_names_list}, sprint_count={validated_sprint_count}")
+    
+    # Fetch 6 sprints for trend calculation (3 current + 3 previous)
+    raw_data = get_team_avg_sprint_metrics(6, team_names_list, conn)
+    logger.info(f"get_predictability_metric: fetched {len(raw_data)} raw sprint records")
+    
+    # Sort by date (oldest first)
+    try:
+        sorted_data = sorted(raw_data, key=lambda x: (
+            x.get('sprint_complete_date') or date_type.min,
+            x.get('out_sprint_id', 0)
+        ))
+        logger.info(f"get_predictability_metric: successfully sorted {len(sorted_data)} records")
+    except Exception as e:
+        logger.error(f"get_predictability_metric: Error sorting data: {e}")
+        raise
+    
+    # Group by sprint_id and aggregate across teams (for groups)
+    sprint_groups = defaultdict(lambda: {'completed': 0, 'planned': 0, 'date': None})
+    for row in sorted_data:
+        sprint_id = row.get('out_sprint_id')
+        completed = row.get('issues_completed_count', 0) or 0
+        planned = row.get('issues_in_sprint_count', 0) or 0
+        date = row.get('sprint_complete_date')
+        
+        sprint_groups[sprint_id]['completed'] += completed
+        sprint_groups[sprint_id]['planned'] += planned
+        if not sprint_groups[sprint_id]['date']:
+            sprint_groups[sprint_id]['date'] = date
+    
+    # Calculate per-sprint predictability and sort by date
+    sprint_predictabilities = []
+    for sprint_id, data in sprint_groups.items():
+        predictability = (data['completed'] / data['planned'] * 100) if data['planned'] > 0 else 0.0
+        sprint_predictabilities.append({
+            'sprint_id': sprint_id,
+            'predictability': predictability,
+            'completed': data['completed'],
+            'planned': data['planned'],
+            'date': data['date']
+        })
+    
+    sprint_predictabilities.sort(key=lambda x: x['date'])
+    
+    # Calculate trend if we have enough data
+    trend = None
+    if len(sprint_predictabilities) >= 6:
+        # Split into periods: previous 3 (sprints 4-6) and current 3 (last 3)
+        previous_3 = sprint_predictabilities[0:3]  # Oldest (sprints 4-6)
+        current_3 = sprint_predictabilities[3:6]   # Newest (last 3)
+        
+        # Calculate average predictability for current period (last 3 sprints)
+        current_total_completed = sum(s['completed'] for s in current_3)
+        current_total_planned = sum(s['planned'] for s in current_3)
+        current_avg = (current_total_completed / current_total_planned * 100) if current_total_planned > 0 else 0.0
+        
+        # Calculate average predictability for previous period (sprints 4-6)
+        previous_total_completed = sum(s['completed'] for s in previous_3)
+        previous_total_planned = sum(s['planned'] for s in previous_3)
+        previous_avg = (previous_total_completed / previous_total_planned * 100) if previous_total_planned > 0 else 0.0
+        
+        # Calculate trend (higher predictability is better)
+        if previous_avg > 0 and current_avg > 0:
+            TREND_THRESHOLD = 0.1  # 0.1% minimum change
+            percentage_float = ((current_avg - previous_avg) / previous_avg) * 100
+            percentage = int(round(abs(percentage_float)))
+            
+            # Determine direction
+            if percentage_float > TREND_THRESHOLD:
+                direction = "up"
+            elif percentage_float < -TREND_THRESHOLD:
+                direction = "down"
+            else:
+                direction = "flat"
+                percentage = 0
+            
+            # For predictability: higher is better (up = improved, down = not improved)
+            improved = direction == "up"
+            
+            trend = {
+                "direction": direction,
+                "percentage": percentage,
+                "label": "vs previous 3 sprints",
+                "improved": improved
+            }
+    
+    # Use last 3 sprints for display (or all available if < 3)
+    display_sprints = sprint_predictabilities[-3:] if len(sprint_predictabilities) >= 3 else sprint_predictabilities
+    total_completed = sum(s['completed'] for s in display_sprints)
+    total_planned = sum(s['planned'] for s in display_sprints)
+    avg_predictability = (total_completed / total_planned * 100) if total_planned > 0 else 0.0
+    sprint_count_used = len(display_sprints)
+    
+    # Calculate tier
+    predictability_tier = get_sprint_predictability_tier(avg_predictability)
+    
+    # Build tooltip matching cycle_time format
+    tooltip = f"Average sprint predictability in the last {sprint_count_used} closed sprints: {avg_predictability:.1f}%"
+    if trend and trend.get('direction') and trend['direction'] != 'flat':
+        if trend.get('improved'):
+            tooltip += f"\nThis represents a {trend['percentage']}% improvement compared to the previous {sprint_count_used} sprints."
+        else:
+            tooltip += f"\nThis represents a {trend['percentage']}% regression compared to the previous {sprint_count_used} sprints."
+    
+    return {
+        "metric_id": "sprint_predictability",
+        "label": "Avg Sprint Predictability",
+        "value": f"{round(avg_predictability)}%",
+        "tier_status": predictability_tier,
+        "metric_type": "sprint",
+        "description": f"Average sprint predictability over last {sprint_count_used} closed sprints",
+        "tooltip": tooltip,
+        "trend": trend,
+        "action": {
+            "type": "report",
+            "report_ids": ["sprint-predictability"],
+            "params": {
+                "team_name": validated_name,
+                "isGroup": isGroup
+            }
+        }
+    }
+
+
+def get_wip_metric(
+    team_names_list: List[str],
+    validated_name: str,
+    isGroup: bool,
+    conn: Connection
+) -> Dict:
+    """
+    Get Work in Progress metric from current active sprint with tier.
+    No trend calculation (may be added in future phase).
+    """
+    # Get current sprint progress data
+    progress_data = get_team_current_sprint_progress(team_names_list, conn)
+    wip_count = progress_data.get('in_progress_issues', 0) or 0
+    total_issues = progress_data.get('total_issues', 0) or 0
+    
+    # Calculate WIP percentage
+    wip_percentage = (wip_count / total_issues * 100) if total_issues > 0 else 0.0
+    
+    # Calculate tier
+    wip_tier = get_sprint_wip_tier(wip_percentage)
+    
+    # Build enhanced tooltip with tier explanation
+    tooltip = f"Sprint Work In Progress\n\nCurrent sprint has {wip_count} issues in progress out of {total_issues} total issues ({wip_percentage:.1f}%)"
+    
+    # Add tier context to tooltip
+    if wip_percentage <= SPRINT_WIP_HIGH_THRESHOLD:
+        tooltip += f"\n\nHealthy WIP level (≤ {SPRINT_WIP_HIGH_THRESHOLD}% of sprint). Good flow with manageable work in progress."
+    elif wip_percentage <= SPRINT_WIP_MEDIUM_THRESHOLD:
+        tooltip += f"\n\nModerate WIP level ({SPRINT_WIP_HIGH_THRESHOLD}-{SPRINT_WIP_MEDIUM_THRESHOLD}% of sprint). Consider focusing on completing work before starting new items."
+    else:
+        tooltip += f"\n\nHigh WIP level (> {SPRINT_WIP_MEDIUM_THRESHOLD}% of sprint). Too much work in progress may indicate bottlenecks or multitasking issues."
+    
+    return {
+        "metric_id": "sprint_wip",
+        "label": "Sprint WIP",
+        "value": str(wip_count),
+        "tier_status": wip_tier,
+        "metric_type": "sprint",
+        "description": f"Number of issues in progress ({wip_percentage:.1f}% of sprint)",
+        "tooltip": tooltip,
+        "trend": None,  # No trend for now
+        "alternative_text": f"WIP%: {round(wip_percentage)}",
+        "action": {
+            "type": "report",
+            "report_ids": ["team-sprint-burndown", "wip-over-time"],
+            "params": {
+                "team_name": validated_name,
+                "isGroup": isGroup
+            }
+        }
+    }
+
+
+def get_completion_metric(
+    team_names_list: List[str],
+    validated_name: str,
+    isGroup: bool,
+    conn: Connection
+) -> Dict:
+    """
+    Get Sprint Completion metric from current active sprint with tier.
+    Uses timeline-based tier calculation during active sprint, simple thresholds after sprint ends.
+    """
+    progress_data = get_team_current_sprint_progress(team_names_list, conn)
+    percent_completed = progress_data.get('percent_completed', 0) or 0.0
+    start_date = progress_data.get('start_date')
+    end_date = progress_data.get('end_date')
+    completed_issues = progress_data.get('completed_issues', 0) or 0
+    total_issues = progress_data.get('total_issues', 0) or 0
+    remaining_issues = total_issues - completed_issues
+    
+    # Calculate tier using timeline-based logic
+    completion_tier = get_sprint_completion_tier(
+        percent_completed,
+        start_date=start_date,
+        end_date=end_date
+    )
+    
+    # Build enhanced tooltip with tier explanation
+    tooltip = f"Sprint Completion\n\nCurrent sprint has {completed_issues} completed issues out of {total_issues} total issues ({percent_completed:.1f}%)"
+    
+    # Add tier context to tooltip based on whether sprint is active
+    if start_date and end_date:
+        today = date.today()
+        if isinstance(end_date, datetime):
+            end_date_check = end_date.date()
+        else:
+            end_date_check = end_date
+            
+        if today >= end_date_check:
+            # Sprint has ended - explain simple thresholds
+            tooltip += f"\n\nSprint Completed: "
+            if completion_tier == "high":
+                tooltip += f"Excellent completion rate (≥ {SPRINT_COMPLETION_HIGH_THRESHOLD}%)."
+            elif completion_tier == "medium":
+                tooltip += f"Good completion rate ({SPRINT_COMPLETION_MEDIUM_THRESHOLD}-{SPRINT_COMPLETION_HIGH_THRESHOLD-1}%)."
+            else:
+                tooltip += f"Low completion rate (< {SPRINT_COMPLETION_MEDIUM_THRESHOLD}%). Consider sprint planning improvements."
+        else:
+            # Sprint is active - explain timeline-based logic
+            if completion_tier == "high":
+                tooltip += "\n\nOn track or ahead of schedule based on sprint timeline."
+            elif completion_tier == "medium":
+                tooltip += "\n\nSlightly behind schedule. Consider focusing on completing in-progress work."
+            else:
+                tooltip += "\n\nSignificantly behind schedule. May need to adjust scope or address blockers."
+    else:
+        # No dates available - explain simple thresholds
+        if completion_tier == "high":
+            tooltip += f"\n\nExcellent completion rate (≥ {SPRINT_COMPLETION_HIGH_THRESHOLD}%)."
+        elif completion_tier == "medium":
+            tooltip += f"\n\nGood completion rate ({SPRINT_COMPLETION_MEDIUM_THRESHOLD}-{SPRINT_COMPLETION_HIGH_THRESHOLD-1}%)."
+        else:
+            tooltip += f"\n\nLow completion rate (< {SPRINT_COMPLETION_MEDIUM_THRESHOLD}%)."
+    
+    return {
+        "metric_id": "sprint_completion",
+        "label": "Sprint Completion",
+        "value": f"{round(percent_completed)}%",
+        "tier_status": completion_tier,
+        "metric_type": "sprint",
+        "description": f"Completed issues ({percent_completed:.1f}%) in the current active sprint",
+        "tooltip": tooltip,
+        "trend": None,
+        "alternative_text": f"Remaining: {remaining_issues}",
+        "action": {
+            "type": "report",
+            "report_ids": ["team-sprint-burndown"],
+            "params": {
+                "team_name": validated_name,
+                "isGroup": isGroup
+            }
+        }
+    }
+
+
+def get_days_left_metric(
+    team_names_list: List[str],
+    validated_name: str,
+    isGroup: bool,
+    conn: Connection
+) -> Dict:
+    """Get Days Left metric from current active sprint."""
+    progress_data = get_team_current_sprint_progress(team_names_list, conn)
+    
+    # Calculate days_left and days_in_sprint from dates
+    start_date = progress_data.get('start_date')
+    end_date = progress_data.get('end_date')
+    
+    days_left = calculate_days_left(end_date) or 0
+    days_in_sprint = calculate_days_in_sprint(start_date, end_date) or 0
+    
+    # DEBUG: Log data for troubleshooting progress bar
+    logger.info(f"DEBUG days_left_metric: team={validated_name}, isGroup={isGroup}, start_date={start_date}, end_date={end_date}, days_left={days_left}, days_in_sprint={days_in_sprint}")
+    
+    chart_data = {
+        "type": "progress",
+        "current": days_left,
+        "total": days_in_sprint,
+        "percentage": round((days_in_sprint - days_left) / days_in_sprint * 100, 1) if days_in_sprint > 0 else 0
+    } if days_in_sprint > 0 else None
+    
+    logger.info(f"DEBUG chart_data: {chart_data}")
+    
+    return {
+        "metric_id": "sprint_days_left",
+        "label": "Days Left in Sprint",
+        "value": str(days_left),
+        "tier_status": "",
+        "metric_type": "sprint",
+        "description": "Number of days remaining in the current active sprint",
+        "tooltip": "Number of days remaining in the current active sprint",
+        "trend": None,
+        "chart_data": chart_data,
+        "action": {
+            "type": "report",
+            "report_ids": ["team-sprint-burndown"],
+            "params": {
+                "team_name": validated_name,
+                "isGroup": isGroup,
+                "days_in_sprint": days_in_sprint
+            }
+        }
+    }
+
+
+def get_open_bugs_metric(
+    team_names_list: List[str],
+    validated_name: str,
+    isGroup: bool,
+    conn: Connection
+) -> Dict:
+    """
+    Get open bugs metric with tier-based trend logic.
+    
+    Returns current count of open bugs with adaptive tier thresholds and intelligent
+    trend display based on overall health status.
+    
+    Tier Logic (adapts to team count):
+    - High (green): ≤6 bugs per team (e.g., ≤6 for 1 team, ≤30 for 5 teams)
+    - Medium (yellow): 7-15 bugs per team
+    - Low (red): >15 bugs per team
+    
+    Trend Logic (prevents false alarms on small numbers):
+    - When tier is "high" (healthy): Shows FLAT/NEUTRAL trend
+      Rationale: At low bug counts (≤6 per team), small fluctuations (+1, +2 bugs)
+      are normal noise. Users don't need red arrows when health is excellent.
+      
+    - When tier is "medium" or "low": Shows FULL TREND with arrows
+      Rationale: Already have too many bugs - trend direction becomes critical.
+      Users need to know if situation is improving (green ↓) or worsening (red ↑).
+    
+    Trend Calculation (for medium/low tiers):
+    - Formula: net_change = bugs_created - bugs_resolved (over last 30 days)
+    - Positive (+5): Red up arrow (backlog growing - bad)
+    - Negative (-5): Green down arrow (backlog shrinking - good)
+    - Zero: Flat (stable)
+    
+    Args:
+        team_names_list: List of team names to aggregate bugs for
+        validated_name: Team or group name for display/filtering
+        isGroup: Whether this is a group (affects display only)
+        conn: Database connection
+        
+    Returns:
+        MetricResponse dict with metric_id, label, value, tier_status, trend, tooltip, action
+    """
+    from datetime import timedelta
+    
+    today = date.today()
+    end_date = today
+    start_date = today - timedelta(days=OPEN_BUGS_TREND_PERIOD_DAYS)
+    
+    # Get data from database - single efficient query
+    bug_data = get_open_bugs_with_trend(
+        team_names_list,
+        BUG_ISSUE_TYPES,  # Use constant array ["Bug", "Defect"]
+        start_date,
+        end_date,
+        conn
+    )
+    
+    current_open_bugs = bug_data.get('current_open_bugs', 0)
+    bugs_created = bug_data.get('bugs_created', 0)
+    bugs_resolved = bug_data.get('bugs_resolved', 0)
+    
+    # Calculate team count for adaptive thresholds
+    team_count = len(team_names_list) if team_names_list else 1
+    
+    # Calculate tier based on team count (adapts to group size)
+    tier_status = get_open_bugs_tier(current_open_bugs, team_count)
+    
+    # Calculate net change for trend and tooltip
+    net_change = bugs_created - bugs_resolved
+    
+    # IMPORTANT: Tier-based trend logic to prevent false alarms on small numbers
+    # ============================================================================
+    # When tier is "high" (green - healthy status with few bugs), we show a neutral trend
+    # to avoid alarming users about minor fluctuations (e.g., 2→4 bugs showing red arrow).
+    # 
+    # Rationale:
+    # - "High" tier = ≤6 bugs per team (e.g., ≤6 for single team, ≤30 for 5-team group)
+    # - At this low bug count, small changes (+1, +2 bugs) are normal noise
+    # - Users don't need to see red arrows when overall health is excellent
+    # 
+    # When tier is "medium" or "low" (already have too many bugs), the trend becomes
+    # critical information - users need to know if the situation is improving or worsening.
+    # ============================================================================
+    
+    if tier_status == "high":
+        # Health is excellent - show neutral trend (no alarm for small changes)
+        bug_trend = {
+            "direction": "flat",
+            "percentage": abs(net_change),
+            "label": "vs previous 30 days",
+            "improved": True  # Neutral/good status
+        }
+        
+        # Enhanced tooltip for high tier - emphasize good health
+        tooltip = f"Current open bugs: {current_open_bugs} ✓ (excellent)"
+        if net_change != 0:
+            # Show the change but frame it as minor
+            change_sign = '+' if net_change > 0 else ''
+            tooltip += f"\nMinor change: {change_sign}{net_change} bugs in last {OPEN_BUGS_TREND_PERIOD_DAYS} days"
+            tooltip += f"\nCreated: {bugs_created}, Resolved: {bugs_resolved}"
+        else:
+            tooltip += f"\nNo change in last {OPEN_BUGS_TREND_PERIOD_DAYS} days"
+    else:
+        # Health is medium/low - show full trend with directional arrows
+        # At this bug count, trend direction is critical information
+        bug_trend = calculate_trend_for_open_bugs(bugs_created, bugs_resolved)
+        
+        # Standard tooltip emphasizing trend direction
+        tooltip = f"Current open bugs: {current_open_bugs}"
+        if bug_trend:
+            if net_change > 0:
+                tooltip += f"\n+{net_change} bugs in the last {OPEN_BUGS_TREND_PERIOD_DAYS} days (backlog growing)"
+            elif net_change < 0:
+                tooltip += f"\n{net_change} bugs in the last {OPEN_BUGS_TREND_PERIOD_DAYS} days (backlog shrinking)"
+            else:
+                tooltip += f"\nNo net change in the last {OPEN_BUGS_TREND_PERIOD_DAYS} days"
+            tooltip += f"\nCreated: {bugs_created}, Resolved: {bugs_resolved}"
+    
+    return {
+        "metric_id": "open_bugs",
+        "label": "Number of Open Bugs",
+        "value": str(current_open_bugs),
+        "tier_status": tier_status,  # Tier adapts to team count
+        "metric_type": "sprint",
+        "description": f"Current open bugs with {OPEN_BUGS_TREND_PERIOD_DAYS}-day trend",
+        "tooltip": tooltip,
+        "trend": bug_trend,
+        "action": {
+            "type": "report",
+            "report_ids": [
+                "team-issues-trend",        # Bug trend over time (default: issue_type=Bug)
+                "issues-bugs-by-priority",  # Bugs by priority (default: issue_type=Bug)
+                "issues-bugs-by-team"       # Bugs by team with priority (default: issue_type=Bug)
+            ],
+            "params": {
+                "team_name": validated_name,
+                "isGroup": isGroup,
+                "issue_type": BUG_ISSUE_TYPES[0]                  # "Bug" - matches all report defaults
+            }
+        }
+    }
+
+
+def get_pi_completion_metric(
+    pi_name: str,
+    team_names_list: List[str],
+    validated_name: str,
+    isGroup: bool,
+    conn: Connection
+) -> Dict:
+    """
+    Get PI Completion metric from current PI using direct SQL query.
+    Matches sprint completion pattern: queries live jira_issues table.
+    Uses timeline-based tier calculation during active PI, returns None tier for first 15%.
+    """
+    try:
+        # Build parameterized query
+        placeholders = ", ".join([f":team_name_{i}" for i in range(len(team_names_list))])
+        params = {
+            'pi_name': pi_name,
+            **{f"team_name_{i}": name for i, name in enumerate(team_names_list)}
+        }
+        
+        sql_query = f"""
+            SELECT 
+                pi.pi_name,
+                pi.start_date,
+                pi.end_date,
+                COUNT(*) as total_epics,
+                COUNT(CASE WHEN i.status_category = 'Done' THEN 1 END) as completed_epics,
+                COUNT(CASE WHEN i.status_category = 'In Progress' THEN 1 END) as in_progress_epics,
+                COUNT(CASE WHEN i.status_category = 'To Do' THEN 1 END) as todo_epics
+            FROM 
+                public.jira_issues AS i
+            INNER JOIN 
+                public.pis AS pi
+                ON i.quarter_pi = pi.pi_name
+            WHERE 
+                i.quarter_pi = :pi_name
+                AND i.issue_type = 'Epic'
+                AND i.team_name IN ({placeholders})
+            GROUP BY 
+                pi.pi_name, pi.start_date, pi.end_date;
+        """
+        
+        logger.info(f"Fetching PI completion for PI={pi_name}, teams={team_names_list}")
+        result = conn.execute(text(sql_query), params)
+        row = result.fetchone()
+        
+        if not row:
+            # No PI data found
+            return {
+                "metric_id": "pi_completion",
+                "label": "PI Completion",
+                "value": "0%",
+                "tier_status": None,
+                "metric_type": "pi",
+                "description": "No epics found",
+                "tooltip": f"PI Completion\n\nNo epics found for PI '{pi_name}'",
+                "trend": None,
+                "action": {
+                    "type": "report",
+                    "report_ids": ["pi-burndown"],
+                    "params": {
+                        "pi": pi_name,
+                        "team_name": validated_name,
+                        "isGroup": isGroup
+                    }
+                }
+            }
+        
+        # Extract data from row
+        start_date = row[1] if row[1] else None
+        end_date = row[2] if row[2] else None
+        total_epics = int(row[3]) if row[3] else 0
+        completed_epics = int(row[4]) if row[4] else 0
+        in_progress_epics = int(row[5]) if row[5] else 0
+        todo_epics = int(row[6]) if row[6] else 0
+        remaining_epics = total_epics - completed_epics
+        
+        # Calculate percentage in Python (not SQL) - more efficient
+        percent_completed = (completed_epics / total_epics * 100) if total_epics > 0 else 0.0
+        
+        # Calculate tier using timeline-based logic (may return None for early PI)
+        completion_tier = get_pi_completion_tier(
+            percent_completed,
+            start_date=start_date,
+            end_date=end_date
+        )
+        
+        # Build enhanced tooltip
+        tooltip = f"PI Completion\n\nCurrent PI has {completed_epics} completed epics out of {total_epics} total epics ({percent_completed:.1f}%)"
+        
+        # Add tier context to tooltip based on whether PI is active
+        if start_date and end_date:
+            today = date.today()
+            if isinstance(end_date, datetime):
+                end_date_check = end_date.date()
+            else:
+                end_date_check = end_date
+            
+            if isinstance(start_date, datetime):
+                start_date_check = start_date.date()
+            else:
+                start_date_check = start_date
+            
+            # Calculate progress percentage
+            total_pi_days = (end_date_check - start_date_check).days
+            if total_pi_days > 0:
+                days_elapsed = (today - start_date_check).days
+                progress_pct = (days_elapsed / total_pi_days) * 100
+                
+                if progress_pct <= 15:
+                    tooltip += "\n\nPI is in early stage (first 15%). Tier status will appear after this initial phase."
+                elif today >= end_date_check:
+                    # PI has ended
+                    tooltip += f"\n\nPI Completed: "
+                    if completion_tier == "high":
+                        tooltip += f"Excellent completion rate (≥ {PI_COMPLETION_HIGH_THRESHOLD}%)."
+                    elif completion_tier == "medium":
+                        tooltip += f"Good completion rate ({PI_COMPLETION_MEDIUM_THRESHOLD}-{PI_COMPLETION_HIGH_THRESHOLD-1}%)."
+                    else:
+                        tooltip += f"Low completion rate (< {PI_COMPLETION_MEDIUM_THRESHOLD}%)."
+                else:
+                    # PI is active
+                    if completion_tier == "high":
+                        tooltip += "\n\nOn track or ahead of schedule based on PI timeline."
+                    elif completion_tier == "medium":
+                        tooltip += "\n\nSlightly behind schedule. Consider focusing on completing in-progress work."
+                    else:
+                        tooltip += "\n\nSignificantly behind schedule. May need to adjust scope or address blockers."
+        else:
+            # No dates available - explain simple thresholds
+            if completion_tier == "high":
+                tooltip += f"\n\nExcellent completion rate (≥ {PI_COMPLETION_HIGH_THRESHOLD}%)."
+            elif completion_tier == "medium":
+                tooltip += f"\n\nGood completion rate ({PI_COMPLETION_MEDIUM_THRESHOLD}-{PI_COMPLETION_HIGH_THRESHOLD-1}%)."
+            elif completion_tier == "low":
+                tooltip += f"\n\nLow completion rate (< {PI_COMPLETION_MEDIUM_THRESHOLD}%)."
+        
+        return {
+            "metric_id": "pi_completion",
+            "label": "PI Completion",
+            "value": f"{percent_completed:.1f}%",
+            "tier_status": completion_tier,  # May be None for early PI
+            "metric_type": "pi",
+            "description": f"{completed_epics} of {total_epics} epics completed",
+            "tooltip": tooltip,
+            "trend": None,  # No trend for now
+            "alternative_text": f"Remaining epics: {remaining_epics}",
+            "action": {
+                "type": "report",
+                "report_ids": ["pi-burndown"],
+                "params": {
+                    "pi": pi_name,
+                    "team_name": validated_name,
+                    "isGroup": isGroup
+                }
+            }
+        }
+        
+    except Exception as e:
+        logger.error(f"Error getting PI completion metric: {e}")
+        raise
+
+
+def get_pi_wip_metric(
+    pi_name: str,
+    team_names_list: List[str],
+    validated_name: str,
+    isGroup: bool,
+    conn: Connection
+) -> Dict:
+    """
+    Get PI Work in Progress metric with tier.
+    Uses existing fetch_wip_data_from_db function from pis_service.
+    """
+    from pis_service import fetch_wip_data_from_db
+    
+    # Fetch WIP data
+    wip_data = fetch_wip_data_from_db(
+        pi=pi_name,
+        team_names=team_names_list,
+        project=None,
+        conn=conn
+    )
+    
+    wip_count = wip_data['in_progress_epics']
+    total_epics = wip_data['total_epics']
+    wip_percentage = wip_data['in_progress_percentage']
+    
+    # Calculate tier using Epic WIP thresholds
+    wip_tier = get_epic_wip_tier(wip_percentage)
+    
+    # Build enhanced tooltip with tier explanation
+    tooltip = f"PI Work In Progress\n\nCurrent PI has {wip_count} epics in progress out of {total_epics} total epics ({wip_percentage:.1f}%)"
+    
+    # Add tier context to tooltip
+    if wip_percentage <= EPIC_WIP_HIGH_THRESHOLD:
+        tooltip += f"\n\nHealthy WIP level (≤ {EPIC_WIP_HIGH_THRESHOLD}% of PI). Good flow with manageable work in progress."
+    elif wip_percentage <= EPIC_WIP_MEDIUM_THRESHOLD:
+        tooltip += f"\n\nModerate WIP level ({EPIC_WIP_HIGH_THRESHOLD}-{EPIC_WIP_MEDIUM_THRESHOLD}% of PI). Consider focusing on completing epics before starting new ones."
+    else:
+        tooltip += f"\n\nHigh WIP level (> {EPIC_WIP_MEDIUM_THRESHOLD}% of PI). Too much work in progress may indicate bottlenecks or scope issues."
+    
+    return {
+        "metric_id": "pi_wip",
+        "label": "PI WIP",
+        "value": str(wip_count),
+        "tier_status": wip_tier,
+        "metric_type": "pi",
+        "description": f"Number of epics in progress ({wip_percentage:.1f}% of PI)",
+        "tooltip": tooltip,
+        "trend": None,  # No trend for now
+        "alternative_text": f"WIP%: {round(wip_percentage)}",
+        "action": {
+            "type": "report",
+            "report_ids": ["pi-burndown"],
+            "params": {
+                "pi": pi_name,
+                "team_name": validated_name,
+                "isGroup": isGroup
+            }
+        }
+    }
+
+
+def get_pi_inbound_dependencies_metric(
+    pi_name: str,
+    team_names_list: List[str],
+    validated_name: str,
+    isGroup: bool,
+    conn: Connection
+) -> Dict:
+    """Get PI Inbound Dependencies as KPI metric with bar chart."""
+    from database_pi import fetch_epic_inbound_dependency_data
+    
+    inbound_rows = fetch_epic_inbound_dependency_data(pi_name, team_names_list, conn)
+    
+    all_teams = []
+    total_all = 0
+    
+    for row in inbound_rows:
+        volume = int(row.get('volume_of_work_relied_upon', 0) or 0)
+        completed = int(row.get('completed_issues_dependent_count', 0) or 0)
+        uncompleted = volume - completed
+        
+        if uncompleted > 0:
+            total_all += uncompleted
+            all_teams.append({
+                'label': row.get('assignee_team'),
+                'value': uncompleted,
+                'completed': completed,
+                'total': volume
+            })
+    
+    all_teams.sort(key=lambda x: x['value'], reverse=True)
+    top_3 = all_teams[:3]
+    
+    tooltip_lines = ["PI Inbound Dependencies\n", "Top 3 teams:"]
+    for item in top_3:
+        tooltip_lines.append(
+            f"{item['label']}: {item['value']} uncompleted "
+            f"({item['completed']} completed, {item['total']} total)"
+        )
+    tooltip_lines.append(f"\nTotal across all teams: {total_all} dependencies")
+    
+    return {
+        "metric_id": "pi_inbound_dependencies",
+        "label": "PI Inbound Dependencies",
+        "value": "",
+        "tier_status": "",
+        "metric_type": "pi",
+        "description": f"Top 3 teams with uncompleted inbound dependencies in {pi_name}",
+        "tooltip": "\n".join(tooltip_lines),
+        "trend": None,
+        "chart_data": {
+            "type": "bar",
+            "items": top_3,
+            "total_count": total_all
+        },
+        "alternative_text": f"Total: {total_all}",
+        "action": {
+            "type": "report",
+            "report_ids": ["issues-epic-dependencies"],
+            "params": {
+                "pi": pi_name,
+                "team_name": validated_name,
+                "isGroup": isGroup
+            }
+        }
+    }
+
+
+def get_pi_outbound_dependencies_metric(
+    pi_name: str,
+    team_names_list: List[str],
+    validated_name: str,
+    isGroup: bool,
+    conn: Connection
+) -> Dict:
+    """Get PI Outbound Dependencies as KPI metric with bar chart."""
+    from database_pi import fetch_epic_outbound_dependency_data
+    
+    outbound_rows = fetch_epic_outbound_dependency_data(pi_name, team_names_list, conn)
+    
+    all_teams = []
+    total_all = 0
+    
+    for row in outbound_rows:
+        dependent_issues = int(row.get('number_of_dependent_issues', 0) or 0)
+        completed = int(row.get('completed_dependent_issues_count', 0) or 0)
+        uncompleted = dependent_issues - completed
+        
+        if uncompleted > 0:
+            total_all += uncompleted
+            all_teams.append({
+                'label': row.get('owned_team'),
+                'value': uncompleted,
+                'completed': completed,
+                'total': dependent_issues
+            })
+    
+    all_teams.sort(key=lambda x: x['value'], reverse=True)
+    top_3 = all_teams[:3]
+    
+    tooltip_lines = ["PI Outbound Dependencies\n", "Top 3 teams:"]
+    for item in top_3:
+        tooltip_lines.append(
+            f"{item['label']}: {item['value']} uncompleted "
+            f"({item['completed']} completed, {item['total']} total)"
+        )
+    tooltip_lines.append(f"\nTotal across all teams: {total_all} dependencies")
+    
+    return {
+        "metric_id": "pi_outbound_dependencies",
+        "label": "PI Outbound Dependencies",
+        "value": "",
+        "tier_status": "",
+        "metric_type": "pi",
+        "description": f"Top 3 teams with uncompleted outbound dependencies in {pi_name}",
+        "tooltip": "\n".join(tooltip_lines),
+        "trend": None,
+        "chart_data": {
+            "type": "bar",
+            "items": top_3,
+            "total_count": total_all
+        },
+        "alternative_text": f"Total: {total_all}",
+        "action": {
+            "type": "report",
+            "report_ids": ["issues-epic-dependencies"],
+            "params": {
+                "pi": pi_name,
+                "team_name": validated_name,
+                "isGroup": isGroup
+            }
+        }
+    }
+
+
+@team_metrics_router.get("/team-metrics/general-kpis")
+async def get_general_kpis(
+    scope: str = Query("sprint", description="Scope: 'sprint' or 'pi'"),
+    team_name: str = Query(..., description="Team name or group name (if isGroup=true)"),
+    isGroup: bool = Query(False, description="If true, team_name is treated as a group name"),
+    pi: Optional[str] = Query(None, description="PI name (required when scope='pi')"),
+    metrics: Optional[str] = Query(None, description="Comma-separated list of metric IDs. If omitted, returns all available metrics for the scope."),
+    sprint_count: int = Query(5, description="Number of sprints to average for velocity/predictability (default: 5, max: 20)", ge=1, le=20),
+    conn: Connection = Depends(get_db_connection)
+):
+    """
+    Get general KPIs (Sprint or PI) in GitHub service KPI format.
+    
+    Supports two scopes via 'scope' parameter:
+    - scope='sprint': Returns sprint-level metrics
+    - scope='pi': Returns PI-level metrics
+    
+    Sprint metrics (scope='sprint'):
+    - "sprint_velocity": Average sprint velocity (historical average over last N sprints)
+    - "cycle_time": Average story cycle time (30-day period calculation with tier and trend)
+    - "epic_cycle_time": Average epic cycle time (90-day/3-month period calculation with tier and trend)
+    - "sprint_predictability": Average sprint predictability (historical average over last N sprints)
+    - "sprint_wip": Sprint WIP (current active sprint)
+    - "sprint_completion": Sprint Completion (current active sprint)
+    - "sprint_days_left": Days Left in Sprint (current active sprint)
+    - "open_bugs": Number of open bugs with trend (created vs resolved over last 30 days)
+    
+    PI metrics (scope='pi'):
+    - "pi_wip": PI Work in Progress (current PI)
+    - "pi_completion": PI Completion (current PI)
+    - "epic_cycle_time": Average epic cycle time (90-day/3-month period)
+    
+    Parameters:
+    - scope: 'sprint' or 'pi' (default: 'sprint')
+    - team_name: Team name or group name (if isGroup=true)
+    - isGroup: If true, team_name is treated as a group name
+    - pi: PI name (required when scope='pi')
+    - metrics: Comma-separated list of metric IDs. If omitted, returns all metrics for scope.
+    - sprint_count: Number of sprints for velocity/predictability calculations (sprint scope only)
+    
+    Returns:
+        Array of MetricResponse objects
+    """
+    try:
+        # Validate scope parameter
+        if scope not in ["sprint", "pi"]:
+            raise HTTPException(
+                status_code=400,
+                detail="scope must be 'sprint' or 'pi'"
+            )
+        
+        # Validate PI parameter if scope is 'pi'
+        if scope == "pi" and not pi:
+            raise HTTPException(
+                status_code=400,
+                detail="pi parameter is required when scope='pi'"
+            )
+        
+        # Validate team_name and resolve to team_names_list
+        validated_name = None
+        if isGroup:
+            validated_name = validate_group_name(team_name)
+        else:
+            validated_name = validate_team_name(team_name)
+        
+        team_names_list = resolve_team_names_from_filter(validated_name, isGroup, conn)
+        
+        # Route based on scope
+        if scope == "sprint":
+            # Sprint metrics
+            validated_sprint_count = validate_sprint_count(sprint_count)
+            
+            available_metrics = ["sprint_velocity", "cycle_time", "epic_cycle_time", "sprint_predictability", "sprint_wip", "sprint_completion", "sprint_days_left", "open_bugs"]
+            requested_metrics = available_metrics  # Default: return all
+            
+            if metrics:
+                requested_metrics = [m.strip() for m in metrics.split(",")]
+                requested_metrics = [m for m in requested_metrics if m in available_metrics]
+            
+            result_metrics = []
+            for metric_id in requested_metrics:
+                try:
+                    if metric_id == "sprint_velocity":
+                        metric = get_velocity_metric(team_names_list, validated_sprint_count, validated_name, isGroup, conn)
+                    elif metric_id == "cycle_time":
+                        metric = get_cycle_time_metric(team_names_list, validated_name, isGroup, conn)
+                    elif metric_id == "epic_cycle_time":
+                        metric = get_epic_cycle_time_metric(team_names_list, validated_name, isGroup, conn)
+                    elif metric_id == "sprint_predictability":
+                        # Always use 6 sprints for predictability (3 current + 3 previous for trend)
+                        logger.info(f"Fetching predictability metric for team={validated_name}, isGroup={isGroup}")
+                        metric = get_predictability_metric(team_names_list, 6, validated_name, isGroup, conn)
+                        logger.info(f"Predictability metric result: {metric.get('value') if metric else 'None'}")
+                    elif metric_id == "sprint_wip":
+                        metric = get_wip_metric(team_names_list, validated_name, isGroup, conn)
+                    elif metric_id == "sprint_completion":
+                        metric = get_completion_metric(team_names_list, validated_name, isGroup, conn)
+                    elif metric_id == "sprint_days_left":
+                        metric = get_days_left_metric(team_names_list, validated_name, isGroup, conn)
+                    elif metric_id == "open_bugs":
+                        metric = get_open_bugs_metric(team_names_list, validated_name, isGroup, conn)
+                    else:
+                        continue
+                    
+                    if metric:
+                        result_metrics.append(metric)
+                except Exception as e:
+                    logger.error(f"Error getting metric {metric_id}: {e}")
+                    logger.exception(e)
+                    continue
+            
+            return result_metrics
+        
+        else:  # scope == "pi"
+            # PI metrics
+            validated_pi = validate_pi(pi)
+            
+            available_metrics = ["pi_wip", "pi_completion", "epic_cycle_time", "pi_inbound_dependencies", "pi_outbound_dependencies"]
+            requested_metrics = available_metrics  # Default: return all
+            
+            if metrics:
+                requested_metrics = [m.strip() for m in metrics.split(",")]
+                requested_metrics = [m for m in requested_metrics if m in available_metrics]
+            
+            result_metrics = []
+            for metric_id in requested_metrics:
+                try:
+                    if metric_id == "pi_wip":
+                        metric = get_pi_wip_metric(validated_pi, team_names_list, validated_name, isGroup, conn)
+                    elif metric_id == "pi_completion":
+                        metric = get_pi_completion_metric(validated_pi, team_names_list, validated_name, isGroup, conn)
+                    elif metric_id == "epic_cycle_time":
+                        metric = get_epic_cycle_time_metric(team_names_list, validated_name, isGroup, conn)
+                    elif metric_id == "pi_inbound_dependencies":
+                        metric = get_pi_inbound_dependencies_metric(validated_pi, team_names_list, validated_name, isGroup, conn)
+                    elif metric_id == "pi_outbound_dependencies":
+                        metric = get_pi_outbound_dependencies_metric(validated_pi, team_names_list, validated_name, isGroup, conn)
+                    else:
+                        continue
+                    
+                    if metric:
+                        result_metrics.append(metric)
+                except Exception as e:
+                    logger.error(f"Error getting PI metric {metric_id}: {e}")
+                    logger.exception(e)
+                    continue
+            
+            return result_metrics
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error in get_general_kpis: {e}")
+        logger.exception(e)
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to fetch sprint KPIs: {str(e)}"
         )
