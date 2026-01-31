@@ -1838,7 +1838,7 @@ def create_insight_types_table_if_not_exists(engine=None) -> bool:
                 create_table_sql = """
                 CREATE TABLE public.insight_types (
                     id SERIAL PRIMARY KEY,
-                    insight_type VARCHAR(255) NOT NULL,
+                    insight_type VARCHAR(255) NOT NULL UNIQUE,
                     insight_description TEXT,
                     insight_categories JSONB NOT NULL DEFAULT '[]'::jsonb,
                     report_ids JSONB NOT NULL DEFAULT '[]'::jsonb,
@@ -1852,7 +1852,6 @@ def create_insight_types_table_if_not_exists(engine=None) -> bool:
                     updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP NOT NULL
                 );
                 
-                CREATE INDEX idx_insight_types_type ON public.insight_types(insight_type);
                 CREATE INDEX idx_insight_types_categories ON public.insight_types USING GIN (insight_categories);
                 """
                 conn.execute(text(create_table_sql))
@@ -2081,37 +2080,37 @@ def insert_default_insight_types(engine=None):
                         print(f"Warning: insight_categories must be a list for '{insight_type}', skipping")
                         continue
                     
-                    # Check if it already exists to avoid duplicates
-                    check_sql = """
-                    SELECT EXISTS (
-                        SELECT 1 FROM public.insight_types 
-                        WHERE insight_type = :insight_type
-                    );
+                    # Insert using parameterized query with ON CONFLICT DO UPDATE (UPSERT)
+                    # Convert list to JSON string for JSONB column
+                    insert_sql = """
+                    INSERT INTO public.insight_types 
+                    (insight_type, insight_description, insight_categories, report_ids, active, pi_insight, team_insight, group_insight, sprint_insight, cron_config) 
+                    VALUES (:insight_type, :insight_description, CAST(:insight_categories AS jsonb), CAST(:report_ids AS jsonb), :active, :pi_insight, :team_insight, :group_insight, :sprint_insight, CAST(:cron_config AS jsonb))
+                    ON CONFLICT (insight_type) DO UPDATE SET
+                        insight_description = EXCLUDED.insight_description,
+                        insight_categories = EXCLUDED.insight_categories,
+                        report_ids = EXCLUDED.report_ids,
+                        active = EXCLUDED.active,
+                        pi_insight = EXCLUDED.pi_insight,
+                        team_insight = EXCLUDED.team_insight,
+                        group_insight = EXCLUDED.group_insight,
+                        sprint_insight = EXCLUDED.sprint_insight,
+                        cron_config = EXCLUDED.cron_config,
+                        updated_at = CURRENT_TIMESTAMP
                     """
-                    result = conn.execute(text(check_sql), {"insight_type": insight_type})
-                    exists = result.scalar()
-                    
-                    if not exists:
-                        # Insert using parameterized query with JSONB
-                        # Convert list to JSON string for JSONB column
-                        insert_sql = """
-                        INSERT INTO public.insight_types 
-                        (insight_type, insight_description, insight_categories, report_ids, active, pi_insight, team_insight, group_insight, sprint_insight, cron_config) 
-                        VALUES (:insight_type, :insight_description, CAST(:insight_categories AS jsonb), CAST(:report_ids AS jsonb), :active, :pi_insight, :team_insight, :group_insight, :sprint_insight, CAST(:cron_config AS jsonb))
-                        """
-                        conn.execute(text(insert_sql), {
-                            "insight_type": insight_type,
-                            "insight_description": insight_description,
-                            "insight_categories": json.dumps(insight_categories),
-                            "report_ids": json.dumps(report_ids),
-                            "active": active,
-                            "pi_insight": pi_insight,
-                            "team_insight": team_insight,
-                            "group_insight": group_insight,
-                            "sprint_insight": sprint_insight,
-                            "cron_config": json.dumps(cron_config) if cron_config else None
-                        })
-                        inserted_count += 1
+                    conn.execute(text(insert_sql), {
+                        "insight_type": insight_type,
+                        "insight_description": insight_description,
+                        "insight_categories": json.dumps(insight_categories),
+                        "report_ids": json.dumps(report_ids),
+                        "active": active,
+                        "pi_insight": pi_insight,
+                        "team_insight": team_insight,
+                        "group_insight": group_insight,
+                        "sprint_insight": sprint_insight,
+                        "cron_config": json.dumps(cron_config) if cron_config else None
+                    })
+                    inserted_count += 1
                 except Exception as e:
                     print(f"Error inserting insight type '{insight_type_data.get('insight_type', 'unknown')}': {e}")
                     continue
