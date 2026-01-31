@@ -182,7 +182,7 @@ async def get_available_sprints(
     Get sprints available for goal selection.
     
     When active_only=False (default):
-    - Returns active sprints OR upcoming sprints (starting within 14 days)
+    - Returns active sprints OR sprints ending within 21 days
     - Ordered by start_date (ascending)
     
     When active_only=True:
@@ -203,12 +203,12 @@ async def get_available_sprints(
         
         # Base condition: Always include active sprints
         # If active_only=True: Only active sprints
-        # If active_only=False: Active sprints OR upcoming sprints (within 14 days)
+        # If active_only=False: Active sprints OR sprints ending within 21 days
         if active_only:
             where_conditions.append("s.state = 'active'")
         else:
             where_conditions.append(
-                "(s.state = 'active' OR (s.start_date >= CURRENT_DATE AND s.start_date <= CURRENT_DATE + INTERVAL '14 days'))"
+                "(s.state = 'active' OR (s.end_date >= CURRENT_DATE AND s.end_date <= CURRENT_DATE + INTERVAL '21 days'))"
             )
         
         # Build JOIN condition - add team filter if provided
@@ -297,6 +297,105 @@ async def get_available_sprints(
         raise HTTPException(
             status_code=500,
             detail=f"Failed to fetch available sprints: {str(e)}"
+        )
+
+
+@goals_router.get("/goals/sprints/list")
+async def get_sprints_list(
+    team_name: Optional[str] = Query(None, description="Team name or group name (if isGroup=true)"),
+    isGroup: bool = Query(False, description="If true, team_name is treated as a group name"),
+    months_back: int = Query(2, description="Months back from today for start_date filter (default: 2)"),
+    conn: Connection = Depends(get_db_connection)
+):
+    """
+    Get list of sprints filtered by start_date >= (today - months_back months).
+    
+    Args:
+        team_name: Team name or group name (if isGroup=true)
+        isGroup: If true, team_name is treated as a group name
+        months_back: Number of months back from today for start_date filter (default: 2)
+    
+    Returns:
+        JSON response with sprints list (sprint_id, sprint_name, start_date, end_date)
+    """
+    try:
+        from database_team_metrics import resolve_team_names_from_filter
+        
+        # Resolve team names if team_name is provided
+        team_names_list = None
+        if team_name:
+            team_names_list = resolve_team_names_from_filter(team_name, isGroup, conn)
+        
+        # Build query with months_back filter
+        where_conditions = []
+        params = {}
+        
+        # Filter: start_date >= (today - months_back months)
+        # Note: months_back is validated as int, safe for string formatting
+        where_conditions.append(f"s.start_date >= CURRENT_DATE - INTERVAL '{months_back} months'")
+        
+        # Add team filter if provided
+        if team_names_list:
+            placeholders = ", ".join([f":team_name_{i}" for i in range(len(team_names_list))])
+            where_conditions.append(f"""
+                s.sprint_id IN (
+                    SELECT DISTINCT current_sprint_id 
+                    FROM {config.WORK_ITEMS_TABLE}
+                    WHERE team_name IN ({placeholders}) 
+                    AND current_sprint_id IS NOT NULL
+                    UNION
+                    SELECT DISTINCT unnest(sprint_ids) as sprint_id
+                    FROM {config.WORK_ITEMS_TABLE}
+                    WHERE team_name IN ({placeholders})
+                    AND sprint_ids IS NOT NULL
+                )
+            """)
+            for i, name in enumerate(team_names_list):
+                params[f"team_name_{i}"] = name
+        
+        where_clause = " AND ".join(where_conditions)
+        
+        query = text(f"""
+            SELECT DISTINCT
+                s.sprint_id,
+                s.name as sprint_name,
+                s.start_date,
+                s.end_date
+            FROM jira_sprints s
+            WHERE {where_clause}
+            ORDER BY s.start_date ASC
+        """)
+        
+        logger.info(f"Fetching sprints list: team_name={team_name}, isGroup={isGroup}, months_back={months_back}, teams={team_names_list}")
+        
+        result = conn.execute(query, params)
+        rows = result.fetchall()
+        
+        sprints = []
+        for row in rows:
+            sprints.append({
+                "sprint_id": row[0],
+                "sprint_name": row[1] or "",
+                "start_date": row[2].isoformat() if row[2] else None,
+                "end_date": row[3].isoformat() if row[3] else None
+            })
+        
+        return {
+            "success": True,
+            "data": {
+                "sprints": sprints,
+                "count": len(sprints)
+            },
+            "message": f"Retrieved {len(sprints)} sprints"
+        }
+    
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error fetching sprints list: {e}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to fetch sprints: {str(e)}"
         )
 
 
