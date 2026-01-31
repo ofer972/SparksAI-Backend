@@ -182,7 +182,7 @@ async def get_available_sprints(
     Get sprints available for goal selection.
     
     When active_only=False (default):
-    - Returns active sprints OR sprints ending within 21 days
+    - Returns active sprints OR sprints ending within 45 days of end date from today
     - Ordered by start_date (ascending)
     
     When active_only=True:
@@ -203,12 +203,12 @@ async def get_available_sprints(
         
         # Base condition: Always include active sprints
         # If active_only=True: Only active sprints
-        # If active_only=False: Active sprints OR sprints ending within 21 days
+        # If active_only=False: Active sprints OR sprints ending within 45 days of end date from today
         if active_only:
             where_conditions.append("s.state = 'active'")
         else:
             where_conditions.append(
-                "(s.state = 'active' OR (s.end_date >= CURRENT_DATE AND s.end_date <= CURRENT_DATE + INTERVAL '21 days'))"
+                "(s.state = 'active' OR (s.end_date >= CURRENT_DATE AND s.end_date <= CURRENT_DATE + INTERVAL '45 days'))"
             )
         
         # Build JOIN condition - add team filter if provided
