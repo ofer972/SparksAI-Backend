@@ -12,6 +12,8 @@ from typing import List, Dict, Any, Optional
 from datetime import datetime, timedelta, date
 import logging
 import re
+import os
+import httpx
 from database_connection import get_db_connection
 from database_reports import MIN_CYCLE_TIME_DAYS
 import config
@@ -2666,63 +2668,168 @@ async def get_release_history_info(
         )
 
 
-@issues_router.get("/issues/{issue_id}")
-async def get_issue(
-    issue_id: str,
+@issues_router.get("/issues/list")
+async def get_issues_list(
+    team_name: Optional[str] = Query(None, description="Team name or group name (if isGroup=true)"),
+    isGroup: bool = Query(False, description="If true, team_name is treated as a group name"),
+    pi: Optional[str] = Query(None, description="Filter by PI (quarter_pi)"),
+    issue_type: Optional[str] = Query(None, description="Filter by issue type"),
+    status: Optional[str] = Query(None, description="Filter by status"),
+    dependency: Optional[bool] = Query(None, description="Filter by dependency flag"),
+    flagged: Optional[bool] = Query(None, description="Filter by flagged flag"),
+    sprint_id: Optional[int] = Query(None, description="Filter by sprint ID (matches any sprint_ids array element)"),
+    limit: int = Query(500, description="Number of issues to return (default: 500, max: 1000)"),
     conn: Connection = Depends(get_db_connection)
 ):
     """
-    Get a single issue by ID.
-    
-    Returns all columns from the jira_issues table for the specified issue_id.
+    Get a list of issues with all fields from jira_issues table, with optional filtering.
     
     Args:
-        issue_id: The ID of the issue to retrieve (varchar(50))
+        team_name: Team name or group name (if isGroup=true)
+        isGroup: If true, team_name is treated as a group name
+        pi: Optional filter by PI (quarter_pi)
+        issue_type: Optional filter by issue type
+        status: Optional filter by status
+        dependency: Optional filter by dependency flag (true/false)
+        flagged: Optional filter by flagged flag (true/false)
+        sprint_id: Optional filter by sprint ID
+        limit: Number of issues to return (default: 500, max: 1000)
     
     Returns:
-        JSON response with single issue (all columns) or 404 if not found
+        JSON response with issues list (all fields) and count
     """
     try:
-        # SECURE: Parameterized query prevents SQL injection
+        from database_team_metrics import resolve_team_names_from_filter
+        
+        # Validate limit
+        validated_limit = validate_limit(limit)
+        
+        # Resolve team names if team_name is provided
+        team_names_list = None
+        if team_name:
+            team_names_list = resolve_team_names_from_filter(team_name, isGroup, conn)
+        
+        # Build WHERE clause conditions
+        where_conditions = []
+        params = {"limit": validated_limit}
+        
+        if issue_type:
+            where_conditions.append("issue_type = :issue_type")
+            params["issue_type"] = issue_type
+        
+        if status:
+            where_conditions.append("status = :status")
+            params["status"] = status
+        
+        if dependency is not None:
+            where_conditions.append("dependency = :dependency")
+            params["dependency"] = dependency
+        
+        if flagged is not None:
+            where_conditions.append("flagged = :flagged")
+            params["flagged"] = flagged
+        
+        if team_names_list:
+            placeholders = ", ".join([f":team_name_{i}" for i in range(len(team_names_list))])
+            where_conditions.append(f"team_name IN ({placeholders})")
+            for i, name in enumerate(team_names_list):
+                params[f"team_name_{i}"] = name
+        
+        if pi:
+            where_conditions.append("quarter_pi = :quarter_pi")
+            params["quarter_pi"] = pi
+        
+        if sprint_id is not None:
+            where_conditions.append(":sprint_id = ANY(sprint_ids)")
+            params["sprint_id"] = sprint_id
+        
+        # Build SQL query - select all columns
+        where_clause = " AND ".join(where_conditions) if where_conditions else "1=1"
+        
         query = text(f"""
             SELECT *
             FROM {config.WORK_ITEMS_TABLE}
-            WHERE issue_id = :issue_id
+            WHERE {where_clause}
+            ORDER BY issue_id DESC
+            LIMIT :limit
         """)
         
-        logger.info(f"Executing query to get issue with ID: {issue_id}")
+        logger.info(f"Executing query to get issues list with filters: team_name={team_name}, isGroup={isGroup}, pi={pi}, issue_type={issue_type}, status={status}, dependency={dependency}, flagged={flagged}, sprint_id={sprint_id}, limit={validated_limit}")
+        if team_names_list:
+            logger.info(f"Resolved team names: {team_names_list}")
         
-        result = conn.execute(query, {"issue_id": issue_id})
-        row = result.fetchone()
+        result = conn.execute(query, params)
+        rows = result.fetchall()
         
-        if not row:
-            raise HTTPException(
-                status_code=404,
-                detail=f"Issue with ID {issue_id} not found"
-            )
-        
-        # Convert row to dictionary - return all columns
-        issue_dict = dict(row._mapping)
+        # Convert rows to list of dictionaries (all columns)
+        issues = []
+        for row in rows:
+            issue_dict = dict(row._mapping)
+            issues.append(issue_dict)
         
         return {
             "success": True,
             "data": {
-                "issue": issue_dict
+                "issues": issues,
+                "count": len(issues)
             },
-            "message": f"Retrieved issue with ID {issue_id}"
+            "message": f"Retrieved {len(issues)} issues"
         }
     
     except HTTPException:
-        # Re-raise HTTP exceptions (like the 404 error above)
         raise
     except Exception as e:
-        logger.error(f"Error fetching issue {issue_id}: {e}")
+        logger.error(f"Error fetching issues list: {e}")
         raise HTTPException(
             status_code=500,
-            detail=f"Failed to fetch issue: {str(e)}"
+            detail=f"Failed to fetch issues: {str(e)}"
         )
 
 
+@issues_router.get("/issues/jira/{issue_key}")
+async def get_issue_from_jira(issue_key: str):
+    """
+    Get issue data directly from Jira API via ETL-Backend.
+    Returns raw JSON from Jira API including changelog.
+    
+    Args:
+        issue_key: Jira issue key (e.g., 'PROJ-123')
+    
+    Returns:
+        JSON response with raw Jira API data (including changelog)
+    """
+    etl_backend_url = os.getenv("ETL_BACKEND_URL", "http://localhost:8002")
+    endpoint = f"/api/v1/etl/jira/issues/{issue_key}"
+    
+    try:
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            response = await client.get(
+                f"{etl_backend_url}{endpoint}"
+            )
+            response.raise_for_status()
+            result_data = response.json()
+            
+            # Return the data as-is (pass-through)
+            return result_data
+            
+    except httpx.HTTPStatusError as e:
+        logger.error(f"ETL-Backend returned error: {e.response.status_code} - {e.response.text}")
+        raise HTTPException(
+            status_code=e.response.status_code,
+            detail=f"ETL-Backend error: {e.response.text}"
+        )
+    except httpx.RequestError as e:
+        logger.error(f"Failed to connect to ETL-Backend: {e}")
+        raise HTTPException(
+            status_code=503,
+            detail=f"Failed to connect to ETL-Backend: {str(e)}"
+        )
+    except Exception as e:
+        logger.error(f"Error fetching issue from Jira: {e}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to fetch issue from Jira: {str(e)}"
+        )
 async def get_cycle_time_with_issue_keys(
     request: Request,
     period_start: str = Query(..., description="Start date (YYYY-MM-DD) - filter by resolved_at >= period_start"),
