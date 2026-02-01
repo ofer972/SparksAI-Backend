@@ -1333,6 +1333,27 @@ async def call_llm_service(
             response = await client.post(llm_service_url, json=payload)
             response.raise_for_status()
             return response.json()
+    except httpx.HTTPStatusError as e:
+        # Check if LLM service returned 429 (rate limit)
+        if e.response.status_code == 429:
+            # Extract user-friendly message from LLM service response
+            error_detail = None
+            try:
+                error_json = e.response.json()
+                error_detail = error_json.get('detail', "The AI service is currently experiencing high demand. Please try again in a few moments.")
+            except:
+                error_detail = "The AI service is currently experiencing high demand. Please try again in a few moments."
+            logger.warning(f"Rate limit error from LLM service: {error_detail}")
+            raise HTTPException(
+                status_code=429,
+                detail=error_detail
+            )
+        # For other HTTP errors, return 502
+        logger.error(f"HTTP error calling LLM service: {e}")
+        raise HTTPException(
+            status_code=502,
+            detail=f"LLM service error: {str(e)}"
+        )
     except httpx.HTTPError as e:
         logger.error(f"HTTP error calling LLM service: {e}")
         raise HTTPException(
