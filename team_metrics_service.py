@@ -2756,7 +2756,7 @@ def get_pi_inbound_dependencies_metric(
         "alternative_text": f"Total: {total_all}",
         "action": {
             "type": "report",
-            "report_ids": ["issues-epic-dependencies"],
+            "report_ids": ["dependency-heatmap"],
             "params": {
                 "pi": pi_name,
                 "team_name": validated_name,
@@ -2823,7 +2823,7 @@ def get_pi_outbound_dependencies_metric(
         "alternative_text": f"Total: {total_all}",
         "action": {
             "type": "report",
-            "report_ids": ["issues-epic-dependencies"],
+            "report_ids": ["dependency-heatmap"],
             "params": {
                 "pi": pi_name,
                 "team_name": validated_name,
