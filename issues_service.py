@@ -13,7 +13,6 @@ from datetime import datetime, timedelta, date
 import logging
 import re
 import os
-import httpx
 from database_connection import get_db_connection
 from database_reports import MIN_CYCLE_TIME_DAYS
 import config
@@ -2786,50 +2785,6 @@ async def get_issues_list(
         )
 
 
-@issues_router.get("/issues/jira/{issue_key}")
-async def get_issue_from_jira(issue_key: str):
-    """
-    Get issue data directly from Jira API via ETL-Backend.
-    Returns raw JSON from Jira API including changelog.
-    
-    Args:
-        issue_key: Jira issue key (e.g., 'PROJ-123')
-    
-    Returns:
-        JSON response with raw Jira API data (including changelog)
-    """
-    etl_backend_url = os.getenv("ETL_BACKEND_URL", "http://localhost:8002")
-    endpoint = f"/api/v1/etl/jira/issues/{issue_key}"
-    
-    try:
-        async with httpx.AsyncClient(timeout=30.0) as client:
-            response = await client.get(
-                f"{etl_backend_url}{endpoint}"
-            )
-            response.raise_for_status()
-            result_data = response.json()
-            
-            # Return the data as-is (pass-through)
-            return result_data
-            
-    except httpx.HTTPStatusError as e:
-        logger.error(f"ETL-Backend returned error: {e.response.status_code} - {e.response.text}")
-        raise HTTPException(
-            status_code=e.response.status_code,
-            detail=f"ETL-Backend error: {e.response.text}"
-        )
-    except httpx.RequestError as e:
-        logger.error(f"Failed to connect to ETL-Backend: {e}")
-        raise HTTPException(
-            status_code=503,
-            detail=f"Failed to connect to ETL-Backend: {str(e)}"
-        )
-    except Exception as e:
-        logger.error(f"Error fetching issue from Jira: {e}")
-        raise HTTPException(
-            status_code=500,
-            detail=f"Failed to fetch issue from Jira: {str(e)}"
-        )
 async def get_cycle_time_with_issue_keys(
     request: Request,
     period_start: str = Query(..., description="Start date (YYYY-MM-DD) - filter by resolved_at >= period_start"),
