@@ -174,6 +174,34 @@ def invalidate_report_cache(report_id: Optional[str] = None) -> int:
     return 0
 
 
+def invalidate_report_definitions_cache() -> int:
+    """
+    Invalidate cached report definitions (the list of available reports).
+    
+    Returns:
+        Number of cache entries deleted
+    """
+    try:
+        client = get_redis_client()
+        if not client:
+            return 0
+        
+        pattern = "report:definitions:*"
+        keys = list(client.scan_iter(match=pattern))
+        
+        if keys:
+            deleted = client.delete(*keys)
+            logger.info(f"🗑️  Invalidated {deleted} report definitions cache entries")
+            return deleted
+        else:
+            logger.info("No report definitions cache entries found")
+            return 0
+    except Exception as e:
+        logger.warning(f"Report definitions cache invalidation error: {e}")
+    
+    return 0
+
+
 def get_report_cache_ttl(report_id: str) -> int:
     """
     Get the appropriate cache TTL for a report based on its type.

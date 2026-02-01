@@ -12,6 +12,18 @@ from datetime import datetime, date, timedelta
 
 logger = logging.getLogger(__name__)
 
+# Dependency Heatmap Status Thresholds
+HEATMAP_LOW_VOLUME_THRESHOLD = 2  # Low: < 2 uncompleted issues
+HEATMAP_MEDIUM_MAX_THRESHOLD = 5  # Medium: 2-5 uncompleted issues, Critical: > 5
+HEATMAP_ICON_THRESHOLD = 10  # Icon shown if total_issues > this value (red exclamation mark)
+
+# Status values
+HEATMAP_STATUS_COMPLETED = "completed"  # 100% completion
+HEATMAP_STATUS_LOW = "low"  # < 2 uncompleted
+HEATMAP_STATUS_MEDIUM = "medium"  # 2-5 uncompleted
+HEATMAP_STATUS_CRITICAL = "critical"  # > 5 uncompleted
+HEATMAP_STATUS_NONE = "none"  # No dependencies
+
 
 def reduce_pi_burndown_data(burndown_data: List[Dict[str, Any]], days_without_change_threshold: int = 5) -> List[Dict[str, Any]]:
     """
@@ -747,6 +759,352 @@ def fetch_epic_outbound_dependency_data(
 
     except Exception as e:
         logger.error(f"Error fetching epic outbound dependency data: {e}")
+        raise e
+
+
+def fetch_epic_dependency_heatmap_data(
+    pi: str,
+    team_names: Optional[List[str]] = None,
+    conn: Connection = None
+) -> List[Dict[str, Any]]:
+    """
+    Fetch epic dependency heatmap data using direct SQL query (not a view).
+    Shows team-to-team dependencies: owning_team (row) depends on blocking_team (column).
+    
+    Args:
+        pi: Required PI name filter (filters on quarter_pi_of_epic column)
+        team_names: Optional list of team names to filter by (filters on owning_team)
+        conn: Database connection from FastAPI dependency
+        
+    Returns:
+        List of dictionaries with:
+        - quarter_pi_of_epic: PI name
+        - owning_team: Team that owns the epic (row in heatmap)
+        - blocking_team: Team that the owning team depends on (column in heatmap)
+        - total_issues: Total number of dependent issues
+        - completed_issues: Number of completed dependent issues
+        - completion_percentage: Percentage of completed issues (0-100)
+    """
+    try:
+        # Build WHERE clause conditions
+        where_conditions = []
+        params = {}
+        
+        # Base conditions for dependency issues
+        where_conditions.append("issue_type::text <> 'Epic'::text")
+        where_conditions.append("parent_key IS NOT NULL")
+        where_conditions.append("dependency = TRUE")
+        where_conditions.append("team_name_of_epic IS NOT NULL")
+        where_conditions.append("team_name IS NOT NULL")
+        
+        # PI is now required
+        where_conditions.append("quarter_pi_of_epic = :pi")
+        params["pi"] = pi
+        
+        if team_names:
+            # Build parameterized IN clause for owning_team
+            placeholders = ", ".join([f":team_name_{i}" for i in range(len(team_names))])
+            where_conditions.append(f"team_name_of_epic IN ({placeholders})")
+            for i, name in enumerate(team_names):
+                params[f"team_name_{i}"] = name
+        
+        # Build SQL query with direct SQL (not a view)
+        where_clause = " AND ".join(where_conditions)
+        query = text(f"""
+            SELECT 
+                quarter_pi_of_epic,
+                team_name_of_epic AS owning_team,
+                team_name AS blocking_team,
+                COUNT(issue_key) AS total_issues,
+                COUNT(CASE WHEN status_category = 'Done' THEN 1 ELSE NULL END) AS completed_issues,
+                CASE 
+                    WHEN COUNT(issue_key) > 0 
+                    THEN ROUND(
+                        (COUNT(CASE WHEN status_category = 'Done' THEN 1 ELSE NULL END)::numeric / 
+                         COUNT(issue_key)::numeric * 100)::numeric, 
+                        2
+                    )
+                    ELSE 0 
+                END AS completion_percentage
+            FROM 
+                jira_issues
+            WHERE 
+                {where_clause}
+            GROUP BY 
+                quarter_pi_of_epic, 
+                team_name_of_epic,
+                team_name
+            ORDER BY 
+                quarter_pi_of_epic, 
+                team_name_of_epic,
+                team_name
+        """)
+        
+        logger.info(f"Executing direct SQL query for epic dependency heatmap: pi={pi}, team_names={team_names}")
+        
+        result = conn.execute(query, params)
+        rows = result.fetchall()
+        
+        # Convert rows to list of dictionaries and add color/icon logic
+        records = []
+        for row in rows:
+            row_dict = dict(row._mapping)
+            
+            # Format date/datetime fields if they exist
+            for key, value in row_dict.items():
+                if value is not None:
+                    if hasattr(value, 'strftime'):
+                        if 'date' in key.lower() or 'time' in key.lower():
+                            row_dict[key] = value.strftime('%Y-%m-%d %H:%M:%S')
+                        else:
+                            row_dict[key] = value.strftime('%Y-%m-%d')
+                    elif hasattr(value, 'isoformat'):
+                        row_dict[key] = value.isoformat()
+            
+            # Calculate uncompleted issues
+            total_issues = int(row_dict.get('total_issues', 0) or 0)
+            completed_issues = int(row_dict.get('completed_issues', 0) or 0)
+            uncompleted_issues = total_issues - completed_issues
+            completion_percentage = float(row_dict.get('completion_percentage', 0) or 0)
+            
+            # Determine status based on thresholds
+            if total_issues == 0:
+                status = HEATMAP_STATUS_NONE
+            elif completion_percentage >= 100.0:
+                status = HEATMAP_STATUS_COMPLETED
+            elif uncompleted_issues < HEATMAP_LOW_VOLUME_THRESHOLD:
+                status = HEATMAP_STATUS_LOW
+            elif uncompleted_issues <= HEATMAP_MEDIUM_MAX_THRESHOLD:
+                status = HEATMAP_STATUS_MEDIUM
+            else:
+                status = HEATMAP_STATUS_CRITICAL
+            
+            # Add status to response (replaces color field)
+            row_dict['status'] = status
+            
+            # Add icon indication (true if total_issues > threshold)
+            row_dict['icon_indication'] = total_issues > HEATMAP_ICON_THRESHOLD
+            
+            records.append(row_dict)
+        
+        logger.info(f"Retrieved {len(records)} epic dependency heatmap records")
+        return records
+        
+    except Exception as e:
+        logger.error(f"Error fetching epic dependency heatmap data: {e}")
+        raise e
+
+
+def build_dependency_heatmap_response(
+    pi: str,
+    team_names_list: Optional[List[str]] = None,
+    team_name: Optional[str] = None,
+    is_group: bool = False,
+    conn: Connection = None
+) -> Dict[str, Any]:
+    """
+    Build complete dependency heatmap response data structure.
+    Shared helper function used by both the endpoint and report fetcher.
+    
+    Args:
+        pi: Required PI name filter
+        team_names_list: Optional list of resolved team names (from resolve_team_names_from_filter)
+        team_name: Optional original team/group name (for response metadata)
+        is_group: Whether team_name is a group
+        conn: Database connection
+        
+    Returns:
+        Dictionary with:
+        - heatmap_data: List of dependency records
+        - owning_teams: Sorted list of owning teams
+        - blocking_teams: Sorted list of blocking teams
+        - epic_counts: Dictionary of epic counts per owning team
+        - count: Number of dependency relationships
+        - legend: List of legend items
+        - pi: PI name
+        - team_name/group_name: Team or group name (if provided)
+        - teams_in_group: List of teams in group (if group)
+    """
+    # Fetch heatmap data
+    heatmap_data = fetch_epic_dependency_heatmap_data(pi, team_names_list, conn)
+    
+    # Get unique teams for matrix construction
+    owning_teams = sorted(set(r['owning_team'] for r in heatmap_data if r.get('owning_team')))
+    blocking_teams = sorted(set(r['blocking_team'] for r in heatmap_data if r.get('blocking_team')))
+    
+    # Fetch epic counts for all owning teams
+    epic_counts = fetch_epic_counts_by_owning_team(pi, team_names_list, conn)
+    
+    # Build legend
+    legend_items = [
+        {
+            "status": HEATMAP_STATUS_COMPLETED,
+            "label": f"Completed (100% Complete)"
+        },
+        {
+            "status": HEATMAP_STATUS_LOW,
+            "label": f"Low (<{HEATMAP_LOW_VOLUME_THRESHOLD} uncompleted issues)"
+        },
+        {
+            "status": HEATMAP_STATUS_MEDIUM,
+            "label": f"Medium ({HEATMAP_LOW_VOLUME_THRESHOLD}-{HEATMAP_MEDIUM_MAX_THRESHOLD} uncompleted issues)"
+        },
+        {
+            "status": HEATMAP_STATUS_CRITICAL,
+            "label": f"Critical (>{HEATMAP_MEDIUM_MAX_THRESHOLD} uncompleted issues)"
+        },
+        {
+            "status": HEATMAP_STATUS_NONE,
+            "label": "No Dependencies"
+        },
+        {
+            "status": "icon",
+            "label": f"High Volume Icon (>{HEATMAP_ICON_THRESHOLD} total dependencies)"
+        }
+    ]
+    
+    # Build response data
+    response_data = {
+        "heatmap_data": heatmap_data,
+        "owning_teams": owning_teams,
+        "blocking_teams": blocking_teams,
+        "epic_counts": epic_counts,
+        "count": len(heatmap_data),
+        "legend": legend_items,
+        "pi": pi,
+    }
+    
+    # Add team/group information to response
+    if team_name:
+        if is_group:
+            response_data["group_name"] = team_name
+            response_data["teams_in_group"] = team_names_list
+        else:
+            response_data["team_name"] = team_name
+    else:
+        response_data["team_name"] = None
+    
+    return response_data
+
+
+def fetch_epic_counts_by_owning_team(
+    pi: str,
+    team_names: Optional[List[str]] = None,
+    conn: Connection = None
+) -> Dict[str, Dict[str, int]]:
+    """
+    Fetch epic counts (total and with dependencies) for each owning team.
+    Uses two separate queries:
+    1. Query epic records directly to get total epic count (includes epics with no children)
+    2. Query child issues to get count of epics with dependencies
+    
+    Args:
+        pi: Required PI name filter
+        team_names: Optional list of team names to filter by
+        conn: Database connection from FastAPI dependency
+        
+    Returns:
+        Dictionary mapping owning_team -> {"total_epics": int, "epics_with_dependencies": int}
+    """
+    try:
+        params = {"pi": pi}
+        
+        # Query 1: Count epics directly from epic records (includes epics with no children)
+        where_conditions1 = [
+            "issue_type = 'Epic'",
+            "quarter_pi = :pi"
+        ]
+        
+        if team_names:
+            placeholders1 = ", ".join([f":team_name_{i}" for i in range(len(team_names))])
+            where_conditions1.append(f"team_name IN ({placeholders1})")
+            for i, name in enumerate(team_names):
+                params[f"team_name_{i}"] = name
+        
+        where_clause1 = " AND ".join(where_conditions1)
+        query1 = text(f"""
+            SELECT 
+                team_name AS owning_team,
+                COUNT(*) AS total_epics
+            FROM 
+                jira_issues
+            WHERE 
+                {where_clause1}
+            GROUP BY 
+                team_name
+            ORDER BY 
+                team_name
+        """)
+        
+        logger.info(f"Executing query 1 to get total epic counts: pi={pi}, team_names={team_names}")
+        result1 = conn.execute(query1, params)
+        rows1 = result1.fetchall()
+        
+        # Initialize dictionary with total epic counts
+        epic_counts_dict = {}
+        for row in rows1:
+            owning_team = row[0]
+            total_epics = int(row[1]) if row[1] else 0
+            if owning_team:
+                epic_counts_dict[owning_team] = {
+                    "total_epics": total_epics,
+                    "epics_with_dependencies": 0  # Will be filled by query 2
+                }
+        
+        # Query 2: Count epics with dependencies from child issues
+        where_conditions2 = [
+            "issue_type::text <> 'Epic'::text",
+            "parent_key IS NOT NULL",
+            "team_name_of_epic IS NOT NULL",
+            "quarter_pi_of_epic = :pi",
+            "dependency = TRUE"
+        ]
+        
+        params2 = {"pi": pi}
+        if team_names:
+            placeholders2 = ", ".join([f":team_name_{i}" for i in range(len(team_names))])
+            where_conditions2.append(f"team_name_of_epic IN ({placeholders2})")
+            for i, name in enumerate(team_names):
+                params2[f"team_name_{i}"] = name
+        
+        where_clause2 = " AND ".join(where_conditions2)
+        query2 = text(f"""
+            SELECT 
+                team_name_of_epic AS owning_team,
+                COUNT(DISTINCT parent_key) AS epics_with_dependencies
+            FROM 
+                jira_issues
+            WHERE 
+                {where_clause2}
+            GROUP BY 
+                team_name_of_epic
+            ORDER BY 
+                team_name_of_epic
+        """)
+        
+        logger.info(f"Executing query 2 to get epics with dependencies: pi={pi}, team_names={team_names}")
+        result2 = conn.execute(query2, params2)
+        rows2 = result2.fetchall()
+        
+        # Update dictionary with epics_with_dependencies counts
+        for row in rows2:
+            owning_team = row[0]
+            epics_with_dependencies = int(row[1]) if row[1] else 0
+            if owning_team:
+                if owning_team in epic_counts_dict:
+                    epic_counts_dict[owning_team]["epics_with_dependencies"] = epics_with_dependencies
+                else:
+                    # Team has epics with dependencies but no total epics (shouldn't happen, but handle it)
+                    epic_counts_dict[owning_team] = {
+                        "total_epics": 0,
+                        "epics_with_dependencies": epics_with_dependencies
+                    }
+        
+        logger.info(f"Retrieved epic counts for {len(epic_counts_dict)} owning teams")
+        return epic_counts_dict
+        
+    except Exception as e:
+        logger.error(f"Error fetching epic counts by owning team: {e}")
         raise e
 
 

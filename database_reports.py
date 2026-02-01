@@ -2370,6 +2370,51 @@ def _fetch_cycle_time_over_time(filters: Dict[str, Any], conn: Connection) -> Re
     }
 
 
+def _fetch_dependency_heatmap(filters: Dict[str, Any], conn: Connection) -> ReportDataResult:
+    """
+    Fetch dependency heatmap data for reports.
+    Uses shared helper function from database_pi.
+    """
+    from database_team_metrics import resolve_team_names_from_filter
+    from database_pi import build_dependency_heatmap_response
+    
+    pi = _require_filter(filters, "pi")
+    team_name = (filters.get("team_name") or "").strip() or None
+    is_group = filters.get("isGroup", False)
+    
+    # Resolve team names (handles group to teams translation)
+    team_names_list = resolve_team_names_from_filter(team_name, is_group, conn)
+    
+    # Use shared helper function to build response data
+    response_data = build_dependency_heatmap_response(
+        pi=pi,
+        team_names_list=team_names_list,
+        team_name=team_name,
+        is_group=is_group,
+        conn=conn
+    )
+    
+    # Build meta for report system
+    meta = {
+        "pi": pi,
+        "isGroup": is_group,
+    }
+    
+    if team_name:
+        if is_group:
+            meta["group_name"] = team_name
+            meta["teams_in_group"] = team_names_list
+        else:
+            meta["team_name"] = team_name
+    else:
+        meta["team_name"] = None
+    
+    return {
+        "data": response_data,
+        "meta": meta,
+    }
+
+
 def _fetch_goal_progress(filters: Dict[str, Any], conn: Connection) -> ReportDataResult:
     """
     Fetch goal progress data for PI or Sprint goals.
@@ -2539,5 +2584,6 @@ _REPORT_DATA_FETCHERS: Dict[str, ReportDataFetcher] = {
     "wip_over_time": _fetch_wip_over_time,
     "cycle_time_over_time": _fetch_cycle_time_over_time,
     "goal_progress": _fetch_goal_progress,
+    "dependency_heatmap": _fetch_dependency_heatmap,
 }
 

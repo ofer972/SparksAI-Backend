@@ -347,6 +347,7 @@ async def get_report_instance(
     - pi-metrics-summary - Aggregates PI closure progress and WIP metrics for leadership review
     - pi-metrics-summary-by-team - Displays PI closure progress and WIP metrics broken down by team
     - pi-roadmap - PI Roadmap with Initiative/Epic Hierarchy (supports multiple PIs - see pi parameter documentation)
+    - dependency-heatmap - Visualize team-to-team dependencies in a heatmap format. Shows which teams are blocking others and completion status
     - active-sprint-summary - Displays active sprint summary by team with progress metrics and completion status
     - wip-over-time - Displays work in progress metrics over time by issue type
     - cycle-time-over-time - Displays average cycle time and issue count over time by issue type
@@ -507,27 +508,57 @@ async def invalidate_cache(report_id: Optional[str] = Query(None)):
     
     Args:
         report_id: If provided, clears only that report's caches.
-                   If None, clears all report caches.
+                   If None, clears all report caches (including definitions).
     
     Returns:
         Success status and count of invalidated entries.
     
     Examples:
         - POST /reports/cache/invalidate?report_id=team-sprint-burndown
-        - POST /reports/cache/invalidate (clears all)
+        - POST /reports/cache/invalidate (clears all, including definitions)
     """
+    from cache_utils import invalidate_report_cache, invalidate_report_definitions_cache
+    
     count = invalidate_report_cache(report_id)
+    
+    # If clearing all reports, also clear definitions cache
+    if not report_id:
+        definitions_count = invalidate_report_definitions_cache()
+        count += definitions_count
     
     if report_id:
         message = f"Invalidated {count} cache entries for report '{report_id}'"
     else:
-        message = f"Invalidated {count} cache entries for all reports"
+        message = f"Invalidated {count} cache entries for all reports (including definitions)"
     
     return {
         "success": True,
         "message": message,
         "count": count,
         "report_id": report_id,
+    }
+
+
+@reports_router.post("/reports/cache/invalidate-definitions")
+async def invalidate_definitions_cache():
+    """
+    Invalidate cached report definitions (the list of available reports).
+    Use this when you've added/removed reports and need to see them immediately.
+    
+    Returns:
+        Success status and count of invalidated entries.
+    
+    Example:
+        POST /reports/cache/invalidate-definitions
+    """
+    from cache_utils import invalidate_report_definitions_cache
+    
+    count = invalidate_report_definitions_cache()
+    
+    return {
+        "success": True,
+        "message": f"Invalidated {count} report definitions cache entries",
+        "count": count,
     }
 
 

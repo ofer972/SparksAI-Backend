@@ -1936,6 +1936,315 @@ async def get_active_epic_dependencies(
         )
 
 
+@issues_router.get("/issues/dependency-heatmap")
+async def get_dependency_heatmap(
+    pi: str = Query(..., description="PI name filter (quarter_pi_of_epic) - REQUIRED"),
+    team_name: Optional[str] = Query(None, description="Team name or group name (if isGroup=true)"),
+    isGroup: bool = Query(False, description="If true, team_name is treated as a group name"),
+    conn: Connection = Depends(get_db_connection)
+):
+    """
+    Get dependency heatmap data showing team-to-team dependencies.
+    
+    This endpoint returns data for a heatmap visualization where:
+    - Rows represent "owning teams" (teams that own epics)
+    - Columns represent "blocking teams" (teams that the owning teams depend on)
+    - Cell values show total issues, completed issues, and completion percentage
+    
+    Args:
+        pi: Required PI name filter
+        team_name: Optional team name or group name (if isGroup=true)
+        isGroup: If true, team_name is treated as a group name
+    
+    Returns:
+        JSON response with heatmap data including:
+        - heatmap_data: List of team-to-team dependency records
+        - owning_teams: Sorted list of unique owning teams
+        - blocking_teams: Sorted list of unique blocking teams
+    """
+    try:
+        from database_team_metrics import resolve_team_names_from_filter
+        from database_pi import build_dependency_heatmap_response
+        
+        # Resolve team names (handles group to teams translation)
+        team_names_list = resolve_team_names_from_filter(team_name, isGroup, conn)
+        
+        logger.info(f"Fetching dependency heatmap data")
+        logger.info(f"Parameters: pi={pi}, team_name={team_name}, isGroup={isGroup}")
+        if team_names_list:
+            logger.info(f"Resolved team names: {team_names_list}")
+        
+        # Use shared helper function to build response data
+        response_data = build_dependency_heatmap_response(
+            pi=pi,
+            team_names_list=team_names_list,
+            team_name=team_name,
+            is_group=isGroup,
+            conn=conn
+        )
+        
+        return {
+            "success": True,
+            "data": response_data,
+            "message": f"Retrieved {len(heatmap_data)} dependency relationships"
+        }
+    
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error fetching dependency heatmap: {e}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to fetch dependency heatmap: {str(e)}"
+        )
+
+
+@issues_router.get("/issues/dependency-heatmap-stories")
+async def get_dependency_heatmap_stories(
+    pi: str = Query(..., description="PI name filter (quarter_pi_of_epic) - REQUIRED"),
+    owning_team: str = Query(..., description="Owning team name (team_name_of_epic) - REQUIRED"),
+    blocking_team: Optional[str] = Query(None, description="Blocking team name (team_name) - OPTIONAL. If provided, filters by specific blocking team. If not provided, returns all blocking stories for the owning team."),
+    conn: Connection = Depends(get_db_connection)
+):
+    """
+    Get dependent stories/issues for a dependency heatmap.
+    
+    Returns the list of stories/issues that are dependent, filtered by:
+    - PI (quarter_pi_of_epic)
+    - Owning team (team_name_of_epic) - the team that owns the epic
+    - Blocking team (team_name) - OPTIONAL. If provided, filters by specific blocking team. If not provided, returns all blocking stories.
+    
+    Args:
+        pi: Required PI name filter
+        owning_team: Required owning team name (team that owns the epic)
+        blocking_team: Optional blocking team name. If provided, returns stories for specific owning_team → blocking_team relationship. If not provided, returns all stories where owning_team is blocked by any team.
+    
+    Returns:
+        JSON response with list of dependent stories/issues including:
+        - issue_key: Story/issue key
+        - summary: Story/issue summary
+        - issue_type: Issue type (Story, Task, etc.)
+        - team_name: Team name of the dependent issue
+        - status_category: Status category
+        - parent_key: Epic key
+        - parent_name: Epic name/summary
+    """
+    try:
+        # Build WHERE clause conditions
+        where_conditions = []
+        params = {}
+        
+        # Required parameters
+        where_conditions.append("ji.quarter_pi_of_epic = :pi")
+        params["pi"] = pi
+        
+        where_conditions.append("ji.team_name_of_epic = :owning_team")
+        params["owning_team"] = owning_team
+        
+        # Optional blocking team filter
+        if blocking_team:
+            where_conditions.append("ji.team_name = :blocking_team")
+            params["blocking_team"] = blocking_team
+        
+        # Base conditions for dependency issues
+        where_conditions.append("ji.dependency = TRUE")
+        where_conditions.append("ji.issue_type::text <> 'Epic'::text")
+        where_conditions.append("ji.parent_key IS NOT NULL")
+        where_conditions.append("ji.team_name_of_epic IS NOT NULL")
+        where_conditions.append("ji.team_name IS NOT NULL")
+        
+        # Build SQL query
+        where_clause = " AND ".join(where_conditions)
+        query = text(f"""
+            SELECT 
+                ji.issue_key,
+                ji.summary,
+                ji.issue_type,
+                ji.team_name,
+                ji.status_category,
+                ji.parent_key,
+                epic.summary AS parent_name
+            FROM 
+                jira_issues ji
+            LEFT JOIN
+                jira_issues epic ON ji.parent_key = epic.issue_key
+            WHERE 
+                {where_clause}
+            ORDER BY
+                ji.parent_key,
+                ji.issue_key
+        """)
+        
+        logger.info(f"Executing query for dependency heatmap stories: pi={pi}, owning_team={owning_team}, blocking_team={blocking_team or 'ALL'}")
+        
+        result = conn.execute(query, params)
+        rows = result.fetchall()
+        
+        # Convert rows to list of dictionaries
+        stories = []
+        for row in rows:
+            row_dict = dict(row._mapping)
+            
+            # Format any date/datetime fields if they exist
+            for key, value in row_dict.items():
+                if value is not None:
+                    if hasattr(value, 'strftime'):
+                        if 'date' in key.lower() or 'time' in key.lower():
+                            row_dict[key] = value.strftime('%Y-%m-%d %H:%M:%S')
+                        else:
+                            row_dict[key] = value.strftime('%Y-%m-%d')
+                    elif hasattr(value, 'isoformat'):
+                        row_dict[key] = value.isoformat()
+            
+            stories.append(row_dict)
+        
+        logger.info(f"Retrieved {len(stories)} dependent stories for heatmap cell")
+        
+        return {
+            "success": True,
+            "data": {
+                "issues": stories
+            },
+            "message": f"Retrieved {len(stories)} dependent stories"
+        }
+    
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error fetching dependency heatmap stories: {e}", exc_info=True)
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to fetch dependency heatmap stories: {str(e)}"
+        )
+
+
+@issues_router.get("/issues/epics-by-pi-summary")
+async def get_epics_by_pi_summary(
+    pi: str = Query(..., description="PI name (quarter_pi) to filter epics"),
+    team_name: Optional[str] = Query(None, description="Team name or group name (if isGroup=true)"),
+    isGroup: bool = Query(False, description="If true, team_name is treated as a group name"),
+    conn: Connection = Depends(get_db_connection)
+):
+    """
+    Get summary information about EPICs in a specific PI.
+    Returns only essential fields: epic_key, epic_name, epic_status_category, and dependent_issues_total.
+    Results are sorted by dependent_issues_total descending (epics with most dependencies first).
+    
+    Args:
+        pi: PI name (quarter_pi) to filter epics (required)
+        team_name: Optional team name or group name (if isGroup=true)
+        isGroup: If true, team_name is treated as a group name
+    
+    Returns:
+        JSON response with list of epics sorted by dependency count (descending)
+    """
+    try:
+        from database_team_metrics import resolve_team_names_from_filter
+        
+        # Resolve team names (handles group to teams translation)
+        team_names_list = resolve_team_names_from_filter(team_name, isGroup, conn)
+        
+        # Query 1: Get all epics for the PI
+        where_conditions = [
+            "issue_type = 'Epic'",
+            "quarter_pi = :pi"
+        ]
+        params = {"pi": pi}
+        
+        # Add team filter if provided
+        if team_names_list:
+            placeholders = ", ".join([f":team_name_{i}" for i in range(len(team_names_list))])
+            where_conditions.append(f"team_name IN ({placeholders})")
+            for i, name in enumerate(team_names_list):
+                params[f"team_name_{i}"] = name
+        
+        where_clause = " AND ".join(where_conditions)
+        query1 = text(f"""
+            SELECT 
+                issue_key as epic_key,
+                summary as epic_name,
+                status_category as epic_status_category
+            FROM {config.WORK_ITEMS_TABLE}
+            WHERE {where_clause}
+        """)
+        
+        logger.info(f"Executing query to get epics summary for PI: {pi}, team_name={team_name}, isGroup={isGroup}")
+        
+        result1 = conn.execute(query1, params)
+        epic_rows = result1.fetchall()
+        
+        if not epic_rows:
+            return {
+                "success": True,
+                "data": {
+                    "epics": [],
+                    "count": 0
+                },
+                "message": f"No epics found for PI {pi}"
+            }
+        
+        # Extract epic keys for dependency query
+        epic_keys = [row[0] for row in epic_rows]
+        epic_data = {}
+        
+        # Initialize epic data structure
+        for row in epic_rows:
+            epic_key = row[0]
+            epic_data[epic_key] = {
+                "epic_key": epic_key,
+                "epic_name": row[1],
+                "epic_status_category": row[2],
+                "dependent_issues_total": 0  # Will be filled by query 2
+            }
+        
+        # Query 2: Get dependency counts per epic
+        if epic_keys:
+            placeholders2 = ", ".join([f":epic_key_{i}" for i in range(len(epic_keys))])
+            params2 = {}
+            for i, key in enumerate(epic_keys):
+                params2[f"epic_key_{i}"] = key
+            
+            query2 = text(f"""
+                SELECT 
+                    parent_key as epic_key,
+                    COUNT(*) as dependent_issues_total
+                FROM {config.WORK_ITEMS_TABLE}
+                WHERE parent_key IN ({placeholders2})
+                  AND dependency = TRUE
+                GROUP BY parent_key
+            """)
+            
+            result2 = conn.execute(query2, params2)
+            dependency_rows = result2.fetchall()
+            
+            # Update epic data with dependency counts
+            for row in dependency_rows:
+                epic_key = row[0]
+                dependent_count = int(row[1]) if row[1] else 0
+                if epic_key in epic_data:
+                    epic_data[epic_key]["dependent_issues_total"] = dependent_count
+        
+        # Convert to list and sort by dependent_issues_total descending
+        epics_list = list(epic_data.values())
+        epics_list.sort(key=lambda x: x["dependent_issues_total"], reverse=True)
+        
+        return {
+            "success": True,
+            "data": {
+                "epics": epics_list,
+                "count": len(epics_list)
+            },
+            "message": f"Retrieved {len(epics_list)} epics for PI {pi}"
+        }
+    
+    except Exception as e:
+        logger.error(f"Error fetching epics by PI summary: {e}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to fetch epics by PI summary: {str(e)}"
+        )
+
+
 @issues_router.get("/issues/active-sprint-stories-by-epic")
 async def get_active_sprint_stories_by_epic(
     team_name: Optional[str] = Query(None, description="Team name or group name (if isGroup=true)"),

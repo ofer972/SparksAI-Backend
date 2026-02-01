@@ -672,6 +672,28 @@ DEFAULT_REPORT_DEFINITIONS = [
             "allowed_views": ["pi-dashboard", "team-dashboard"]
         }
     },
+    {
+        "report_id": "dependency-heatmap",
+        "report_name": "Dependency Heatmap",
+        "chart_type": "heatmap",
+        "data_source": "dependency_heatmap",
+        "description": "Visualize team-to-team dependencies in a heatmap format. Shows which teams are blocking others and completion status.",
+        "default_filters": {
+            "pi": None,
+            "team_name": None,
+            "isGroup": False
+        },
+        "meta_schema": {
+            "required_filters": ["pi"],
+            "optional_filters": ["team_name", "isGroup"],
+            "parameters": {
+                "pi": {"type": "string", "description": "PI name filter (required)"},
+                "team_name": {"type": "string", "description": "Team identifier or group name (if isGroup=true)"},
+                "isGroup": {"type": "boolean", "description": "If true, team_name is treated as a group name"}
+            },
+            "allowed_views": ["pi-dashboard", "team-dashboard"]
+        }
+    },
     # DORA Metrics Reports
     {
         "report_id": "dora-deployment-frequency",
