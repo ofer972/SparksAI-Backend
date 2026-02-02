@@ -57,7 +57,7 @@ DEFAULT_INSIGHT_TYPES = [
     {
         "insight_type": "Daily Progress",
         "insight_description": "Analysis of team progress in the sprint",
-        "insight_categories": ["Sprint Events"],
+        "insight_categories": ["Sprint Events", "Sprint Status"],
         "report_ids": ["team-sprint-burndown", "goal-progress"],
         "active": True,
         "pi_insight": False,
@@ -129,7 +129,7 @@ DEFAULT_INSIGHT_TYPES = [
     {
         "insight_type": "Group Sprint Dependency",
         "insight_description": "Current sprint - cross-team dependency analysis",
-        "insight_categories": ["Sprint Events"],
+        "insight_categories": ["Sprint Events", "Sprint Status"],
         "report_ids": ["dependency-heatmap", "issues-epics-hierarchy"],
         "active": True,
         "pi_insight": False,
