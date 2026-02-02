@@ -16,7 +16,39 @@ import config
 logger = logging.getLogger(__name__)
 
 # Import priority helper from config (no circular dependency)
-from config import build_priority_case_sql, PRIORITY_COLOR_MAP
+from config import build_priority_case_sql, PRIORITY_COLOR_MAP, PRIORITIES
+
+
+def normalize_priority(priority: str) -> Optional[str]:
+    """Normalize priority value to standard capitalization (Critical, Warning, OK).
+    
+    Returns None if priority is not one of the known values.
+    """
+    if not priority:
+        return None
+    
+    priority_lower = priority.lower().strip()
+    
+    # Map variations to standard values
+    priority_map = {
+        "critical": "Critical",
+        "warning": "Warning",
+        "ok": "OK",
+        "o.k.": "OK",
+        "o k": "OK",
+    }
+    
+    normalized = priority_map.get(priority_lower)
+    if normalized:
+        return normalized
+    
+    # If exact match with valid priority name, return as-is
+    valid_names = {p["name"] for p in PRIORITIES}
+    if priority in valid_names:
+        return priority
+    
+    # Return None for unknown values (caller must handle)
+    return None
 
 
 def add_priority_color_to_card(card: Dict[str, Any]) -> None:
@@ -1034,6 +1066,19 @@ def create_ai_card(data: Dict[str, Any], conn: Connection = None) -> Dict[str, A
         for col in nullable_columns:
             if col in filtered and filtered[col] == "":
                 filtered[col] = None
+        
+        # Normalize priority to ensure consistent capitalization
+        if "priority" in filtered:
+            if filtered["priority"] is None:
+                # Default to "None" if agent sent None (LLM didn't provide CriticalityDetermination)
+                filtered["priority"] = "None"
+            else:
+                normalized_priority = normalize_priority(filtered["priority"])
+                if normalized_priority is None:
+                    # Default to "None" for invalid priority values
+                    filtered["priority"] = "None"
+                else:
+                    filtered["priority"] = normalized_priority
 
         columns_sql = ", ".join(filtered.keys())
         values_sql = ", ".join([f":{k}" for k in filtered.keys()])
@@ -1072,6 +1117,19 @@ def update_ai_card_by_id(card_id: int, updates: Dict[str, Any], conn: Connection
         for col in nullable_columns:
             if col in filtered and filtered[col] == "":
                 filtered[col] = None
+        
+        # Normalize priority to ensure consistent capitalization
+        if "priority" in filtered:
+            if filtered["priority"] is None:
+                # Default to "None" if agent sent None (LLM didn't provide CriticalityDetermination)
+                filtered["priority"] = "None"
+            else:
+                normalized_priority = normalize_priority(filtered["priority"])
+                if normalized_priority is None:
+                    # Default to "None" for invalid priority values
+                    filtered["priority"] = "None"
+                else:
+                    filtered["priority"] = normalized_priority
 
         set_clauses = ", ".join([f"{k} = :{k}" for k in filtered.keys()])
         params = dict(filtered)
