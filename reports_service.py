@@ -132,6 +132,10 @@ async def forward_to_github_service(report_id: str, filters: Dict[str, Any], def
         params["pr_state"] = filters["pr_state"]
     if filters.get("lookback_days"):
         params["lookback_days"] = filters["lookback_days"]
+    if filters.get("team_name"):
+        params["team_name"] = filters["team_name"]
+    if filters.get("isGroup") is not None:
+        params["isGroup"] = str(filters["isGroup"]).lower() if filters["isGroup"] else "false"
     
     try:
         async with httpx.AsyncClient(timeout=30.0) as client:

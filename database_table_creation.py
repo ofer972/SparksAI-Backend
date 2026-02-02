@@ -797,11 +797,13 @@ DEFAULT_REPORT_DEFINITIONS = [
         },
         "meta_schema": {
             "required_filters": [],
-            "optional_filters": ["github_repo_ids", "months", "pr_state"],
+            "optional_filters": ["github_repo_ids", "months", "pr_state", "team_name", "isGroup"],
             "parameters": {
                 "github_repo_ids": {"type": "array", "description": "Comma-separated GitHub repository IDs (empty = all)"},
                 "months": {"type": "integer", "description": "Number of months to look back (1, 2, 3, 4, 6, 9, 12)", "default": 1},
-                "pr_state": {"type": "string", "description": "PR state filter (all, open, closed)", "default": "all"}
+                "pr_state": {"type": "string", "description": "PR state filter (all, open, closed)", "default": "all"},
+                "team_name": {"type": "string", "description": "Team name or group name (if isGroup=true)"},
+                "isGroup": {"type": "boolean", "description": "If true, team_name is treated as a group name"}
             },
             "allowed_views": ["github-dashboard"]
         }
@@ -819,11 +821,13 @@ DEFAULT_REPORT_DEFINITIONS = [
         },
         "meta_schema": {
             "required_filters": [],
-            "optional_filters": ["github_repo_ids", "months", "pr_state"],
+            "optional_filters": ["github_repo_ids", "months", "pr_state", "team_name", "isGroup"],
             "parameters": {
                 "github_repo_ids": {"type": "array", "description": "Comma-separated GitHub repository IDs (empty = all)"},
                 "months": {"type": "integer", "description": "Number of months to look back (1, 2, 3, 4, 6, 9, 12)", "default": 1},
-                "pr_state": {"type": "string", "description": "PR state filter (all, open, closed)", "default": "all"}
+                "pr_state": {"type": "string", "description": "PR state filter (all, open, closed)", "default": "all"},
+                "team_name": {"type": "string", "description": "Team name or group name (if isGroup=true)"},
+                "isGroup": {"type": "boolean", "description": "If true, team_name is treated as a group name"}
             },
             "allowed_views": ["github-dashboard"]
         }
@@ -841,11 +845,13 @@ DEFAULT_REPORT_DEFINITIONS = [
         },
         "meta_schema": {
             "required_filters": [],
-            "optional_filters": ["github_repo_ids", "months", "pr_state"],
+            "optional_filters": ["github_repo_ids", "months", "pr_state", "team_name", "isGroup"],
             "parameters": {
                 "github_repo_ids": {"type": "array", "description": "Comma-separated GitHub repository IDs (empty = all)"},
                 "months": {"type": "integer", "description": "Number of months to look back (1, 2, 3, 4, 6, 9, 12)", "default": 1},
-                "pr_state": {"type": "string", "description": "PR state filter (all, open, closed)", "default": "all"}
+                "pr_state": {"type": "string", "description": "PR state filter (all, open, closed)", "default": "all"},
+                "team_name": {"type": "string", "description": "Team name or group name (if isGroup=true)"},
+                "isGroup": {"type": "boolean", "description": "If true, team_name is treated as a group name"}
             },
             "allowed_views": ["github-dashboard"]
         }
@@ -862,10 +868,12 @@ DEFAULT_REPORT_DEFINITIONS = [
         },
         "meta_schema": {
             "required_filters": [],
-            "optional_filters": ["github_repo_ids", "months"],
+            "optional_filters": ["github_repo_ids", "months", "team_name", "isGroup"],
             "parameters": {
                 "github_repo_ids": {"type": "array", "description": "Comma-separated GitHub repository IDs (empty = all)"},
-                "months": {"type": "integer", "description": "Number of months to look back (1, 2, 3, 4, 6, 9, 12)", "default": 1}
+                "months": {"type": "integer", "description": "Number of months to look back (1, 2, 3, 4, 6, 9, 12)", "default": 1},
+                "team_name": {"type": "string", "description": "Team name or group name (if isGroup=true)"},
+                "isGroup": {"type": "boolean", "description": "If true, team_name is treated as a group name"}
             },
             "allowed_views": ["github-dashboard"]
         }
