@@ -459,6 +459,7 @@ def validate_limit(limit: int) -> int:
 
 @issues_router.get("/issues")
 async def get_issues(
+    issue_key: Optional[str] = Query(None, description="Filter by issue key (exact match)"),
     issue_type: Optional[str] = Query(None, description="Filter by issue type"),
     status_category: Optional[str] = Query(None, description="Filter by status category"),
     team_name: Optional[str] = Query(None, description="Team name or group name (if isGroup=true)"),
@@ -471,7 +472,7 @@ async def get_issues(
     """
     Get a collection of issues with optional filtering.
     
-    Returns issues with fields: issue_key, issue_type, summary, description, status_category, flagged, dependency, parent_key.
+    Returns issues with fields: issue_key, issue_type, summary, description, status_category, flagged, dependency, parent_key, team_name.
     
     Args:
         issue_type: Optional filter by issue type
@@ -500,6 +501,10 @@ async def get_issues(
         where_conditions = []
         params = {"limit": validated_limit}
         
+        if issue_key:
+            where_conditions.append("issue_key = :issue_key")
+            params["issue_key"] = issue_key
+
         if issue_type:
             where_conditions.append("issue_type = :issue_type")
             params["issue_type"] = issue_type
@@ -535,7 +540,8 @@ async def get_issues(
                 status_category,
                 flagged,
                 dependency,
-                parent_key
+                parent_key,
+                team_name
             FROM {config.WORK_ITEMS_TABLE}
             WHERE {where_clause}
             ORDER BY issue_id DESC
@@ -560,7 +566,8 @@ async def get_issues(
                 "status_category": row[4],
                 "flagged": row[5],
                 "dependency": row[6],
-                "parent_key": row[7]
+                "parent_key": row[7],
+                "team_name": row[8] or ""
             }
             issues.append(issue_dict)
         
