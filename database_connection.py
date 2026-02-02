@@ -73,7 +73,18 @@ def receive_after_cursor_execute(conn, cursor, statement, parameters, context, e
         total_time = time.time() - context._query_start_time
         # Format SQL with proper indentation for readability
         formatted_query = statement.replace('\n', '\n            ')
-        logger.info(f"SQL:\n            {formatted_query}\n            - EXECUTE (Duration: {total_time:.3f}s)")
+        
+        # Format parameters for logging
+        params_str = "None"
+        if parameters:
+            if isinstance(parameters, dict):
+                params_str = ', '.join([f"{k}={repr(v)}" for k, v in parameters.items()])
+            elif isinstance(parameters, (list, tuple)):
+                params_str = ', '.join([repr(p) for p in parameters])
+            else:
+                params_str = repr(parameters)
+        
+        logger.info(f"SQL:\n            {formatted_query}\n            Parameters: {params_str}\n            - EXECUTE (Duration: {total_time:.3f}s)")
 
 
 def get_connection_string() -> Optional[str]:
