@@ -851,14 +851,15 @@ async def get_avg_sprint_metrics(
         
         # Calculate averages from all rows
         # Velocity: sum all issues across all teams per sprint, then average across sprints
-        # Group by sprint_id to handle duplicates and exclude sprints with 0 completed issues
+        # Group by sprint_id to handle duplicates and exclude sprints with 0 total planned issues
         from collections import defaultdict
         sprint_totals = defaultdict(int)
         for row in raw_data:
             sprint_id = row.get('out_sprint_id')
             issues_completed = row.get('issues_completed_count', 0) or 0
-            # Only include sprints with at least 1 completed issue
-            if sprint_id is not None and issues_completed > 0:
+            issues_planned = row.get('issues_in_sprint_count', 0) or 0
+            # Only include sprints with at least 1 planned issue (issues_in_sprint_count > 0)
+            if sprint_id is not None and issues_planned > 0:
                 sprint_totals[sprint_id] += issues_completed
         
         # Calculate average: sum all issues across all sprints, divide by number of unique sprints
@@ -1391,8 +1392,23 @@ def _fetch_closed_sprints_flat(
     )
     
     # Calculate metrics
-    total_sprints = len(closed_sprints_all)
-    total_issues_done = sum(sprint.get('issues_done', 0) or 0 for sprint in closed_sprints_all)
+    # Group by sprint_id to count unique sprints and exclude sprints with 0 total planned issues
+    # For groups: sum all issues across all teams per sprint, then average across sprints
+    from collections import defaultdict
+    sprint_totals = defaultdict(int)
+    for sprint in closed_sprints_all:
+        sprint_id = sprint.get('sprint_id')
+        issues_at_start = sprint.get('issues_at_start', 0) or 0
+        issues_added = sprint.get('issues_added', 0) or 0
+        issues_done = sprint.get('issues_done', 0) or 0
+        total_planned = issues_at_start + issues_added
+        # Only include sprints with at least 1 planned issue (issues_at_start + issues_added > 0)
+        if sprint_id is not None and total_planned > 0:
+            sprint_totals[sprint_id] += issues_done
+    
+    # Calculate average: sum all issues across all sprints, divide by number of unique sprints
+    total_issues_done = sum(sprint_totals.values())
+    total_sprints = len(sprint_totals)  # Count unique sprints only
     average_velocity = round(total_issues_done / total_sprints, 2) if total_sprints > 0 else 0.0
     
     # Get unique teams count
@@ -1404,9 +1420,10 @@ def _fetch_closed_sprints_flat(
     teams_count = len(unique_teams)
     
     # Build metadata
+    # total_sprints should reflect unique sprints with completed issues (for consistency with average_velocity calculation)
     meta = {
         "months": months,
-        "total_sprints": total_sprints,
+        "total_sprints": total_sprints,  # Unique sprints with completed issues
         "teams_count": teams_count,
         "average_velocity": average_velocity
     }
@@ -1840,15 +1857,16 @@ def get_velocity_metric(
     raw_data = get_team_avg_sprint_metrics(validated_sprint_count, team_names_list, conn)
     
     # Group by sprint_id to handle duplicates and ensure we count unique sprints
-    # Exclude sprints with 0 completed issues
+    # Exclude sprints with 0 total planned issues (issues_in_sprint_count = 0)
     # For groups: sum all issues across all teams per sprint, then average across sprints
     from collections import defaultdict
     sprint_totals = defaultdict(int)
     for row in raw_data:
         sprint_id = row.get('out_sprint_id')
         issues_completed = row.get('issues_completed_count', 0) or 0
-        # Only include sprints with at least 1 completed issue
-        if sprint_id is not None and issues_completed > 0:
+        issues_planned = row.get('issues_in_sprint_count', 0) or 0
+        # Only include sprints with at least 1 planned issue (issues_in_sprint_count > 0)
+        if sprint_id is not None and issues_planned > 0:
             sprint_totals[sprint_id] += issues_completed
     
     # Calculate average: sum all issues across all sprints, divide by number of unique sprints
@@ -2081,16 +2099,19 @@ def get_predictability_metric(
             sprint_groups[sprint_id]['date'] = date
     
     # Calculate per-sprint predictability and sort by date
+    # Exclude sprints with 0 total planned issues (issues_at_start + issues_added = 0)
     sprint_predictabilities = []
     for sprint_id, data in sprint_groups.items():
-        predictability = (data['completed'] / data['planned'] * 100) if data['planned'] > 0 else 0.0
-        sprint_predictabilities.append({
-            'sprint_id': sprint_id,
-            'predictability': predictability,
-            'completed': data['completed'],
-            'planned': data['planned'],
-            'date': data['date']
-        })
+        # Only include sprints with at least 1 planned issue
+        if data['planned'] > 0:
+            predictability = (data['completed'] / data['planned'] * 100) if data['planned'] > 0 else 0.0
+            sprint_predictabilities.append({
+                'sprint_id': sprint_id,
+                'predictability': predictability,
+                'completed': data['completed'],
+                'planned': data['planned'],
+                'date': data['date']
+            })
     
     sprint_predictabilities.sort(key=lambda x: x['date'])
     

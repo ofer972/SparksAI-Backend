@@ -659,8 +659,23 @@ def _fetch_closed_sprints_flat_report(filters: Dict[str, Any], conn: Connection,
                 sprint["closed_sprint_url"] = sprint_url
 
     # Calculate average velocity: sum of issues_done across all sprints / number of sprints
-    sprint_count = len(closed_sprints)
-    total_issues_done = sum(sprint.get('issues_done', 0) or 0 for sprint in closed_sprints)
+    # Group by sprint_id to count unique sprints and exclude sprints with 0 total planned issues
+    # For groups: sum all issues across all teams per sprint, then average across sprints
+    from collections import defaultdict
+    sprint_totals = defaultdict(int)
+    for sprint in closed_sprints:
+        sprint_id = sprint.get('sprint_id')
+        issues_at_start = sprint.get('issues_at_start', 0) or 0
+        issues_added = sprint.get('issues_added', 0) or 0
+        issues_done = sprint.get('issues_done', 0) or 0
+        total_planned = issues_at_start + issues_added
+        # Only include sprints with at least 1 planned issue (issues_at_start + issues_added > 0)
+        if sprint_id is not None and total_planned > 0:
+            sprint_totals[sprint_id] += issues_done
+    
+    # Calculate average: sum all issues across all sprints, divide by number of unique sprints
+    total_issues_done = sum(sprint_totals.values())
+    sprint_count = len(sprint_totals)  # Count unique sprints only
     average_velocity = round(total_issues_done / sprint_count, 2) if sprint_count > 0 else 0.0
 
     # Get JIRA URL for meta
