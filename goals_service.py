@@ -901,7 +901,35 @@ async def generate_ai_goals(
                     status_code=400,
                     detail="sprint_id is required when scope_type='sprint'"
                 )
-            logger.info(f"Using Sprint ID: {sprint_id}")
+            
+            # Check if sprint is active
+            sprint_check_query = text("""
+                SELECT s.state, COUNT(i.issue_key) as total_issues
+                FROM jira_sprints s
+                LEFT JOIN jira_issues i ON i.current_sprint_id = s.sprint_id
+                WHERE s.sprint_id = :sprint_id
+                GROUP BY s.sprint_id, s.state
+            """)
+            sprint_check_result = conn.execute(sprint_check_query, {"sprint_id": sprint_id})
+            sprint_check_row = sprint_check_result.fetchone()
+            
+            if not sprint_check_row:
+                raise HTTPException(
+                    status_code=404,
+                    detail=f"Sprint {sprint_id} not found"
+                )
+            
+            sprint_state = sprint_check_row[0]
+            total_issues = sprint_check_row[1] or 0
+            
+            # Check if sprint is active and has issues
+            if sprint_state != 'active' or total_issues == 0:
+                raise HTTPException(
+                    status_code=400,
+                    detail="No active sprint found. Sprint goals can only be generated for active sprints with issues."
+                )
+            
+            logger.info(f"Using Sprint ID: {sprint_id} (active with {total_issues} issues)")
         else:
             raise HTTPException(
                 status_code=400,
