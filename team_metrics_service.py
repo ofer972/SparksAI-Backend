@@ -1860,7 +1860,7 @@ def get_velocity_metric(
         "value": str(avg_velocity),
         "tier_status": "",
         "metric_type": "sprint",
-        "description": f"Average velocity in the last {validated_sprint_count} closed sprints",
+        "description": f"{validated_name}: Avg velocity {avg_velocity} (last {validated_sprint_count} closed sprints)",
         "tooltip": f"Average velocity in the last {validated_sprint_count} closed sprints",
         "trend": None,
         "chart_data": {
@@ -1920,7 +1920,7 @@ def get_cycle_time_metric(
         "value": f"{avg_cycle_time:.1f}d",
         "tier_status": cycle_time_tier,
         "metric_type": "sprint",
-        "description": f"Average story cycle time in the last {CYCLE_TIME_PERIOD_DAYS} days",
+        "description": f"{validated_name}: Avg cycle time {avg_cycle_time:.1f} days (last {CYCLE_TIME_PERIOD_DAYS} days)",
         "tooltip": tooltip,
         "trend": cycle_time_trend,
         "action": {
@@ -1991,7 +1991,7 @@ def get_epic_cycle_time_metric(
         "value": f"{avg_cycle_time:.1f}d",
         "tier_status": cycle_time_tier,
         "metric_type": "pi",
-        "description": "Average epic cycle time in the last 3 months",
+        "description": f"{validated_name}: Avg epic cycle time {avg_cycle_time:.1f} days (last 3 months)",
         "tooltip": tooltip,
         "trend": cycle_time_trend,
         "action": {
@@ -2133,7 +2133,7 @@ def get_predictability_metric(
         "value": f"{round(avg_predictability)}%",
         "tier_status": predictability_tier,
         "metric_type": "sprint",
-        "description": f"Average sprint predictability over last {sprint_count_used} closed sprints",
+        "description": f"{validated_name}: Avg predictability {avg_predictability:.0f}% (last {sprint_count_used} closed sprints)",
         "tooltip": tooltip,
         "trend": trend,
         "action": {
@@ -2161,6 +2161,7 @@ def get_wip_metric(
     progress_data = get_team_current_sprint_progress(team_names_list, conn)
     wip_count = progress_data.get('in_progress_issues', 0) or 0
     total_issues = progress_data.get('total_issues', 0) or 0
+    sprint_name = progress_data.get('sprint_name') or 'current sprint'
     
     # Calculate WIP percentage
     wip_percentage = (wip_count / total_issues * 100) if total_issues > 0 else 0.0
@@ -2185,7 +2186,7 @@ def get_wip_metric(
         "value": str(wip_count),
         "tier_status": wip_tier,
         "metric_type": "sprint",
-        "description": f"Number of issues in progress ({wip_percentage:.1f}% of sprint)",
+        "description": f"{validated_name}: {wip_count} issues in progress ({wip_percentage:.1f}% of {sprint_name})",
         "tooltip": tooltip,
         "trend": None,  # No trend for now
         "alternative_text": f"WIP%: {round(wip_percentage)}",
@@ -2217,6 +2218,7 @@ def get_completion_metric(
     completed_issues = progress_data.get('completed_issues', 0) or 0
     total_issues = progress_data.get('total_issues', 0) or 0
     remaining_issues = total_issues - completed_issues
+    sprint_name = progress_data.get('sprint_name') or 'current sprint'
     
     # Calculate tier using timeline-based logic
     completion_tier = get_sprint_completion_tier(
@@ -2268,7 +2270,7 @@ def get_completion_metric(
         "value": f"{round(percent_completed)}%",
         "tier_status": completion_tier,
         "metric_type": "sprint",
-        "description": f"Completed issues ({percent_completed:.1f}%) in the current active sprint",
+        "description": f"{validated_name}: {percent_completed:.1f}% completed in {sprint_name}",
         "tooltip": tooltip,
         "trend": None,
         "alternative_text": f"Remaining: {remaining_issues}",
@@ -2295,6 +2297,7 @@ def get_days_left_metric(
     # Calculate days_left and days_in_sprint from dates
     start_date = progress_data.get('start_date')
     end_date = progress_data.get('end_date')
+    sprint_name = progress_data.get('sprint_name') or 'current sprint'
     
     days_left = calculate_days_left(end_date) or 0
     days_in_sprint = calculate_days_in_sprint(start_date, end_date) or 0
@@ -2317,7 +2320,7 @@ def get_days_left_metric(
         "value": str(days_left),
         "tier_status": "",
         "metric_type": "sprint",
-        "description": "Number of days remaining in the current active sprint",
+        "description": f"{validated_name}: {days_left} days remaining in {sprint_name}",
         "tooltip": "Number of days remaining in the current active sprint",
         "trend": None,
         "chart_data": chart_data,
@@ -2456,7 +2459,7 @@ def get_open_bugs_metric(
         "value": str(current_open_bugs),
         "tier_status": tier_status,  # Tier adapts to team count
         "metric_type": "sprint",
-        "description": f"Current open bugs with {OPEN_BUGS_TREND_PERIOD_DAYS}-day trend",
+        "description": f"{validated_name}: {current_open_bugs} open bugs",
         "tooltip": tooltip,
         "trend": bug_trend,
         "action": {
@@ -2618,7 +2621,7 @@ def get_pi_completion_metric(
             "value": f"{percent_completed:.1f}%",
             "tier_status": completion_tier,  # May be None for early PI
             "metric_type": "pi",
-            "description": f"{completed_epics} of {total_epics} epics completed",
+            "description": f"{validated_name}: {completed_epics} of {total_epics} epics completed in {pi_name}",
             "tooltip": tooltip,
             "trend": None,  # No trend for now
             "alternative_text": f"Remaining epics: {remaining_epics}",
@@ -2683,7 +2686,7 @@ def get_pi_wip_metric(
         "value": str(wip_count),
         "tier_status": wip_tier,
         "metric_type": "pi",
-        "description": f"Number of epics in progress ({wip_percentage:.1f}% of PI)",
+        "description": f"{validated_name}: {wip_count} epics in progress ({wip_percentage:.1f}% of {pi_name})",
         "tooltip": tooltip,
         "trend": None,  # No trend for now
         "alternative_text": f"WIP%: {round(wip_percentage)}",
@@ -2706,32 +2709,59 @@ def get_pi_inbound_dependencies_metric(
     isGroup: bool,
     conn: Connection
 ) -> Dict:
-    """Get PI Inbound Dependencies as KPI metric with bar chart."""
-    from database_pi import fetch_epic_inbound_dependency_data
+    """Get PI Inbound Dependencies as KPI metric with bar chart.
     
-    inbound_rows = fetch_epic_inbound_dependency_data(pi_name, team_names_list, conn)
+    Shows top 3 teams that rely on the selected team (inbound dependencies).
+    Groups by team_name_of_epic (epic owner/relying team) and filters by team_name (assignee).
+    """
+    
+    # Build parameterized query to get per-team breakdown
+    placeholders = ", ".join([f":team_name_{i}" for i in range(len(team_names_list))])
+    params = {"pi": pi_name}
+    for i, name in enumerate(team_names_list):
+        params[f"team_name_{i}"] = name
+    
+    # Query groups by team_name_of_epic (the relying team) instead of assignee_team
+    query = text(f"""
+        SELECT 
+            team_name_of_epic AS relying_team,
+            COUNT(issue_key) AS total_issues,
+            COUNT(CASE WHEN status_category = 'Done' THEN 1 END) AS completed_issues,
+            COUNT(issue_key) - COUNT(CASE WHEN status_category = 'Done' THEN 1 END) AS uncompleted_issues
+        FROM jira_issues
+        WHERE quarter_pi_of_epic = :pi
+            AND team_name IN ({placeholders})
+            AND dependency = TRUE
+            AND issue_type != 'Epic'
+            AND parent_key IS NOT NULL
+        GROUP BY team_name_of_epic
+        HAVING COUNT(issue_key) - COUNT(CASE WHEN status_category = 'Done' THEN 1 END) > 0
+        ORDER BY uncompleted_issues DESC
+        LIMIT 3
+    """)
+    
+    result = conn.execute(query, params)
+    rows = result.fetchall()
     
     all_teams = []
     total_all = 0
     
-    for row in inbound_rows:
-        volume = int(row.get('volume_of_work_relied_upon', 0) or 0)
-        completed = int(row.get('completed_issues_dependent_count', 0) or 0)
-        uncompleted = volume - completed
+    for row in rows:
+        total = int(row.total_issues)
+        completed = int(row.completed_issues)
+        uncompleted = int(row.uncompleted_issues)
         
-        if uncompleted > 0:
-            total_all += uncompleted
-            all_teams.append({
-                'label': row.get('assignee_team'),
-                'value': uncompleted,
-                'completed': completed,
-                'total': volume
-            })
+        total_all += uncompleted
+        all_teams.append({
+            'label': row.relying_team,
+            'value': uncompleted,
+            'completed': completed,
+            'total': total
+        })
     
-    all_teams.sort(key=lambda x: x['value'], reverse=True)
     top_3 = all_teams[:3]
     
-    tooltip_lines = ["PI Inbound Dependencies\n", "Top 3 teams:"]
+    tooltip_lines = ["Teams That Depend On Us\n", "Top 3 teams:"]
     for item in top_3:
         tooltip_lines.append(
             f"{item['label']}: {item['value']} uncompleted "
@@ -2741,11 +2771,11 @@ def get_pi_inbound_dependencies_metric(
     
     return {
         "metric_id": "pi_inbound_dependencies",
-        "label": "PI Inbound Dependencies",
+        "label": "Teams Depend On Us",
         "value": "",
         "tier_status": "",
         "metric_type": "pi",
-        "description": f"Top 3 teams with uncompleted inbound dependencies in {pi_name}",
+        "description": f"Dependency heatmap for {validated_name} in {pi_name}",
         "tooltip": "\n".join(tooltip_lines),
         "trend": None,
         "chart_data": {
@@ -2773,32 +2803,59 @@ def get_pi_outbound_dependencies_metric(
     isGroup: bool,
     conn: Connection
 ) -> Dict:
-    """Get PI Outbound Dependencies as KPI metric with bar chart."""
-    from database_pi import fetch_epic_outbound_dependency_data
+    """Get PI Outbound Dependencies as KPI metric with bar chart.
     
-    outbound_rows = fetch_epic_outbound_dependency_data(pi_name, team_names_list, conn)
+    Shows top 3 teams that the selected team relies on (outbound dependencies).
+    Groups by team_name (assignee/relied-upon team) and filters by team_name_of_epic (owner).
+    """
+    
+    # Build parameterized query to get per-team breakdown
+    placeholders = ", ".join([f":team_name_{i}" for i in range(len(team_names_list))])
+    params = {"pi": pi_name}
+    for i, name in enumerate(team_names_list):
+        params[f"team_name_{i}"] = name
+    
+    # Query groups by team_name (the relied-upon team) instead of owned_team
+    query = text(f"""
+        SELECT 
+            team_name AS relied_upon_team,
+            COUNT(issue_key) AS total_issues,
+            COUNT(CASE WHEN status_category = 'Done' THEN 1 END) AS completed_issues,
+            COUNT(issue_key) - COUNT(CASE WHEN status_category = 'Done' THEN 1 END) AS uncompleted_issues
+        FROM jira_issues
+        WHERE quarter_pi_of_epic = :pi
+            AND team_name_of_epic IN ({placeholders})
+            AND dependency = TRUE
+            AND issue_type != 'Epic'
+            AND parent_key IS NOT NULL
+        GROUP BY team_name
+        HAVING COUNT(issue_key) - COUNT(CASE WHEN status_category = 'Done' THEN 1 END) > 0
+        ORDER BY uncompleted_issues DESC
+        LIMIT 3
+    """)
+    
+    result = conn.execute(query, params)
+    rows = result.fetchall()
     
     all_teams = []
     total_all = 0
     
-    for row in outbound_rows:
-        dependent_issues = int(row.get('number_of_dependent_issues', 0) or 0)
-        completed = int(row.get('completed_dependent_issues_count', 0) or 0)
-        uncompleted = dependent_issues - completed
+    for row in rows:
+        total = int(row.total_issues)
+        completed = int(row.completed_issues)
+        uncompleted = int(row.uncompleted_issues)
         
-        if uncompleted > 0:
-            total_all += uncompleted
-            all_teams.append({
-                'label': row.get('owned_team'),
-                'value': uncompleted,
-                'completed': completed,
-                'total': dependent_issues
-            })
+        total_all += uncompleted
+        all_teams.append({
+            'label': row.relied_upon_team,
+            'value': uncompleted,
+            'completed': completed,
+            'total': total
+        })
     
-    all_teams.sort(key=lambda x: x['value'], reverse=True)
     top_3 = all_teams[:3]
     
-    tooltip_lines = ["PI Outbound Dependencies\n", "Top 3 teams:"]
+    tooltip_lines = ["Teams We Depend On\n", "Top 3 teams:"]
     for item in top_3:
         tooltip_lines.append(
             f"{item['label']}: {item['value']} uncompleted "
@@ -2808,11 +2865,11 @@ def get_pi_outbound_dependencies_metric(
     
     return {
         "metric_id": "pi_outbound_dependencies",
-        "label": "PI Outbound Dependencies",
+        "label": "Teams We Depend On",
         "value": "",
         "tier_status": "",
         "metric_type": "pi",
-        "description": f"Top 3 teams with uncompleted outbound dependencies in {pi_name}",
+        "description": f"Dependency heatmap for {validated_name} in {pi_name}",
         "tooltip": "\n".join(tooltip_lines),
         "trend": None,
         "chart_data": {
@@ -2905,7 +2962,7 @@ async def get_general_kpis(
             # Sprint metrics
             validated_sprint_count = validate_sprint_count(sprint_count)
             
-            available_metrics = ["sprint_velocity", "cycle_time", "epic_cycle_time", "sprint_predictability", "sprint_wip", "sprint_completion", "sprint_days_left", "open_bugs"]
+            available_metrics = ["open_bugs", "cycle_time", "epic_cycle_time", "sprint_velocity", "sprint_predictability", "sprint_wip", "sprint_completion", "sprint_days_left"]
             requested_metrics = available_metrics  # Default: return all
             
             if metrics:
@@ -2950,7 +3007,7 @@ async def get_general_kpis(
             # PI metrics
             validated_pi = validate_pi(pi)
             
-            available_metrics = ["pi_wip", "pi_completion", "epic_cycle_time", "pi_inbound_dependencies", "pi_outbound_dependencies"]
+            available_metrics = ["pi_wip", "pi_completion", "pi_inbound_dependencies", "pi_outbound_dependencies", "epic_cycle_time"]
             requested_metrics = available_metrics  # Default: return all
             
             if metrics:
