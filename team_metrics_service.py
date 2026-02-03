@@ -2161,7 +2161,33 @@ def get_wip_metric(
     progress_data = get_team_current_sprint_progress(team_names_list, conn)
     wip_count = progress_data.get('in_progress_issues', 0) or 0
     total_issues = progress_data.get('total_issues', 0) or 0
+    sprint_id = progress_data.get('sprint_id')
     sprint_name = progress_data.get('sprint_name') or 'current sprint'
+    
+    # Check if there's no active sprint
+    has_active_sprint = sprint_id is not None and total_issues > 0
+    
+    if not has_active_sprint:
+        # No active sprint - return without tier_status (no badge will show)
+        return {
+            "metric_id": "sprint_wip",
+            "label": "Sprint WIP",
+            "value": "--",
+            "tier_status": "",
+            "metric_type": "sprint",
+            "description": f"{validated_name}: No active sprint",
+            "tooltip": f"Sprint Work In Progress\n\nNo active sprint found for {validated_name}. Sprint WIP metrics are only available when there is an active sprint.",
+            "trend": None,
+            "alternative_text": "No Sprint",
+            "action": {
+                "type": "report",
+                "report_ids": ["team-sprint-burndown", "wip-over-time"],
+                "params": {
+                    "team_name": validated_name,
+                    "isGroup": isGroup
+                }
+            }
+        }
     
     # Calculate WIP percentage
     wip_percentage = (wip_count / total_issues * 100) if total_issues > 0 else 0.0
@@ -2217,8 +2243,34 @@ def get_completion_metric(
     end_date = progress_data.get('end_date')
     completed_issues = progress_data.get('completed_issues', 0) or 0
     total_issues = progress_data.get('total_issues', 0) or 0
+    sprint_id = progress_data.get('sprint_id')
     remaining_issues = total_issues - completed_issues
     sprint_name = progress_data.get('sprint_name') or 'current sprint'
+    
+    # Check if there's no active sprint
+    has_active_sprint = sprint_id is not None and total_issues > 0
+    
+    if not has_active_sprint:
+        # No active sprint - return without tier_status (no badge will show)
+        return {
+            "metric_id": "sprint_completion",
+            "label": "Sprint Completion",
+            "value": "--",
+            "tier_status": "",
+            "metric_type": "sprint",
+            "description": f"{validated_name}: No active sprint",
+            "tooltip": f"Sprint Completion\n\nNo active sprint found for {validated_name}. Sprint completion metrics are only available when there is an active sprint.",
+            "trend": None,
+            "alternative_text": "No Sprint",
+            "action": {
+                "type": "report",
+                "report_ids": ["team-sprint-burndown"],
+                "params": {
+                    "team_name": validated_name,
+                    "isGroup": isGroup
+                }
+            }
+        }
     
     # Calculate tier using timeline-based logic
     completion_tier = get_sprint_completion_tier(
@@ -2293,6 +2345,34 @@ def get_days_left_metric(
 ) -> Dict:
     """Get Days Left metric from current active sprint."""
     progress_data = get_team_current_sprint_progress(team_names_list, conn)
+    
+    # Check if there's no active sprint
+    sprint_id = progress_data.get('sprint_id')
+    total_issues = progress_data.get('total_issues', 0) or 0
+    has_active_sprint = sprint_id is not None and total_issues > 0
+    
+    if not has_active_sprint:
+        # No active sprint - return without tier_status (no badge will show)
+        return {
+            "metric_id": "sprint_days_left",
+            "label": "Days Left in Sprint",
+            "value": "--",
+            "tier_status": "",
+            "metric_type": "sprint",
+            "description": f"{validated_name}: No active sprint",
+            "tooltip": "Days Left in Sprint\n\nNo active sprint found. Days remaining metrics are only available when there is an active sprint.",
+            "trend": None,
+            "alternative_text": "No Sprint",
+            "chart_data": None,
+            "action": {
+                "type": "report",
+                "report_ids": ["team-sprint-burndown"],
+                "params": {
+                    "team_name": validated_name,
+                    "isGroup": isGroup
+                }
+            }
+        }
     
     # Calculate days_left and days_in_sprint from dates
     start_date = progress_data.get('start_date')
