@@ -850,9 +850,21 @@ async def get_avg_sprint_metrics(
         raw_data = get_team_avg_sprint_metrics(validated_sprint_count, team_names_list, conn)
         
         # Calculate averages from all rows
-        # Velocity: average of completed issues count per sprint
-        velocities = [row['issues_completed_count'] for row in raw_data if row.get('issues_completed_count') is not None]
-        avg_velocity = int(round(sum(velocities) / len(velocities), 0)) if velocities else 0
+        # Velocity: sum all issues across all teams per sprint, then average across sprints
+        # Group by sprint_id to handle duplicates and exclude sprints with 0 completed issues
+        from collections import defaultdict
+        sprint_totals = defaultdict(int)
+        for row in raw_data:
+            sprint_id = row.get('out_sprint_id')
+            issues_completed = row.get('issues_completed_count', 0) or 0
+            # Only include sprints with at least 1 completed issue
+            if sprint_id is not None and issues_completed > 0:
+                sprint_totals[sprint_id] += issues_completed
+        
+        # Calculate average: sum all issues across all sprints, divide by number of unique sprints
+        total_issues = sum(sprint_totals.values())
+        num_sprints = len(sprint_totals)
+        avg_velocity = int(round(total_issues / num_sprints, 0)) if num_sprints > 0 else 0
         
         # Cycle time: total cycle time / total issues (weighted average)
         total_cycle_time = sum(row['total_cycle_time_sum_days'] for row in raw_data if row.get('total_cycle_time_sum_days') is not None)
@@ -1826,8 +1838,23 @@ def get_velocity_metric(
 ) -> Dict:
     """Get velocity metric using sprint-based calculation."""
     raw_data = get_team_avg_sprint_metrics(validated_sprint_count, team_names_list, conn)
-    velocities = [row['issues_completed_count'] for row in raw_data if row.get('issues_completed_count') is not None]
-    avg_velocity = int(round(sum(velocities) / len(velocities), 0)) if velocities else 0
+    
+    # Group by sprint_id to handle duplicates and ensure we count unique sprints
+    # Exclude sprints with 0 completed issues
+    # For groups: sum all issues across all teams per sprint, then average across sprints
+    from collections import defaultdict
+    sprint_totals = defaultdict(int)
+    for row in raw_data:
+        sprint_id = row.get('out_sprint_id')
+        issues_completed = row.get('issues_completed_count', 0) or 0
+        # Only include sprints with at least 1 completed issue
+        if sprint_id is not None and issues_completed > 0:
+            sprint_totals[sprint_id] += issues_completed
+    
+    # Calculate average: sum all issues across all sprints, divide by number of unique sprints
+    total_issues = sum(sprint_totals.values())
+    num_sprints = len(sprint_totals)
+    avg_velocity = int(round(total_issues / num_sprints, 0)) if num_sprints > 0 else 0
     
     # Build chart data from raw_data (last 5 sprints)
     chart_points = []
@@ -2067,21 +2094,29 @@ def get_predictability_metric(
     
     sprint_predictabilities.sort(key=lambda x: x['date'])
     
-    # Calculate trend if we have enough data
+    # Calculate trend if we have enough data (4+ sprints)
     trend = None
-    if len(sprint_predictabilities) >= 6:
-        # Split into periods: previous 3 (sprints 4-6) and current 3 (last 3)
-        previous_3 = sprint_predictabilities[0:3]  # Oldest (sprints 4-6)
-        current_3 = sprint_predictabilities[3:6]   # Newest (last 3)
+    if len(sprint_predictabilities) >= 4:
+        # Determine comparison periods based on available sprints
+        if len(sprint_predictabilities) >= 6:
+            # 6+ sprints: Compare last 3 vs previous 3
+            current_sprints = sprint_predictabilities[-3:]
+            previous_sprints = sprint_predictabilities[-6:-3]
+            label = "vs previous 3 sprints"
+        else:
+            # 4-5 sprints: Compare last 2 vs previous 2
+            current_sprints = sprint_predictabilities[-2:]
+            previous_sprints = sprint_predictabilities[-4:-2]
+            label = "vs previous 2 sprints"
         
-        # Calculate average predictability for current period (last 3 sprints)
-        current_total_completed = sum(s['completed'] for s in current_3)
-        current_total_planned = sum(s['planned'] for s in current_3)
+        # Calculate average predictability for current period
+        current_total_completed = sum(s['completed'] for s in current_sprints)
+        current_total_planned = sum(s['planned'] for s in current_sprints)
         current_avg = (current_total_completed / current_total_planned * 100) if current_total_planned > 0 else 0.0
         
-        # Calculate average predictability for previous period (sprints 4-6)
-        previous_total_completed = sum(s['completed'] for s in previous_3)
-        previous_total_planned = sum(s['planned'] for s in previous_3)
+        # Calculate average predictability for previous period
+        previous_total_completed = sum(s['completed'] for s in previous_sprints)
+        previous_total_planned = sum(s['planned'] for s in previous_sprints)
         previous_avg = (previous_total_completed / previous_total_planned * 100) if previous_total_planned > 0 else 0.0
         
         # Calculate trend (higher predictability is better)
@@ -2105,12 +2140,21 @@ def get_predictability_metric(
             trend = {
                 "direction": direction,
                 "percentage": percentage,
-                "label": "vs previous 3 sprints",
+                "label": label,
                 "improved": improved
             }
     
-    # Use last 3 sprints for display (or all available if < 3)
-    display_sprints = sprint_predictabilities[-3:] if len(sprint_predictabilities) >= 3 else sprint_predictabilities
+    # Use sprints for display - match trend calculation when available
+    if len(sprint_predictabilities) >= 6:
+        # 6+ sprints: Use last 3 sprints (matches trend)
+        display_sprints = sprint_predictabilities[-3:]
+    elif len(sprint_predictabilities) >= 4:
+        # 4-5 sprints: Use last 2 sprints (matches trend)
+        display_sprints = sprint_predictabilities[-2:]
+    else:
+        # 3 or fewer: Use all available
+        display_sprints = sprint_predictabilities
+    
     total_completed = sum(s['completed'] for s in display_sprints)
     total_planned = sum(s['planned'] for s in display_sprints)
     avg_predictability = (total_completed / total_planned * 100) if total_planned > 0 else 0.0
@@ -2122,10 +2166,18 @@ def get_predictability_metric(
     # Build tooltip matching cycle_time format
     tooltip = f"Average sprint predictability in the last {sprint_count_used} closed sprints: {avg_predictability:.1f}%"
     if trend and trend.get('direction') and trend['direction'] != 'flat':
+        # Extract number of previous sprints from trend label
+        previous_count = 3  # Default fallback
+        if trend.get('label'):
+            import re
+            match = re.search(r'previous (\d+)', trend['label'])
+            if match:
+                previous_count = int(match.group(1))
+        
         if trend.get('improved'):
-            tooltip += f"\nThis represents a {trend['percentage']}% improvement compared to the previous {sprint_count_used} sprints."
+            tooltip += f"\nThis represents a {trend['percentage']}% improvement compared to the previous {previous_count} sprints."
         else:
-            tooltip += f"\nThis represents a {trend['percentage']}% regression compared to the previous {sprint_count_used} sprints."
+            tooltip += f"\nThis represents a {trend['percentage']}% regression compared to the previous {previous_count} sprints."
     
     return {
         "metric_id": "sprint_predictability",
