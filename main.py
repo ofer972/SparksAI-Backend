@@ -112,7 +112,7 @@ def get_status_code_colors(status_code: int, method_color: str) -> tuple[str, st
 app = FastAPI(
     title="SparksAI Backend Services",
     description="Backend API services for SparksAI - REST API endpoints for various services",
-    version="1.0.0",
+    version="1.0.1",
     docs_url="/docs",
     redoc_url="/redoc"
 )
