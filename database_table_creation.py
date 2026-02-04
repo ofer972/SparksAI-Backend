@@ -1414,6 +1414,7 @@ def create_ai_summary_table_if_not_exists(engine=None) -> bool:
                     pi VARCHAR(255),
                     team_name VARCHAR(255),
                     group_name VARCHAR(255),
+                    sprint_id INTEGER,
                     card_name VARCHAR(255) NOT NULL,
                     insight_type VARCHAR(100) NOT NULL,
                     priority VARCHAR(50) NOT NULL,
@@ -1441,6 +1442,7 @@ def create_ai_summary_table_if_not_exists(engine=None) -> bool:
                 CREATE INDEX idx_ai_summary_priority ON public.ai_summary(priority);
                 CREATE INDEX idx_ai_summary_pi ON public.ai_summary(pi) WHERE pi IS NOT NULL;
                 CREATE INDEX idx_ai_summary_pi_date ON public.ai_summary(pi, date DESC) WHERE pi IS NOT NULL;
+                CREATE INDEX idx_ai_summary_sprint_id ON public.ai_summary(sprint_id) WHERE sprint_id IS NOT NULL;
                 """
                 conn.execute(text(create_table_sql))
                 conn.commit()
@@ -1452,6 +1454,72 @@ def create_ai_summary_table_if_not_exists(engine=None) -> bool:
             
     except Exception as e:
         print(f"Error creating ai_summary table: {e}")
+        return False
+
+
+def add_sprint_id_column_to_ai_summary(engine=None) -> bool:
+    """Add sprint_id column to ai_summary table if it exists and the column is missing."""
+    # Skip if tables are already initialized (no need to check again)
+    global _tables_initialized
+    if _tables_initialized:
+        return True
+
+    import database_connection
+
+    if engine is None:
+        engine = database_connection.get_db_engine()
+    if engine is None:
+        print("Warning: Database engine not available, cannot add sprint_id column to ai_summary")
+        return False
+
+    try:
+        with engine.connect() as conn:
+            # Check if table exists
+            check_table_sql = """
+            SELECT EXISTS (
+                SELECT FROM information_schema.tables
+                WHERE table_schema = 'public'
+                AND table_name = 'ai_summary'
+            );
+            """
+            table_exists = conn.execute(text(check_table_sql)).scalar()
+            if not table_exists:
+                print("ai_summary table does not exist, skipping sprint_id column addition")
+                return True
+
+            # Check if column exists
+            check_column_sql = """
+            SELECT EXISTS (
+                SELECT FROM information_schema.columns
+                WHERE table_schema = 'public'
+                AND table_name = 'ai_summary'
+                AND column_name = 'sprint_id'
+            );
+            """
+            column_exists = conn.execute(text(check_column_sql)).scalar()
+
+            if not column_exists:
+                print("Adding sprint_id column to ai_summary table...")
+                alter_table_sql = """
+                ALTER TABLE public.ai_summary
+                ADD COLUMN sprint_id INTEGER;
+                """
+                conn.execute(text(alter_table_sql))
+                # Add index (non-blocking-ish simple index; still may take time on large tables)
+                conn.execute(text("""
+                    CREATE INDEX IF NOT EXISTS idx_ai_summary_sprint_id
+                    ON public.ai_summary(sprint_id)
+                    WHERE sprint_id IS NOT NULL;
+                """))
+                conn.commit()
+                print("sprint_id column added successfully to ai_summary")
+            else:
+                print("sprint_id column already exists on ai_summary")
+
+            return True
+    except Exception as e:
+        print(f"Error adding sprint_id column to ai_summary: {e}")
+        traceback.print_exc()
         return False
 
 
@@ -2331,6 +2399,7 @@ def initialize_database_tables_with_engine(engine) -> None:
     create_llm_settings_table_if_not_exists(engine)
     create_teams_and_team_groups_tables_if_not_exists(engine)
     create_ai_summary_table_if_not_exists(engine)
+    add_sprint_id_column_to_ai_summary(engine)
     create_agent_jobs_table_if_not_exists(engine)
     add_input_sent_column_to_agent_jobs(engine)
     create_transcripts_table_if_not_exists(engine)

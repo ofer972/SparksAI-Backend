@@ -844,6 +844,7 @@ class AIInsightCreateRequest(BaseModel):
     team_name: Optional[str] = None
     group_name: Optional[str] = None
     pi: Optional[str] = None
+    sprint_id: Optional[int] = None
     card_name: str
     description: str
     date: Optional[str] = None
@@ -859,6 +860,7 @@ class AIInsightUpdateRequest(BaseModel):
     team_name: Optional[str] = None
     group_name: Optional[str] = None
     pi: Optional[str] = None
+    sprint_id: Optional[int] = None
     card_name: Optional[str] = None
     insight_type: Optional[str] = None
     description: Optional[str] = None
