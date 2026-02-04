@@ -437,6 +437,11 @@ def get_top_ai_cards_multi_filtered(
         sql_query = f"""
             WITH ranked_cards AS (
                 SELECT ai.*,
+                    it.report_ids,
+                    it.pi_insight,
+                    it.team_insight,
+                    it.group_insight,
+                    it.sprint_insight,
                     ROW_NUMBER() OVER (
                         PARTITION BY ai.insight_type 
                         ORDER BY 
@@ -449,18 +454,32 @@ def get_top_ai_cards_multi_filtered(
                             END
                     ) as rn
                 FROM public.ai_summary ai
+                LEFT JOIN public.insight_types it
+                    ON ai.insight_type = it.insight_type
                 WHERE {where_clause}
                   AND ai.insight_type = :insight_type
                   {additional_filter}
+                  AND ai.date >= (CURRENT_DATE - 1)
+                  AND (
+                      NOT EXISTS (
+                          SELECT 1
+                          FROM public.insight_types itx
+                          WHERE itx.insight_type = ai.insight_type
+                            AND itx.sprint_insight = TRUE
+                      )
+                      OR (
+                          ai.sprint_id IS NOT NULL
+                          AND EXISTS (
+                              SELECT 1
+                              FROM public.jira_sprints s
+                              WHERE s.sprint_id = ai.sprint_id
+                                AND s.state = 'active'
+                          )
+                      )
+                  )
             )
-            SELECT rc.*, 
-                   it.report_ids,
-                   it.pi_insight,
-                   it.team_insight,
-                   it.group_insight,
-                   it.sprint_insight
+            SELECT rc.*
             FROM ranked_cards rc
-            LEFT JOIN public.insight_types it ON rc.insight_type = it.insight_type
             WHERE rc.rn = 1
             ORDER BY 
                 rc.date DESC,
@@ -478,6 +497,11 @@ def get_top_ai_cards_multi_filtered(
         sql_query = f"""
             WITH ranked_cards AS (
                 SELECT ai.*,
+                    it.report_ids,
+                    it.pi_insight,
+                    it.team_insight,
+                    it.group_insight,
+                    it.sprint_insight,
                     ROW_NUMBER() OVER (
                         PARTITION BY ai.insight_type 
                         ORDER BY 
@@ -490,18 +514,32 @@ def get_top_ai_cards_multi_filtered(
                             END
                     ) as rn
                 FROM public.ai_summary ai
+                LEFT JOIN public.insight_types it
+                    ON ai.insight_type = it.insight_type
                 WHERE {where_clause}
                   AND ai.insight_type = ANY(:insight_types)
                   {additional_filter}
+                  AND ai.date >= (CURRENT_DATE - 1)
+                  AND (
+                      NOT EXISTS (
+                          SELECT 1
+                          FROM public.insight_types itx
+                          WHERE itx.insight_type = ai.insight_type
+                            AND itx.sprint_insight = TRUE
+                      )
+                      OR (
+                          ai.sprint_id IS NOT NULL
+                          AND EXISTS (
+                              SELECT 1
+                              FROM public.jira_sprints s
+                              WHERE s.sprint_id = ai.sprint_id
+                                AND s.state = 'active'
+                          )
+                      )
+                  )
             )
-            SELECT rc.*, 
-                   it.report_ids,
-                   it.pi_insight,
-                   it.team_insight,
-                   it.group_insight,
-                   it.sprint_insight
+            SELECT rc.*
             FROM ranked_cards rc
-            LEFT JOIN public.insight_types it ON rc.insight_type = it.insight_type
             WHERE rc.rn = 1
             ORDER BY 
                 rc.date DESC,
@@ -519,6 +557,11 @@ def get_top_ai_cards_multi_filtered(
         sql_query = f"""
             WITH ranked_cards AS (
                 SELECT ai.*,
+                    it.report_ids,
+                    it.pi_insight,
+                    it.team_insight,
+                    it.group_insight,
+                    it.sprint_insight,
                     ROW_NUMBER() OVER (
                         PARTITION BY ai.insight_type 
                         ORDER BY 
@@ -531,17 +574,31 @@ def get_top_ai_cards_multi_filtered(
                             END
                     ) as rn
                 FROM public.ai_summary ai
+                LEFT JOIN public.insight_types it
+                    ON ai.insight_type = it.insight_type
                 WHERE {where_clause}
                   {additional_filter}
+                  AND ai.date >= (CURRENT_DATE - 1)
+                  AND (
+                      NOT EXISTS (
+                          SELECT 1
+                          FROM public.insight_types itx
+                          WHERE itx.insight_type = ai.insight_type
+                            AND itx.sprint_insight = TRUE
+                      )
+                      OR (
+                          ai.sprint_id IS NOT NULL
+                          AND EXISTS (
+                              SELECT 1
+                              FROM public.jira_sprints s
+                              WHERE s.sprint_id = ai.sprint_id
+                                AND s.state = 'active'
+                          )
+                      )
+                  )
             )
-            SELECT rc.*, 
-                   it.report_ids,
-                   it.pi_insight,
-                   it.team_insight,
-                   it.group_insight,
-                   it.sprint_insight
+            SELECT rc.*
             FROM ranked_cards rc
-            LEFT JOIN public.insight_types it ON rc.insight_type = it.insight_type
             WHERE rc.rn = 1
             ORDER BY 
                 rc.date DESC,

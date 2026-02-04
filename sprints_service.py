@@ -254,20 +254,28 @@ def process_active_sprint_summary_data(
             if start_date and end_date:
                 today = date.today()
                 
+                # Get peak_scope from summary_dict (from SQL function)
+                peak_scope = summary_dict.get('peak_scope')
+                if peak_scope is None:
+                    # Fallback: calculate peak_scope as initial + added
+                    peak_scope = (issues_at_start or 0) + (issues_added or 0)
+                
                 # Calculate ideal_remaining (linear burn-down) - with one decimal place
+                # Use peak_scope for ideal line (matches burndown logic)
                 if start_date == end_date:
-                    ideal_remaining = float(issues_at_start)
+                    ideal_remaining = float(peak_scope)
                 elif today > end_date:
                     ideal_remaining = 0.0
                 elif today < start_date:
-                    ideal_remaining = float(issues_at_start)
+                    ideal_remaining = float(peak_scope)
                 else:
                     total_days = (end_date - start_date).days
-                    days_elapsed = (today - start_date).days
+                    days_remaining = (end_date - today).days
                     if total_days > 0:
-                        ideal_remaining = max(0.0, float(issues_at_start) - ((float(issues_at_start) / total_days) * days_elapsed))
+                        # Use peak_scope for ideal line (matches burndown logic)
+                        ideal_remaining = max(0.0, (float(peak_scope) * float(days_remaining)) / float(total_days))
                     else:
-                        ideal_remaining = float(issues_at_start)
+                        ideal_remaining = float(peak_scope)
                 
                 # Round to one decimal place
                 ideal_remaining = round(ideal_remaining, 1)
