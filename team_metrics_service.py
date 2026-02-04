@@ -995,7 +995,7 @@ async def get_avg_sprint_metrics(
                 "trend": None,  # No trend calculation for now
                 "action": {
                     "type": "report",
-                    "report_ids": ["sprint-predictability"],
+                    "report_ids": ["team-closed-sprints"],
                     "params": {
                         "team_name": validated_name,
                         "isGroup": isGroup
@@ -2211,7 +2211,7 @@ def get_predictability_metric(
         "trend": trend,
         "action": {
             "type": "report",
-            "report_ids": ["sprint-predictability"],
+            "report_ids": ["team-closed-sprints"],
             "params": {
                 "team_name": validated_name,
                 "isGroup": isGroup

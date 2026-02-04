@@ -106,7 +106,7 @@ DEFAULT_INSIGHT_TYPES = [
         "insight_type": "Group Sprint Flow",
         "insight_description": "Analyzes GROUP progress in the active sprint",
         "insight_categories": ["Sprint Events"],
-        "report_ids": ["active-sprint-summary", "sprint-predictability"],
+        "report_ids": ["active-sprint-summary", "team-closed-sprints"],
         "active": True,
         "pi_insight": False,
         "team_insight": False,
