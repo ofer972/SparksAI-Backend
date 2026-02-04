@@ -1759,77 +1759,9 @@ def _fetch_release_predictability(filters: Dict[str, Any], conn: Connection) -> 
 
 
 def _fetch_sprint_predictability(filters: Dict[str, Any], conn: Connection) -> ReportDataResult:
-    from database_team_metrics import resolve_team_names_from_filter
-    
-    months = _parse_int(filters.get("months"), default=3)
-    if months not in (1, 2, 3, 4, 6, 9):
-        months = 3
-
-    team_name = filters.get("team_name") or filters.get("team")
-    is_group = filters.get("isGroup", False)
-
-    # Resolve team names using shared helper function
-    team_names_list = resolve_team_names_from_filter(team_name, is_group, conn)
-
-    # Build query and parameters
-    if team_names_list:
-        # Pass array of team names to function
-        params = {"months": months, "team_names": team_names_list}
-        query = text(
-            """
-            SELECT *
-            FROM public.get_sprint_predictability_metrics_with_issues(:months, CAST(:team_names AS text[]))
-            """
-        )
-    else:
-        # Pass NULL for all teams
-        params = {"months": months}
-        query = text(
-            """
-            SELECT *
-            FROM public.get_sprint_predictability_metrics_with_issues(:months, NULL)
-            """
-        )
-
-    rows = conn.execute(query, params).fetchall()
-    data: List[Dict[str, Any]] = []
-    for row in rows:
-        row_dict = dict(row._mapping)
-        
-        # Format all date fields if they exist
-        for key, value in row_dict.items():
-            if value is not None and hasattr(value, 'strftime'):
-                row_dict[key] = value.strftime('%Y-%m-%d')
-        
-        # Process issue key arrays (split comma-separated strings)
-        for key in (
-            "completed_issue_keys",
-            "total_committed_issue_keys",
-            "issues_not_completed_keys",
-        ):
-            value = row_dict.get(key)
-            if isinstance(value, list):
-                row_dict[key] = value
-            elif isinstance(value, str):
-                row_dict[key] = [item.strip() for item in value.split(",") if item.strip()]
-        data.append(row_dict)
-
-    meta: Dict[str, Any] = {
-        "months": months,
-        "count": len(data),
-        "isGroup": is_group,
-    }
-    if team_name:
-        if is_group:
-            meta["group_name"] = team_name
-            meta["teams_in_group"] = team_names_list
-        else:
-            meta["team_name"] = team_name
-
-    return {
-        "data": data,
-        "meta": meta,
-    }
+    # Sprint Predictability report is intentionally aliased to Closed Sprints
+    # so both reports show identical data/calculation and stay in sync.
+    return _fetch_closed_sprints_flat_report(filters, conn, sort_by="default")
 
 
 def _fetch_pi_metrics_summary(filters: Dict[str, Any], conn: Connection) -> ReportDataResult:
