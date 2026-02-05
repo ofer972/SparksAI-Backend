@@ -1352,6 +1352,39 @@ def get_all_settings_db(conn: Connection = None) -> Dict[str, str]:
         raise e
 
 
+def get_setting_db(setting_key: str, conn: Connection = None) -> Optional[str]:
+    """
+    Get a single global setting value from the database.
+    
+    Args:
+        setting_key (str): The setting key to retrieve
+        conn (Connection): Database connection from FastAPI dependency
+    
+    Returns:
+        Optional[str]: Setting value if found, None otherwise
+    """
+    try:
+        # SECURE: Parameterized query prevents SQL injection
+        sql_query = """
+            SELECT setting_value 
+            FROM global_settings
+            WHERE setting_key = :key
+        """
+        
+        logger.info(f"Executing query to get global setting '{setting_key}'")
+        
+        result = conn.execute(text(sql_query), {'key': setting_key})
+        row = result.fetchone()
+        
+        if row and row[0] is not None:
+            return row[0]
+        return None
+            
+    except Exception as e:
+        logger.error(f"Error fetching global setting '{setting_key}': {e}")
+        raise e
+
+
 def set_setting_db(
     setting_key: str,
     setting_value: str,

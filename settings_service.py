@@ -11,7 +11,7 @@ from sqlalchemy.engine import Connection
 from typing import Dict, Any, Optional
 import logging
 from database_connection import get_db_connection
-from database_general import get_all_settings_db, set_setting_db, set_settings_batch_db
+from database_general import get_all_settings_db, get_setting_db, set_setting_db, set_settings_batch_db
 
 logger = logging.getLogger(__name__)
 
@@ -60,6 +60,49 @@ async def get_all_settings(conn: Connection = Depends(get_db_connection)):
 @settings_router.get("/settings")
 async def get_all_settings_alias(conn: Connection = Depends(get_db_connection)):
     return await get_all_settings(conn)
+
+
+@settings_router.get("/settings/{setting_key}")
+async def get_setting(
+    setting_key: str,
+    conn: Connection = Depends(get_db_connection)
+):
+    """
+    Get a single global setting from the database by key.
+    
+    Args:
+        setting_key: The setting key to retrieve (path parameter)
+        
+    Returns:
+        JSON response with setting key and value, or 404 if not found
+    """
+    try:
+        # Get setting from database function
+        setting_value = get_setting_db(setting_key, conn)
+        
+        if setting_value is None:
+            raise HTTPException(
+                status_code=404,
+                detail=f"Setting '{setting_key}' not found"
+            )
+        
+        return {
+            "success": True,
+            "data": {
+                "setting_key": setting_key,
+                "setting_value": setting_value
+            },
+            "message": f"Retrieved setting '{setting_key}'"
+        }
+    
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error fetching setting '{setting_key}': {e}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to fetch setting: {str(e)}"
+        )
 
 
 @settings_router.put("/settings/batch")

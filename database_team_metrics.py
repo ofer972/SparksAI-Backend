@@ -1034,7 +1034,24 @@ def get_closed_sprints_data_db(team_names: Optional[List[str]], months: int = 3,
             
             closed_sprints.append(row_dict)
         
-        return closed_sprints
+        # Filter out sprints where both issues_at_start = 0 AND issues_added = 0
+        filtered_sprints = []
+        excluded_count = 0
+        for sprint in closed_sprints:
+            issues_at_start = sprint.get('issues_at_start', 0) or 0
+            issues_added = sprint.get('issues_added', 0) or 0
+            
+            # Exclude only if BOTH are zero
+            if issues_at_start == 0 and issues_added == 0:
+                excluded_count += 1
+                continue
+            
+            filtered_sprints.append(sprint)
+        
+        if excluded_count > 0:
+            logger.info(f"Excluded {excluded_count} sprint(s) with zero issues_at_start and zero issues_added")
+        
+        return filtered_sprints
             
     except Exception as e:
         logger.error(f"Error fetching closed sprints data (team_names={team_names}): {e}")

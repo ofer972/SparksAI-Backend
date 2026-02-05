@@ -194,10 +194,14 @@ def get_cycle_time_tier(cycle_time: float) -> str:
         cycle_time: Cycle time in days
     
     Returns:
-        Tier string: 'high', 'medium', or 'low'
+        Tier string: 'high', 'medium', 'low', or '' (empty string when cycle time is 0 to show blue)
     """
-    if cycle_time <= 0:
-        return "low"  # No data or invalid = low tier
+    if cycle_time < 0:
+        return "low"  # Invalid data = low tier
+    
+    # When cycle time is 0, return empty string to show blue color on UI
+    if cycle_time == 0:
+        return ""
     
     if cycle_time <= STORY_CYCLE_TIME_ELITE:
         return "high"  # Best tier for Sprint metrics is "high" (green)
@@ -221,10 +225,14 @@ def get_epic_cycle_time_tier(cycle_time: float) -> str:
         cycle_time: Average epic cycle time in days
         
     Returns:
-        Tier string: 'high', 'medium', or 'low'
+        Tier string: 'high', 'medium', 'low', or '' (empty string when cycle time is 0 to show blue)
     """
-    if cycle_time <= 0:
-        return "low"  # No data or invalid = low tier
+    if cycle_time < 0:
+        return "low"  # Invalid data = low tier
+    
+    # When cycle time is 0, return empty string to show blue color on UI
+    if cycle_time == 0:
+        return ""
     
     if cycle_time <= EPIC_CYCLE_TIME_ELITE:
         return "high"  # Best tier for PI metrics is "high" (green)
@@ -248,10 +256,14 @@ def get_sprint_wip_tier(wip_percentage: float) -> str:
         wip_percentage: WIP as percentage of total sprint issues
     
     Returns:
-        Tier string: 'high', 'medium', or 'low'
+        Tier string: 'high', 'medium', 'low', or '' (empty string when WIP is 0 to show blue)
     """
     if wip_percentage < 0:
         return "low"  # Invalid data
+    
+    # When WIP is 0, return empty string to show blue color on UI
+    if wip_percentage == 0:
+        return ""
     
     if wip_percentage <= SPRINT_WIP_HIGH_THRESHOLD:
         return "high"  # Healthy WIP
@@ -275,10 +287,14 @@ def get_epic_wip_tier(wip_percentage: float) -> str:
         wip_percentage: WIP as percentage of total epics in PI
     
     Returns:
-        Tier string: 'high', 'medium', or 'low'
+        Tier string: 'high', 'medium', 'low', or '' (empty string when WIP is 0 to show blue)
     """
     if wip_percentage < 0:
         return "low"  # Invalid data
+    
+    # When WIP is 0, return empty string to show blue color on UI
+    if wip_percentage == 0:
+        return ""
     
     if wip_percentage <= EPIC_WIP_HIGH_THRESHOLD:
         return "high"  # Healthy epic WIP
@@ -2272,7 +2288,9 @@ def get_wip_metric(
     tooltip = f"Sprint Work In Progress\n\nCurrent sprint has {wip_count} issues in progress out of {total_issues} total issues ({wip_percentage:.1f}%)"
     
     # Add tier context to tooltip
-    if wip_percentage <= SPRINT_WIP_HIGH_THRESHOLD:
+    if wip_count == 0:
+        tooltip += f"\n\nNo work in progress. All issues are either completed or not started."
+    elif wip_percentage <= SPRINT_WIP_HIGH_THRESHOLD:
         tooltip += f"\n\nHealthy WIP level (≤ {SPRINT_WIP_HIGH_THRESHOLD}% of sprint). Good flow with manageable work in progress."
     elif wip_percentage <= SPRINT_WIP_MEDIUM_THRESHOLD:
         tooltip += f"\n\nModerate WIP level ({SPRINT_WIP_HIGH_THRESHOLD}-{SPRINT_WIP_MEDIUM_THRESHOLD}% of sprint). Consider focusing on completing work before starting new items."
@@ -2826,7 +2844,9 @@ def get_pi_wip_metric(
     tooltip = f"PI Work In Progress\n\nCurrent PI has {wip_count} epics in progress out of {total_epics} total epics ({wip_percentage:.1f}%)"
     
     # Add tier context to tooltip
-    if wip_percentage <= EPIC_WIP_HIGH_THRESHOLD:
+    if wip_count == 0:
+        tooltip += f"\n\nNo work in progress. All epics are either completed or not started."
+    elif wip_percentage <= EPIC_WIP_HIGH_THRESHOLD:
         tooltip += f"\n\nHealthy WIP level (≤ {EPIC_WIP_HIGH_THRESHOLD}% of PI). Good flow with manageable work in progress."
     elif wip_percentage <= EPIC_WIP_MEDIUM_THRESHOLD:
         tooltip += f"\n\nModerate WIP level ({EPIC_WIP_HIGH_THRESHOLD}-{EPIC_WIP_MEDIUM_THRESHOLD}% of PI). Consider focusing on completing epics before starting new ones."
