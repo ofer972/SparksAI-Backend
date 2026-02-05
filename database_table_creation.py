@@ -1197,6 +1197,7 @@ def create_global_settings_table_if_not_exists(engine=None) -> bool:
                     setting_key VARCHAR(255) PRIMARY KEY,
                     setting_value TEXT NOT NULL,
                     setting_type VARCHAR(50) NOT NULL,
+                    category VARCHAR(255),
                     description TEXT,
                     is_encrypted BOOLEAN DEFAULT FALSE,
                     created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
@@ -2131,7 +2132,6 @@ def insert_default_global_settings():
             insert_sql = """
             INSERT INTO public.global_settings (setting_key, setting_value, setting_type, description) 
             VALUES 
-                ('max_ai_cards_per_team', '10', 'integer', 'Maximum AI cards per team'),
                 ('enable_ai_insights', 'true', 'boolean', 'Enable AI insights feature')
             ON CONFLICT (setting_key) DO NOTHING;
             """
