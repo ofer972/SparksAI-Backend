@@ -403,18 +403,20 @@ def get_pi_completion_tier(
 def get_sprint_completion_tier(
     percent_completed: float,
     start_date: date = None,
-    end_date: date = None,
-    slack_threshold: float = 15.0
+    end_date: date = None
 ) -> str:
     """
     Determine tier for sprint completion percentage.
     Uses timeline-based logic during active sprint, simple thresholds after sprint ends.
     
     During active sprint:
-    - Compares actual completion to expected completion based on days elapsed
-    - high: ahead of schedule (actual >= expected - slack)
-    - medium: slightly behind (expected - 25% <= actual < expected - slack)
-    - low: significantly behind (actual < expected - 25%)
+    - Calculates expected completion based on days elapsed
+    - If more than 50% of sprint passed: reduces by 1 day
+    - If less than 50% of sprint passed: reduces by 2 days
+    - Uses closed sprint constants (80% and 60%) proportionally
+    - high: actual >= adjusted_expected * 0.80
+    - medium: actual >= adjusted_expected * 0.60
+    - low: actual < adjusted_expected * 0.60
     
     After sprint ends OR if dates unavailable:
     - high: >= 80%
@@ -425,7 +427,6 @@ def get_sprint_completion_tier(
         percent_completed: Actual completion percentage (0-100)
         start_date: Sprint start date (optional, for timeline-based calc)
         end_date: Sprint end date (optional, for timeline-based calc)
-        slack_threshold: Percentage slack allowed during active sprint (default: 15%)
     
     Returns:
         Tier string: 'high', 'medium', or 'low'
@@ -479,11 +480,28 @@ def get_sprint_completion_tier(
     days_elapsed = (today - start_date).days
     expected_completion = (days_elapsed / total_sprint_days) * 100
     
-    # Determine tier based on comparison to expected
-    yellow_threshold = 25.0  # More relaxed threshold for medium tier
-    if percent_completed >= expected_completion - slack_threshold:
+    # Apply reduction based on sprint progress
+    # If more than 50% of sprint passed: reduce by 1 day
+    # If less than 50% of sprint passed: reduce by 2 days
+    if expected_completion > 50:
+        adjusted_days_elapsed = days_elapsed - 1
+    else:
+        adjusted_days_elapsed = days_elapsed - 2
+    
+    # Ensure adjusted_days_elapsed is not negative
+    if adjusted_days_elapsed < 0:
+        adjusted_days_elapsed = 0
+    
+    adjusted_expected = (adjusted_days_elapsed / total_sprint_days) * 100
+    
+    # Use closed sprint constants proportionally
+    high_threshold = adjusted_expected * (SPRINT_COMPLETION_HIGH_THRESHOLD / 100)
+    medium_threshold = adjusted_expected * (SPRINT_COMPLETION_MEDIUM_THRESHOLD / 100)
+    
+    # Determine tier based on comparison to adjusted expected
+    if percent_completed >= high_threshold:
         return "high"  # On track or ahead
-    elif percent_completed >= expected_completion - yellow_threshold:
+    elif percent_completed >= medium_threshold:
         return "medium"  # Slightly behind
     else:
         return "low"  # Significantly behind
@@ -669,8 +687,7 @@ def get_velocity_status(velocity: int) -> str:
 def get_percent_completed_status(
     percent_completed: float,
     start_date: date,
-    end_date: date,
-    slack_threshold: float = 15.0
+    end_date: date
 ) -> str:
     """
     Determine completion status based on sprint timeline vs actual completion.
@@ -678,17 +695,27 @@ def get_percent_completed_status(
     Compares actual completion percentage against expected completion based on
     how much of the sprint has elapsed.
     
+    During active sprint:
+    - Calculates expected completion based on days elapsed
+    - If more than 50% of sprint passed: reduces by 1 day
+    - If less than 50% of sprint passed: reduces by 2 days
+    - Uses closed sprint constants (80% and 60%) proportionally
+    - "green": actual >= adjusted_expected * 0.80
+    - "yellow": actual >= adjusted_expected * 0.60
+    - "red": actual < adjusted_expected * 0.60
+    
+    After sprint ends:
+    - "green": >= 80%
+    - "yellow": 60-79.9%
+    - "red": < 60%
+    
     Args:
         percent_completed: Actual completion percentage (0-100)
         start_date: Sprint start date (date or datetime object)
         end_date: Sprint end date (date or datetime object)
-        slack_threshold: Percentage slack allowed (default: 15%)
     
     Returns:
-        "green" if ahead of schedule (actual >= expected - slack)
-        "yellow" if slightly behind (expected - 25% <= actual < expected - slack)
-        "red" if significantly behind (actual < expected - 25%)
-        "green" if unable to calculate (edge cases)
+        "green", "yellow", or "red" based on completion status
     """
     # Handle edge cases
     if start_date is None or end_date is None:
@@ -708,10 +735,10 @@ def get_percent_completed_status(
     
     # If sprint has ended
     if today >= end_date:
-        # Compare actual completion to 100% expected (stricter thresholds)
-        if percent_completed >= 90:  # Stricter: was 85% (100 - 15)
+        # Compare actual completion to 100% expected
+        if percent_completed >= SPRINT_COMPLETION_HIGH_THRESHOLD:
             return "green"
-        elif percent_completed >= 80:  # Stricter: was 75%
+        elif percent_completed >= SPRINT_COMPLETION_MEDIUM_THRESHOLD:
             return "yellow"
         else:
             return "red"
@@ -724,11 +751,28 @@ def get_percent_completed_status(
     days_elapsed = (today - start_date).days
     expected_completion = (days_elapsed / total_sprint_days) * 100
     
-    # Determine status with slack (more relaxed thresholds)
-    yellow_threshold = 25.0  # More relaxed: was 15.0
-    if percent_completed >= expected_completion - slack_threshold:
+    # Apply reduction based on sprint progress
+    # If more than 50% of sprint passed: reduce by 1 day
+    # If less than 50% of sprint passed: reduce by 2 days
+    if expected_completion > 50:
+        adjusted_days_elapsed = days_elapsed - 1
+    else:
+        adjusted_days_elapsed = days_elapsed - 2
+    
+    # Ensure adjusted_days_elapsed is not negative
+    if adjusted_days_elapsed < 0:
+        adjusted_days_elapsed = 0
+    
+    adjusted_expected = (adjusted_days_elapsed / total_sprint_days) * 100
+    
+    # Use closed sprint constants proportionally
+    high_threshold = adjusted_expected * (SPRINT_COMPLETION_HIGH_THRESHOLD / 100)
+    medium_threshold = adjusted_expected * (SPRINT_COMPLETION_MEDIUM_THRESHOLD / 100)
+    
+    # Determine status based on comparison to adjusted expected
+    if percent_completed >= high_threshold:
         return "green"
-    elif percent_completed >= expected_completion - yellow_threshold:
+    elif percent_completed >= medium_threshold:
         return "yellow"
     else:
         return "red"
