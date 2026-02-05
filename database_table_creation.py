@@ -965,12 +965,13 @@ DEFAULT_REPORT_DEFINITIONS = [
         },
         "meta_schema": {
             "required_filters": [],
-            "optional_filters": ["months", "status_code_min", "status_code_max", "http_method"],
+            "optional_filters": ["months", "status_code_min", "status_code_max", "http_method", "severity"],
             "parameters": {
                 "months": {"type": "integer", "description": "Number of months to look back (1, 2, 3, 4, 6, 9, 12)", "default": 1},
                 "status_code_min": {"type": "integer", "description": "Minimum status code (default: 400)"},
                 "status_code_max": {"type": "integer", "description": "Maximum status code (default: 599)"},
-                "http_method": {"type": "string", "description": "Filter by HTTP method"}
+                "http_method": {"type": "string", "description": "Filter by HTTP method"},
+                "severity": {"type": "string", "description": "Filter by severity (HIGH, WARNING, OK, NONE)"}
             }
         }
     },
