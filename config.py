@@ -121,6 +121,19 @@ def build_priority_case_sql() -> str:
 # Color lookup map
 PRIORITY_COLOR_MAP = {p["name"]: p["color"] for p in PRIORITIES}
 
+# --- Metrics and Reports Configuration Constants ---
+# Validation days to look back (default: 180 days)
+DEFAULT_VALIDATION_DAYS_BACK = 180
+
+# Maximum sprint count limit for reports and looking at past sprints in tables
+MAX_SPRINT_COUNT_FOR_REPORTS = 20
+
+# Minimum cycle time filter (in minutes) - filters out unrealistic zero/very short cycle times
+MIN_CYCLE_TIME_MINUTES = 5
+
+# Default query limit for API endpoints (consolidated from various limits: 200, 500, 100, etc.)
+DEFAULT_QUERY_LIMIT = 300
+
 # --- JIRA URL Configuration ---
 from typing import Optional, Dict, Any
 from sqlalchemy.engine import Connection

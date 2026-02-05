@@ -389,10 +389,10 @@ def enrich_epic_hierarchy_with_dates(issues: List[Dict[str, Any]], conn: Connect
         # Sort by original start_date (earliest first), handling None values
         sprints_with_dates.sort(key=lambda x: normalize_date_for_comparison(x["_sort_date"]) if x["_sort_date"] is not None else datetime.max)
         
-        # Remove sort helper field and limit to 20 sprints
+        # Remove sort helper field and limit to max sprint count for reports
         sprints_list = [
             {k: v for k, v in sprint.items() if k != "_sort_date"}
-            for sprint in sprints_with_dates[:20]
+            for sprint in sprints_with_dates[:config.MAX_SPRINT_COUNT_FOR_REPORTS]
         ]
     
     # Step 10: Convert pi_dates_dict to array format (sorted by start_date)
@@ -466,7 +466,7 @@ async def get_issues(
     isGroup: bool = Query(False, description="If true, team_name is treated as a group name"),
     pi: Optional[str] = Query(None, description="Filter by PI (quarter_pi)"),
     sprint_id: Optional[int] = Query(None, description="Filter by sprint ID (matches any sprint_ids array element)"),
-    limit: int = Query(200, description="Number of issues to return (default: 200, max: 1000)"),
+    limit: int = Query(config.DEFAULT_QUERY_LIMIT, description=f"Number of issues to return (default: {config.DEFAULT_QUERY_LIMIT}, max: 1000)"),
     conn: Connection = Depends(get_db_connection)
 ):
     """
@@ -597,7 +597,7 @@ async def get_epics_hierarchy(
     pi: Optional[str] = Query(None, description="Filter by PI (quarter_pi_of_epic)"),
     team_name: Optional[str] = Query(None, description="Filter by team name or group name (if isGroup=true)"),
     isGroup: bool = Query(False, description="If true, team_name is treated as a group name"),
-    limit: int = Query(500, description="Number of records to return (default: 500, max: 1000)"),
+    limit: int = Query(config.DEFAULT_QUERY_LIMIT, description=f"Number of records to return (default: {config.DEFAULT_QUERY_LIMIT}, max: 1000)"),
     conn: Connection = Depends(get_db_connection)
 ):
     """
@@ -2993,7 +2993,7 @@ async def get_issues_list(
     dependency: Optional[bool] = Query(None, description="Filter by dependency flag"),
     flagged: Optional[bool] = Query(None, description="Filter by flagged flag"),
     sprint_id: Optional[int] = Query(None, description="Filter by sprint ID (matches any sprint_ids array element)"),
-    limit: int = Query(500, description="Number of issues to return (default: 500, max: 1000)"),
+    limit: int = Query(config.DEFAULT_QUERY_LIMIT, description=f"Number of issues to return (default: {config.DEFAULT_QUERY_LIMIT}, max: 1000)"),
     conn: Connection = Depends(get_db_connection)
 ):
     """

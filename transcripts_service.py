@@ -169,7 +169,7 @@ async def get_latest_transcripts(
     type: Optional[str] = Query(None, description="Transcript type: 'Daily' or 'PI Sync'"),
     team_name: Optional[str] = Query(None, description="Team name (required if type='Daily')"),
     pi_name: Optional[str] = Query(None, description="PI name (required if type='PI Sync')"),
-    limit: int = Query(1, ge=1, le=100, description="Number of transcripts to return (default: 1, max: 100)"),
+    limit: int = Query(config.DEFAULT_QUERY_LIMIT, ge=1, le=100, description=f"Number of transcripts to return (default: {config.DEFAULT_QUERY_LIMIT}, max: 100)"),
     conn: Connection = Depends(get_db_connection)
 ):
     """

@@ -871,7 +871,7 @@ def calculate_days_in_sprint(start_date: date, end_date: date) -> Optional[int]:
 @team_metrics_router.get("/team-metrics/get-avg-sprint-metrics")
 async def get_avg_sprint_metrics(
     team_name: str = Query(..., description="Team name or group name (if isGroup=true)"),
-    sprint_count: int = Query(5, description="Number of sprints to average (default: 5, max: 20)", ge=1, le=20),
+    sprint_count: int = Query(5, description=f"Number of sprints to average (default: 5, max: {config.MAX_SPRINT_COUNT_FOR_REPORTS})", ge=1, le=config.MAX_SPRINT_COUNT_FOR_REPORTS),
     isGroup: bool = Query(False, description="If true, team_name is treated as a group name"),
     conn: Connection = Depends(get_db_connection)
 ):
@@ -1774,7 +1774,7 @@ async def get_issues_trend(
 
 @team_metrics_router.get("/team-metrics/get-average-sprint-velocity-per-team")
 async def get_average_sprint_velocity_per_team_endpoint(
-    num_sprints: int = Query(5, description="Number of sprints to average (default: 5, max: 20)", ge=1, le=20),
+    num_sprints: int = Query(5, description=f"Number of sprints to average (default: 5, max: {config.MAX_SPRINT_COUNT_FOR_REPORTS})", ge=1, le=config.MAX_SPRINT_COUNT_FOR_REPORTS),
     team_name: Optional[str] = Query(None, description="Team name or group name (if isGroup=true)"),
     isGroup: bool = Query(False, description="If true, team_name is treated as a group name"),
     pi: Optional[str] = Query(None, description="Program Increment name - if provided, uses teams that participate in this PI"),
@@ -3113,7 +3113,7 @@ async def get_general_kpis(
     isGroup: bool = Query(False, description="If true, team_name is treated as a group name"),
     pi: Optional[str] = Query(None, description="PI name (required when scope='pi')"),
     metrics: Optional[str] = Query(None, description="Comma-separated list of metric IDs. If omitted, returns all available metrics for the scope."),
-    sprint_count: int = Query(5, description="Number of sprints to average for velocity/predictability (default: 5, max: 20)", ge=1, le=20),
+    sprint_count: int = Query(5, description=f"Number of sprints to average for velocity/predictability (default: 5, max: {config.MAX_SPRINT_COUNT_FOR_REPORTS})", ge=1, le=config.MAX_SPRINT_COUNT_FOR_REPORTS),
     conn: Connection = Depends(get_db_connection)
 ):
     """

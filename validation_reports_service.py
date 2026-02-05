@@ -23,6 +23,7 @@ from validation_constants import (
     DRAGGED_SPRINTS_THRESHOLD,
     EPIC_MAX_CHILDREN_THRESHOLD
 )
+import config
 
 router = APIRouter()
 
@@ -36,7 +37,7 @@ VALIDATION_FUNCTIONS = {
 
 @router.get("/issues/validations/issues")
 async def get_validation_issues(
-    days_back: int = Query(180, ge=1, le=365, description="Days to look back for updated issues"),
+    days_back: int = Query(config.DEFAULT_VALIDATION_DAYS_BACK, ge=1, le=365, description="Days to look back for updated issues"),
     validation_type: Optional[str] = Query(
         None, 
         description="Specific validation type (old_bugs, dragged_sprints, epic_health, stuck_in_progress). Omit to run all."

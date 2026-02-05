@@ -66,7 +66,7 @@ async def get_prompts(
     prompt_type: Optional[str] = Query(None, description="Filter by prompt type"),
     active: Optional[bool] = Query(None, description="Filter by active status"),
     search: Optional[str] = Query(None, description="Search in prompt names"),
-    limit: int = Query(100, ge=1, le=1000, description="Maximum number of prompts to return"),
+    limit: int = Query(config.DEFAULT_QUERY_LIMIT, ge=1, le=1000, description=f"Maximum number of prompts to return (default: {config.DEFAULT_QUERY_LIMIT})"),
     offset: int = Query(0, ge=0, description="Number of prompts to skip"),
     conn: Connection = Depends(get_db_connection)
 ):

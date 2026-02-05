@@ -110,7 +110,7 @@ async def get_all_teams(
     group_key: Optional[int] = Query(None, description="Filter by group key"),
     search: Optional[str] = Query(None, description="Search team names"),
     ai_insight: Optional[bool] = Query(None, description="Filter by AI insight flag (true/false)"),
-    limit: int = Query(200, description="Maximum number of teams to return (default: 200, max: 1000)"),
+    limit: int = Query(config.DEFAULT_QUERY_LIMIT, description=f"Maximum number of teams to return (default: {config.DEFAULT_QUERY_LIMIT}, max: 1000)"),
     conn: Connection = Depends(get_db_connection)
 ):
     """

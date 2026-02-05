@@ -56,7 +56,7 @@ def validate_limit(limit: int) -> int:
 async def get_recommendations_collection(
     date: Optional[str] = Query(None, description="Filter by date in YYYY-MM-DD format (e.g., '2025-12-05')"),
     team_name: Optional[str] = Query(None, description="Filter by team name"),
-    limit: int = Query(100, description="Maximum number of recommendations to return (default: 100)"),
+    limit: int = Query(config.DEFAULT_QUERY_LIMIT, description=f"Maximum number of recommendations to return (default: {config.DEFAULT_QUERY_LIMIT})"),
     conn: Connection = Depends(get_db_connection)
 ):
     """

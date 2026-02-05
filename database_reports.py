@@ -42,7 +42,7 @@ ReportDataResult = Dict[str, Any]
 ReportDataFetcher = Callable[[Dict[str, Any], Connection], ReportDataResult]
 
 MIN_DURATION_DAYS = 0.05
-MIN_CYCLE_TIME_DAYS = 0.2  # Minimum cycle time threshold (in days) - filters out unrealistic zero/very short cycle times
+MIN_CYCLE_TIME_DAYS = 0.1  # Minimum cycle time threshold (in days) - filters out unrealistic zero/very short cycle times
 VALID_DURATION_MONTHS = {1, 2, 3, 4, 6, 9}
 DEFAULT_HIERARCHY_LIMIT = 500
 
