@@ -40,13 +40,12 @@ team_metrics_router = APIRouter()
 # ============================================================================
 
 # Story/Sprint Issue Cycle Time Tiers (in days)
-STORY_CYCLE_TIME_ELITE = 10    # <= 10 days = Elite
-STORY_CYCLE_TIME_HIGH = 20     # 10-20 days = High
-STORY_CYCLE_TIME_MEDIUM = 30   # 20-30 days = Medium
+STORY_CYCLE_TIME_HIGH = 10     # <= 10 days = High
+STORY_CYCLE_TIME_MEDIUM = 30   # 10-30 days = Medium
                                # > 30 days = Low
 
 # Epic Cycle Time Tiers (in days)
-EPIC_CYCLE_TIME_ELITE = 40     # <= 40 days = Elite/High
+EPIC_CYCLE_TIME_HIGH = 40      # <= 40 days = High
 EPIC_CYCLE_TIME_MEDIUM = 75    # 40-75 days = Medium
                                # > 75 days = Low
 
@@ -203,7 +202,7 @@ def get_cycle_time_tier(cycle_time: float) -> str:
     if cycle_time == 0:
         return ""
     
-    if cycle_time <= STORY_CYCLE_TIME_ELITE:
+    if cycle_time <= STORY_CYCLE_TIME_HIGH:
         return "high"  # Best tier for Sprint metrics is "high" (green)
     elif cycle_time <= STORY_CYCLE_TIME_MEDIUM:
         return "medium"  # Acceptable performance
@@ -234,7 +233,7 @@ def get_epic_cycle_time_tier(cycle_time: float) -> str:
     if cycle_time == 0:
         return ""
     
-    if cycle_time <= EPIC_CYCLE_TIME_ELITE:
+    if cycle_time <= EPIC_CYCLE_TIME_HIGH:
         return "high"  # Best tier for PI metrics is "high" (green)
     elif cycle_time <= EPIC_CYCLE_TIME_MEDIUM:
         return "medium"
