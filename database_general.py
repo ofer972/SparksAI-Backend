@@ -1327,34 +1327,71 @@ def delete_recommendation_by_id(recommendation_id: int, conn: Connection = None)
 # -------------------------------------------------------------
 # Settings and other helpers
 # -------------------------------------------------------------
-def get_all_settings_db(conn: Connection = None) -> Dict[str, str]:
+def get_all_settings_db(conn: Connection = None) -> Dict[str, List[Dict[str, Any]]]:
     """
-    Get all global settings from the database.
+    Get all global settings from the database, grouped by category.
     
-    Returns dictionary of setting_key: setting_value pairs.
-    Includes full API keys as stored in database.
+    Returns dictionary where keys are category names and values are lists of setting objects.
+    Categories are ordered: Metrics & KPIs first, then others.
     
     Args:
         conn (Connection): Database connection from FastAPI dependency
     
     Returns:
-        dict: Dictionary of setting_key: setting_value pairs
+        dict: Dictionary of category_name: [list of setting objects]
     """
     try:
         # SECURE: Parameterized query prevents SQL injection
         sql_query = """
-            SELECT setting_key, setting_value 
+            SELECT 
+                setting_key, 
+                setting_value, 
+                setting_type, 
+                category, 
+                description, 
+                is_encrypted
             FROM global_settings
+            ORDER BY 
+                CASE category
+                    WHEN 'Epic Metrics and KPI' THEN 1
+                    WHEN 'Story Metrics and KPI' THEN 2
+                    WHEN 'PI Metrics and KPI' THEN 3
+                    WHEN 'Sprint Metrics and KPI' THEN 4
+                    WHEN 'Validation & Reporting' THEN 5
+                    WHEN 'Bug Tracking' THEN 6
+                    WHEN 'Cache Configuration' THEN 7
+                    WHEN 'AI Chat' THEN 8
+                    ELSE 9
+                END,
+                setting_key
         """
         
-        logger.info(f"Executing query to get all global settings")
+        logger.info(f"Executing query to get all global settings grouped by category")
         
         result = conn.execute(text(sql_query))
         
-        # Convert rows to dictionary of key-value pairs
-        settings = {row[0]: row[1] for row in result}
+        # Group by category (maintaining order from SQL query)
+        settings_by_category: Dict[str, List[Dict[str, Any]]] = {}
+        categories_order = []  # Track category order explicitly
         
-        return settings
+        for row in result:
+            category = row[3] if row[3] is not None else 'Other'  # Use 'Other' if category is NULL
+            
+            if category not in settings_by_category:
+                settings_by_category[category] = []
+                categories_order.append(category)
+            
+            settings_by_category[category].append({
+                'setting_key': row[0],
+                'setting_value': row[1],
+                'setting_type': row[2] if row[2] is not None else 'string',
+                'description': row[4] if row[4] is not None else '',
+                'is_encrypted': bool(row[5]) if row[5] is not None else False
+            })
+        
+        # SQL already orders by category and setting_key, so settings within each category are already sorted
+        # Return the dictionary (Python 3.7+ maintains insertion order)
+        return settings_by_category
             
     except Exception as e:
         logger.error(f"Error fetching all global settings: {e}")

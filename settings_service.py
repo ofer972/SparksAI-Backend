@@ -33,24 +33,32 @@ class BatchSettingsUpdateRequest(BaseModel):
 @settings_router.get("/settings/getAll")
 async def get_all_settings(conn: Connection = Depends(get_db_connection)):
     """
-    Get all global settings from the database.
+    Get all global settings from the database, grouped by category.
 
-    Returns all settings as key-value pairs, including full API keys.
+    Returns settings organized by category with proper ordering.
+    Metrics & KPIs appears first, followed by other categories.
 
     Returns:
-        JSON response with settings dictionary and count
+        JSON response with settings grouped by category, categories list, and count
     """
     try:
-        # Get settings from database function
-        settings = get_all_settings_db(conn)
+        # Get settings from database function (already grouped by category)
+        settings_by_category = get_all_settings_db(conn)
+        
+        # Extract category names in order (dict keys maintain insertion order in Python 3.7+)
+        categories = list(settings_by_category.keys())
+        
+        # Count total settings
+        total_count = sum(len(settings) for settings in settings_by_category.values())
         
         return {
             "success": True,
             "data": {
-                "settings": settings,
-                "count": len(settings)
+                "settings_by_category": settings_by_category,
+                "categories": categories,
+                "count": total_count
             },
-            "message": f"Retrieved {len(settings)} settings"
+            "message": f"Retrieved {total_count} settings across {len(categories)} categories"
         }
     
     except Exception as e:
