@@ -165,18 +165,18 @@ def validate_group_job_request(job_type: str, group_name: str, conn: Connection)
 
 
 def validate_agent_job_request(job_type: str, team_name: Optional[str], pi: Optional[str], group_name: Optional[str], conn: Connection):
-    """Validate unified agent job creation request based on insight type flags"""
-    # Normalize job_type
-    if job_type == "Daily Agent":
-        job_type = "Daily Progress"
+    """Validate unified agent job creation request based on insight type flags
     
+    Args:
+        job_type: The insight_id (e.g., "pi-sync", "daily-progress")
+    """
     if not job_type or not job_type.strip():
         raise HTTPException(status_code=400, detail="job_type is required")
     
-    # Get insight type from database
-    insight_types = get_insight_types(insight_type=job_type, conn=conn)
+    # Get insight type from database by insight_id
+    insight_types = get_insight_types(insight_id=job_type, conn=conn)
     if not insight_types or len(insight_types) == 0:
-        raise HTTPException(status_code=404, detail=f"Insight type '{job_type}' not found")
+        raise HTTPException(status_code=404, detail=f"Insight type with id '{job_type}' not found")
     
     insight_type = insight_types[0]
     pi_insight = insight_type.get('pi_insight', False)
@@ -203,7 +203,7 @@ def validate_agent_job_request(job_type: str, team_name: Optional[str], pi: Opti
     if group_name:
         validate_group_exists(group_name, conn)
     
-    return job_type  # Return normalized job_type
+    return job_type  # Return insight_id
 
 @agent_jobs_router.get("/agent-jobs")
 async def get_agent_jobs(conn: Connection = Depends(get_db_connection)):
@@ -217,20 +217,23 @@ async def get_agent_jobs(conn: Connection = Depends(get_db_connection)):
     try:
         # SECURE: Parameterized query prevents SQL injection
         # Only return selected fields for the collection endpoint
+        # JOIN with insight_types to get display name (insight_type)
         query = text(f"""
             SELECT 
-                job_id,
-                job_type,
-                team_name,
-                group_name,
-                pi,
-                status,
-                claimed_by,
-                claimed_at,
-                result,
-                error
-            FROM {config.AGENT_JOBS_TABLE}
-            ORDER BY job_id DESC 
+                aj.job_id,
+                aj.job_type,
+                it.insight_type,
+                aj.team_name,
+                aj.group_name,
+                aj.pi,
+                aj.status,
+                aj.claimed_by,
+                aj.claimed_at,
+                aj.result,
+                aj.error
+            FROM {config.AGENT_JOBS_TABLE} aj
+            LEFT JOIN public.insight_types it ON aj.job_type = it.id
+            ORDER BY aj.job_id DESC 
             LIMIT 100
         """)
         
@@ -351,10 +354,14 @@ async def get_agent_job(job_id: int, conn: Connection = Depends(get_db_connectio
     """
     try:
         # SECURE: Parameterized query prevents SQL injection
+        # JOIN with insight_types to get display name (insight_type)
         query = text(f"""
-            SELECT * 
-            FROM {config.AGENT_JOBS_TABLE} 
-            WHERE job_id = :job_id
+            SELECT 
+                aj.*,
+                it.insight_type
+            FROM {config.AGENT_JOBS_TABLE} aj
+            LEFT JOIN public.insight_types it ON aj.job_type = it.id
+            WHERE aj.job_id = :job_id
         """)
         
         logger.info(f"Executing query to get agent job with ID {job_id} from {config.AGENT_JOBS_TABLE}")

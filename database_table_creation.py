@@ -15,6 +15,13 @@ from typing import Optional
 # Global flag to ensure tables are created only once
 _tables_initialized = False
 
+def generate_insight_id(insight_type: str) -> str:
+    """Generate insight_id from insight_type name: lowercase with hyphens.
+    
+    Example: "Sprint Goal" -> "sprint-goal"
+    """
+    return insight_type.lower().replace(' ', '-')
+
 # Default insight types data - easy to update
 # Note: insight_categories is now a list (array) that will be stored as JSONB
 DEFAULT_INSIGHT_TYPES = [
@@ -28,7 +35,7 @@ DEFAULT_INSIGHT_TYPES = [
         "team_insight": False,
         "group_insight": True,
         "sprint_insight": False,
-        "cron_config": {"day_of_week": "sun,mon,tue,wed,thu", "hour": 6, "minute": 0}
+        "cron_config": {"day_of_week": "sun,mon,tue,wed,thu", "hour": 3, "minute": 0}
     },
     {
         "insight_type": "PI Dependencies",
@@ -40,7 +47,7 @@ DEFAULT_INSIGHT_TYPES = [
         "team_insight": False,
         "group_insight": True,
         "sprint_insight": False,
-        "cron_config": {"hour": 5, "minute": 40}
+        "cron_config": {"hour": 3, "minute": 15}
     },
     {
         "insight_type": "PI Planning Gaps",
@@ -52,7 +59,7 @@ DEFAULT_INSIGHT_TYPES = [
         "team_insight": False,
         "group_insight": True,
         "sprint_insight": False,
-        "cron_config": {"hour": 5, "minute": 40}
+        "cron_config": {"hour": 3, "minute": 30}
     },
     {
         "insight_type": "Daily Progress",
@@ -64,7 +71,7 @@ DEFAULT_INSIGHT_TYPES = [
         "team_insight": True,
         "group_insight": False,
         "sprint_insight": True,
-        "cron_config": {"hour": 5, "minute": 30}
+        "cron_config": {"hour": 3, "minute": 45}
     },
     {
         "insight_type": "Sprint Goal",
@@ -76,7 +83,7 @@ DEFAULT_INSIGHT_TYPES = [
         "team_insight": True,
         "group_insight": False,
         "sprint_insight": True,
-        "cron_config": {"hour": 5, "minute": 30}
+        "cron_config": {"hour": 4, "minute": 0}
     },
     {
         "insight_type": "Team Retro Topics",
@@ -88,7 +95,7 @@ DEFAULT_INSIGHT_TYPES = [
         "team_insight": True,
         "group_insight": False,
         "sprint_insight": True,
-        "cron_config": {"hour": 5, "minute": 30}
+        "cron_config": {"hour": 4, "minute": 15}
     },
     {
         "insight_type": "Team PI Insight",
@@ -100,7 +107,7 @@ DEFAULT_INSIGHT_TYPES = [
         "team_insight": True,
         "group_insight": False,
         "sprint_insight": False,
-        "cron_config": {"hour": 5, "minute": 30}
+        "cron_config": {"hour": 4, "minute": 30}
     },
     {
         "insight_type": "Group Sprint Flow",
@@ -112,7 +119,7 @@ DEFAULT_INSIGHT_TYPES = [
         "team_insight": False,
         "group_insight": True,
         "sprint_insight": False,
-        "cron_config": {"hour": 5, "minute": 45}
+        "cron_config": {"hour": 4, "minute": 45}
     },
     {
         "insight_type": "Group Sprint Predictability",
@@ -124,7 +131,7 @@ DEFAULT_INSIGHT_TYPES = [
         "team_insight": False,
         "group_insight": True,
         "sprint_insight": False,
-        "cron_config": {"hour": 5, "minute": 45}
+        "cron_config": {"hour": 5, "minute": 0}
     },
     {
         "insight_type": "Group Sprint Dependency",
@@ -136,7 +143,7 @@ DEFAULT_INSIGHT_TYPES = [
         "team_insight": False,
         "group_insight": True,
         "sprint_insight": False,
-        "cron_config": {"hour": 5, "minute": 45}
+        "cron_config": {"hour": 5, "minute": 15}
     },
     {
         "insight_type": "WIP Level",
@@ -150,7 +157,7 @@ DEFAULT_INSIGHT_TYPES = [
         "sprint_insight": False,
         "requires_team": True,
         "requires_group": False,
-        "cron_config": {"hour": 5, "minute": 50}
+        "cron_config": {"hour": 5, "minute": 30}
     },
 ]
 
@@ -1418,7 +1425,7 @@ def create_ai_summary_table_if_not_exists(engine=None) -> bool:
                     group_name VARCHAR(255),
                     sprint_id INTEGER,
                     card_name VARCHAR(255) NOT NULL,
-                    insight_type VARCHAR(100) NOT NULL,
+                    insight_id VARCHAR(100) NOT NULL,
                     priority VARCHAR(50) NOT NULL,
                     source VARCHAR(255),
                     source_job_id INTEGER,
@@ -1433,7 +1440,7 @@ def create_ai_summary_table_if_not_exists(engine=None) -> bool:
                 -- Single unique index for all card types (handles NULLs with COALESCE)
                 CREATE UNIQUE INDEX idx_ai_summary_unique_all 
                 ON public.ai_summary(date, 
-                                     insight_type,
+                                     insight_id,
                                      COALESCE(team_name, ''), 
                                      COALESCE(pi, ''), 
                                      COALESCE(group_name, ''));
@@ -1937,7 +1944,7 @@ def create_insight_types_table_if_not_exists(engine=None) -> bool:
                 print("Creating insight_types table...")
                 create_table_sql = """
                 CREATE TABLE public.insight_types (
-                    id SERIAL PRIMARY KEY,
+                    id VARCHAR(255) PRIMARY KEY,
                     insight_type VARCHAR(255) NOT NULL UNIQUE,
                     insight_description TEXT,
                     insight_categories JSONB NOT NULL DEFAULT '[]'::jsonb,
@@ -2211,6 +2218,7 @@ def insert_default_insight_types(engine=None):
             for insight_type_data in DEFAULT_INSIGHT_TYPES:
                 try:
                     insight_type = insight_type_data.get("insight_type", "")
+                    insight_id = generate_insight_id(insight_type)
                     insight_description = insight_type_data.get("insight_description")
                     insight_categories = insight_type_data.get("insight_categories", [])
                     report_ids = insight_type_data.get("report_ids", [])
@@ -2230,9 +2238,10 @@ def insert_default_insight_types(engine=None):
                     # Convert list to JSON string for JSONB column
                     insert_sql = """
                     INSERT INTO public.insight_types 
-                    (insight_type, insight_description, insight_categories, report_ids, active, pi_insight, team_insight, group_insight, sprint_insight, cron_config) 
-                    VALUES (:insight_type, :insight_description, CAST(:insight_categories AS jsonb), CAST(:report_ids AS jsonb), :active, :pi_insight, :team_insight, :group_insight, :sprint_insight, CAST(:cron_config AS jsonb))
-                    ON CONFLICT (insight_type) DO UPDATE SET
+                    (id, insight_type, insight_description, insight_categories, report_ids, active, pi_insight, team_insight, group_insight, sprint_insight, cron_config) 
+                    VALUES (:id, :insight_type, :insight_description, CAST(:insight_categories AS jsonb), CAST(:report_ids AS jsonb), :active, :pi_insight, :team_insight, :group_insight, :sprint_insight, CAST(:cron_config AS jsonb))
+                    ON CONFLICT (id) DO UPDATE SET
+                        insight_type = EXCLUDED.insight_type,
                         insight_description = EXCLUDED.insight_description,
                         insight_categories = EXCLUDED.insight_categories,
                         report_ids = EXCLUDED.report_ids,
@@ -2245,6 +2254,7 @@ def insert_default_insight_types(engine=None):
                         updated_at = CURRENT_TIMESTAMP
                     """
                     conn.execute(text(insert_sql), {
+                        "id": insight_id,
                         "insight_type": insight_type,
                         "insight_description": insight_description,
                         "insight_categories": json.dumps(insight_categories),

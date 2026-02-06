@@ -509,13 +509,13 @@ async def get_ai_insights_collection(
         where_conditions = []
         params = {}
         
-        # Filter by insight_type column value if provided
+        # Filter by insight_id column value if provided
         if insight_type:
-            where_conditions.append("insight_type = :insight_type")
-            params["insight_type"] = insight_type
+            where_conditions.append("ai.insight_id = :insight_id")
+            params["insight_id"] = insight_type
         else:
-            # No insight_type filter - return all cards (but exclude cards with all NULL)
-            where_conditions.append("(team_name IS NOT NULL OR group_name IS NOT NULL OR pi IS NOT NULL)")
+            # No insight_id filter - return all cards (but exclude cards with all NULL)
+            where_conditions.append("(ai.team_name IS NOT NULL OR ai.group_name IS NOT NULL OR ai.pi IS NOT NULL)")
         
         if date:
             where_conditions.append("date = :date")
@@ -546,25 +546,27 @@ async def get_ai_insights_collection(
             where_clause = "WHERE " + " AND ".join(where_conditions)
         
         # SECURE: Parameterized query prevents SQL injection
-        # Return all fields including updated_at, created_at, and insight_type
+        # Return all fields including updated_at, created_at, insight_id, and insight_type (display name)
         query = text(f"""
             SELECT 
-                id,
-                date,
-                team_name,
-                group_name,
-                card_name,
-                priority,
-                description,
-                short_summary,
-                source_job_id,
-                pi,
-                insight_type,
-                updated_at,
-                created_at
-            FROM {config.AI_INSIGHTS_TABLE}
+                ai.id,
+                ai.date,
+                ai.team_name,
+                ai.group_name,
+                ai.card_name,
+                ai.priority,
+                ai.description,
+                ai.short_summary,
+                ai.source_job_id,
+                ai.pi,
+                ai.insight_id,
+                it.insight_type,
+                ai.updated_at,
+                ai.created_at
+            FROM {config.AI_INSIGHTS_TABLE} ai
+            LEFT JOIN public.insight_types it ON ai.insight_id = it.id
             {where_clause}
-            ORDER BY id DESC 
+            ORDER BY ai.id DESC 
             LIMIT :limit
         """)
         params["limit"] = validated_limit
@@ -609,9 +611,10 @@ async def get_ai_insights_collection(
                 "short_summary": row[7],
                 "source_job_id": row[8],
                 "pi": row[9] if len(row) > 9 else None,
-                "insight_type": row[10] if len(row) > 10 else None,
-                "updated_at": row[11] if len(row) > 11 else None,
-                "created_at": row[12] if len(row) > 12 else None
+                "insight_id": row[10] if len(row) > 10 else None,
+                "insight_type": row[11] if len(row) > 11 else None,  # Display name from insight_types table
+                "updated_at": row[12] if len(row) > 12 else None,
+                "created_at": row[13] if len(row) > 13 else None
             }
             # Add priority_color
             add_priority_color_to_card(card_dict)
@@ -841,7 +844,7 @@ async def get_ai_insight(id: int, conn: Connection = Depends(get_db_connection))
 # -----------------------
 
 class AIInsightCreateRequest(BaseModel):
-    insight_type: str  # Insight type name (e.g., "Daily Progress", "PI Sync") - matches insight_types.insight_type
+    insight_id: str  # Insight ID (e.g., "daily-progress", "pi-sync") - matches insight_types.id
     team_name: Optional[str] = None
     group_name: Optional[str] = None
     pi: Optional[str] = None
@@ -863,7 +866,7 @@ class AIInsightUpdateRequest(BaseModel):
     pi: Optional[str] = None
     sprint_id: Optional[int] = None
     card_name: Optional[str] = None
-    insight_type: Optional[str] = None
+    insight_id: Optional[str] = None
     description: Optional[str] = None
     date: Optional[str] = None
     priority: Optional[str] = None
@@ -888,6 +891,10 @@ async def create_ai_insight(
         # Validate that at least one identifier is provided
         if not request.team_name and not request.group_name and not request.pi:
             raise HTTPException(status_code=400, detail="At least one identifier (team_name, group_name, or pi) must be provided")
+        
+        # Validate that insight_id is provided and not empty
+        if not request.insight_id or not request.insight_id.strip():
+            raise HTTPException(status_code=400, detail="insight_id is required and cannot be empty")
         
         # Create payload from request
         payload = request.model_dump()

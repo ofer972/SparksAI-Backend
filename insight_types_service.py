@@ -185,14 +185,14 @@ async def get_insight_types_endpoint(
 
 @insight_types_router.get("/insight-types/{id}")
 async def get_insight_type(
-    id: int,
+    id: str,
     conn: Connection = Depends(get_db_connection)
 ):
     """
     Get a single insight type by ID.
     
     Args:
-        id: The ID of the insight type to retrieve
+        id: The ID of the insight type to retrieve (e.g., "pi-sync", "daily-progress")
     
     Returns:
         JSON response with single insight type or 404 if not found
@@ -325,7 +325,7 @@ async def create_insight_type_endpoint(
 
 @insight_types_router.put("/insight-types/{id}")
 async def update_insight_type_full(
-    id: int,
+    id: str,
     request: InsightTypeCreateRequest,
     conn: Connection = Depends(get_db_connection)
 ):
@@ -395,7 +395,7 @@ async def update_insight_type_full(
 
 @insight_types_router.patch("/insight-types/{id}")
 async def update_insight_type_partial(
-    id: int,
+    id: str,
     request: InsightTypeUpdateRequest,
     conn: Connection = Depends(get_db_connection)
 ):
@@ -465,7 +465,7 @@ async def update_insight_type_partial(
 
 @insight_types_router.delete("/insight-types/{id}")
 async def delete_insight_type_endpoint(
-    id: int,
+    id: str,
     conn: Connection = Depends(get_db_connection)
 ):
     """

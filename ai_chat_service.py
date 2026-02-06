@@ -1648,13 +1648,13 @@ async def fetch_insight_type_reports_data(
                 return float(obj)
             return super().default(obj)
     
-    logger.info(f"INSIGHT TYPE REPORTS DATA COLLECTION - Starting for insight_type: {insight_type_name}")
+    logger.info(f"INSIGHT TYPE REPORTS DATA COLLECTION - Starting for insight_id: {insight_type_name}")
     
-    # Fetch insight type record to get report_ids
+    # Fetch insight type record to get report_ids (insight_type_name now contains insight_id)
     try:
-        insight_type_records = get_insight_types(insight_type=insight_type_name, conn=conn, limit=1)
+        insight_type_records = get_insight_types(insight_id=insight_type_name, conn=conn, limit=1)
         if not insight_type_records or len(insight_type_records) == 0:
-            logger.warning(f"Insight type '{insight_type_name}' not found, skipping reports data")
+            logger.warning(f"Insight type with ID '{insight_type_name}' not found, skipping reports data")
             return ""
         
         insight_type_record = insight_type_records[0]
@@ -1670,9 +1670,9 @@ async def fetch_insight_type_reports_data(
             logger.warning(f"report_ids for '{insight_type_name}' is not a list, skipping reports data")
             return ""
         
-        logger.info(f"Found {len(report_ids)} report(s) for insight type '{insight_type_name}': {report_ids}")
+        logger.info(f"Found {len(report_ids)} report(s) for insight ID '{insight_type_name}': {report_ids}")
     except Exception as e:
-        logger.error(f"Error fetching insight type '{insight_type_name}': {e}")
+        logger.error(f"Error fetching insight type with ID '{insight_type_name}': {e}")
         return ""
     
     # Fetch data for each report
@@ -1908,8 +1908,8 @@ async def ai_chat(
                 
                 # NEW: Fetch and append reports data from insight type
                 try:
-                    insight_type_name = card.get('insight_type')
-                    if insight_type_name:
+                    insight_id = card.get('insight_id')
+                    if insight_id:
                         # Build filters from request parameters (prefer request, fallback to card)
                         filters = {}
                         if request.selected_team:
@@ -1929,9 +1929,10 @@ async def ai_chat(
                             filters['isGroup'] = True
                             filters['group_name'] = card.get('group_name')
                         
-                        # Fetch reports data for this insight type
+                        # Fetch reports data for this insight type using insight_id
+                        # Note: fetch_insight_type_reports_data may need to accept insight_id instead
                         reports_data = await fetch_insight_type_reports_data(
-                            insight_type_name=insight_type_name,
+                            insight_type_name=insight_id,  # Pass insight_id, function may need update
                             filters=filters,
                             conn=conn
                         )

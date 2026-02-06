@@ -60,18 +60,18 @@ def add_priority_color_to_card(card: Dict[str, Any]) -> None:
 
 def get_insight_types_by_categories(categories: List[str], conn: Connection = None) -> List[str]:
     """
-    Get all insight type names that match ANY of the specified categories.
-    Returns a deduplicated, sorted list of insight types.
+    Get all insight IDs that match ANY of the specified categories.
+    Returns a deduplicated, sorted list of insight IDs.
     
     Uses a single SQL query with jsonb_array_elements_text to expand categories
     and check if insight_categories contains any of them using @> operator.
     
     Args:
-        categories (List[str]): List of category names (e.g., ["Daily", "Planning"])
+        categories (List[str]): List of category names (e.g., ["PI Events", "Sprint Status"])
         conn (Connection): Database connection from FastAPI dependency
     
     Returns:
-        list: Deduplicated, sorted list of insight_type strings that match any of the categories
+        list: Deduplicated, sorted list of insight_id strings that match any of the categories
     """
     if not categories:
         return []
@@ -82,7 +82,7 @@ def get_insight_types_by_categories(categories: List[str], conn: Connection = No
         # Use jsonb_array_elements_text to expand categories array and check
         # if insight_categories contains any of the provided categories using @> operator
         query = text("""
-            SELECT DISTINCT insight_type
+            SELECT DISTINCT id
             FROM public.insight_types
             WHERE active = TRUE
               AND EXISTS (
@@ -92,18 +92,18 @@ def get_insight_types_by_categories(categories: List[str], conn: Connection = No
               )
         """)
         
-        logger.info(f"Executing query to get insight types for categories: {categories}")
+        logger.info(f"Executing query to get insight IDs for categories: {categories}")
         
         result = conn.execute(query, {"categories": json.dumps(categories)})
         rows = result.fetchall()
         
-        # Extract insight_type values
-        insight_types = [row[0] for row in rows]
+        # Extract insight_id values
+        insight_ids = [row[0] for row in rows]
         
         # Sort for consistency (DISTINCT already handles deduplication)
-        result = sorted(insight_types)
+        result = sorted(insight_ids)
         
-        logger.info(f"Found {len(result)} unique insight types for categories {categories}: {result}")
+        logger.info(f"Found {len(result)} unique insight IDs for categories {categories}: {result}")
         return result
             
     except Exception as e:
@@ -159,13 +159,13 @@ def get_top_ai_cards_filtered(filter_column: str, filter_value: str, limit: int 
         
         # Build SQL query with optional category filter
         if categories and insight_types_list:
-            # Build IN clause for insight_type filtering
+            # Build IN clause for insight_id filtering
             # Use parameterized query with array
             sql_query = f"""
                 WITH ranked_cards AS (
                     SELECT ai.*,
                         ROW_NUMBER() OVER (
-                            PARTITION BY ai.insight_type 
+                            PARTITION BY ai.insight_id 
                             ORDER BY 
                                 CASE ai.priority 
                                     WHEN 'Critical' THEN 1
@@ -177,7 +177,7 @@ def get_top_ai_cards_filtered(filter_column: str, filter_value: str, limit: int 
                         ) as rn
                     FROM public.ai_summary ai
                     WHERE ai.{filter_column} = :filter_value
-                      AND ai.insight_type = ANY(:insight_types)
+                      AND ai.insight_id = ANY(:insight_ids)
                       {additional_filter}
                 )
                 SELECT rc.*, 
@@ -185,9 +185,10 @@ def get_top_ai_cards_filtered(filter_column: str, filter_value: str, limit: int 
                        it.pi_insight,
                        it.team_insight,
                        it.group_insight,
-                       it.sprint_insight
+                       it.sprint_insight,
+                       it.insight_type
                 FROM ranked_cards rc
-                LEFT JOIN public.insight_types it ON rc.insight_type = it.insight_type
+                LEFT JOIN public.insight_types it ON rc.insight_id = it.id
                 WHERE rc.rn = 1
                 ORDER BY 
                     CASE rc.priority 
@@ -202,7 +203,7 @@ def get_top_ai_cards_filtered(filter_column: str, filter_value: str, limit: int 
             
             params = {
                 'filter_value': filter_value,
-                'insight_types': insight_types_list,
+                'insight_ids': insight_types_list,
                 'limit': limit
             }
         else:
@@ -211,7 +212,7 @@ def get_top_ai_cards_filtered(filter_column: str, filter_value: str, limit: int 
                 WITH ranked_cards AS (
                     SELECT ai.*,
                         ROW_NUMBER() OVER (
-                            PARTITION BY ai.insight_type 
+                            PARTITION BY ai.insight_id 
                             ORDER BY 
                                 CASE ai.priority 
                                     WHEN 'Critical' THEN 1
@@ -230,9 +231,10 @@ def get_top_ai_cards_filtered(filter_column: str, filter_value: str, limit: int 
                        it.pi_insight,
                        it.team_insight,
                        it.group_insight,
-                       it.sprint_insight
+                       it.sprint_insight,
+                       it.insight_type
                 FROM ranked_cards rc
-                LEFT JOIN public.insight_types it ON rc.insight_type = it.insight_type
+                LEFT JOIN public.insight_types it ON rc.insight_id = it.id
                 WHERE rc.rn = 1
                 ORDER BY 
                     CASE rc.priority 
@@ -433,7 +435,7 @@ def get_top_ai_cards_multi_filtered(
     where_clause = " AND ".join(where_conditions)
     
     if insight_type:
-        # Branch 1: Filter by single insight_type
+        # Branch 1: Filter by single insight_id
         sql_query = f"""
             WITH ranked_cards AS (
                 SELECT ai.*,
@@ -442,8 +444,9 @@ def get_top_ai_cards_multi_filtered(
                     it.team_insight,
                     it.group_insight,
                     it.sprint_insight,
+                    it.insight_type,
                     ROW_NUMBER() OVER (
-                        PARTITION BY ai.insight_type 
+                        PARTITION BY ai.insight_id 
                         ORDER BY 
                             ai.date DESC,
                             CASE ai.priority 
@@ -455,16 +458,16 @@ def get_top_ai_cards_multi_filtered(
                     ) as rn
                 FROM public.ai_summary ai
                 LEFT JOIN public.insight_types it
-                    ON ai.insight_type = it.insight_type
+                    ON ai.insight_id = it.id
                 WHERE {where_clause}
-                  AND ai.insight_type = :insight_type
+                  AND ai.insight_id = :insight_id
                   {additional_filter}
                   AND ai.date >= (CURRENT_DATE - 1)
                   AND (
                       NOT EXISTS (
                           SELECT 1
                           FROM public.insight_types itx
-                          WHERE itx.insight_type = ai.insight_type
+                          WHERE itx.id = ai.insight_id
                             AND itx.sprint_insight = TRUE
                       )
                       OR (
@@ -491,7 +494,7 @@ def get_top_ai_cards_multi_filtered(
                 END
             LIMIT :limit
         """
-        params['insight_type'] = insight_type
+        params['insight_id'] = insight_type
     elif categories and insight_types_list:
         # Branch 2: Filter by categories (existing logic)
         sql_query = f"""
@@ -502,8 +505,9 @@ def get_top_ai_cards_multi_filtered(
                     it.team_insight,
                     it.group_insight,
                     it.sprint_insight,
+                    it.insight_type,
                     ROW_NUMBER() OVER (
-                        PARTITION BY ai.insight_type 
+                        PARTITION BY ai.insight_id 
                         ORDER BY 
                             ai.date DESC,
                             CASE ai.priority 
@@ -515,16 +519,16 @@ def get_top_ai_cards_multi_filtered(
                     ) as rn
                 FROM public.ai_summary ai
                 LEFT JOIN public.insight_types it
-                    ON ai.insight_type = it.insight_type
+                    ON ai.insight_id = it.id
                 WHERE {where_clause}
-                  AND ai.insight_type = ANY(:insight_types)
+                  AND ai.insight_id = ANY(:insight_ids)
                   {additional_filter}
                   AND ai.date >= (CURRENT_DATE - 1)
                   AND (
                       NOT EXISTS (
                           SELECT 1
                           FROM public.insight_types itx
-                          WHERE itx.insight_type = ai.insight_type
+                          WHERE itx.id = ai.insight_id
                             AND itx.sprint_insight = TRUE
                       )
                       OR (
@@ -551,9 +555,9 @@ def get_top_ai_cards_multi_filtered(
                 END
             LIMIT :limit
         """
-        params['insight_types'] = insight_types_list
+        params['insight_ids'] = insight_types_list
     else:
-        # Branch 3: No insight_type filter (existing logic)
+        # Branch 3: No insight_id filter (existing logic)
         sql_query = f"""
             WITH ranked_cards AS (
                 SELECT ai.*,
@@ -562,8 +566,9 @@ def get_top_ai_cards_multi_filtered(
                     it.team_insight,
                     it.group_insight,
                     it.sprint_insight,
+                    it.insight_type,
                     ROW_NUMBER() OVER (
-                        PARTITION BY ai.insight_type 
+                        PARTITION BY ai.insight_id 
                         ORDER BY 
                             ai.date DESC,
                             CASE ai.priority 
@@ -575,7 +580,7 @@ def get_top_ai_cards_multi_filtered(
                     ) as rn
                 FROM public.ai_summary ai
                 LEFT JOIN public.insight_types it
-                    ON ai.insight_type = it.insight_type
+                    ON ai.insight_id = it.id
                 WHERE {where_clause}
                   {additional_filter}
                   AND ai.date >= (CURRENT_DATE - 1)
@@ -583,7 +588,7 @@ def get_top_ai_cards_multi_filtered(
                       NOT EXISTS (
                           SELECT 1
                           FROM public.insight_types itx
-                          WHERE itx.insight_type = ai.insight_type
+                          WHERE itx.id = ai.insight_id
                             AND itx.sprint_insight = TRUE
                       )
                       OR (
@@ -1109,7 +1114,7 @@ def create_ai_card(data: Dict[str, Any], conn: Connection = None) -> Dict[str, A
     """
     try:
         allowed_columns = {
-            "date", "team_name", "group_name", "card_name", "insight_type", "priority", "source",
+            "date", "team_name", "group_name", "card_name", "insight_id", "priority", "source",
             "source_job_id", "description", "short_summary", "full_information", "information_json", "pi", "sprint_id"
         }
 
@@ -1117,6 +1122,10 @@ def create_ai_card(data: Dict[str, Any], conn: Connection = None) -> Dict[str, A
         filtered = {k: v for k, v in data.items() if k in allowed_columns}
         if not filtered:
             raise ValueError("No valid fields provided for ai_summary insert")
+        
+        # Validate that insight_id is present and not empty (required field)
+        if "insight_id" not in filtered or not filtered.get("insight_id"):
+            raise ValueError("insight_id is required and cannot be empty or None")
         
         # Convert empty strings to None for nullable columns
         nullable_columns = {"team_name", "group_name", "pi"}
@@ -1162,7 +1171,7 @@ def update_ai_card_by_id(card_id: int, updates: Dict[str, Any], conn: Connection
     """
     try:
         allowed_columns = {
-            "date", "team_name", "group_name", "card_name", "insight_type", "priority", "source",
+            "date", "team_name", "group_name", "card_name", "insight_id", "priority", "source",
             "source_job_id", "description", "short_summary", "full_information", "information_json", "pi", "sprint_id"
         }
         filtered = {k: v for k, v in updates.items() if k in allowed_columns}
@@ -1711,13 +1720,13 @@ def get_all_etl_settings_from_db(conn: Connection) -> Dict[str, str]:
 # -------------------------------------------------------------
 # CRUD helpers for insight_types
 # -------------------------------------------------------------
-def get_insight_type_by_id(insight_type_id: int, conn: Connection = None) -> Optional[Dict[str, Any]]:
+def get_insight_type_by_id(insight_type_id: str, conn: Connection = None) -> Optional[Dict[str, Any]]:
     """
     Get a single insight type by ID from insight_types table.
     Uses parameterized queries to prevent SQL injection.
     
     Args:
-        insight_type_id (int): The ID of the insight type to retrieve
+        insight_type_id (str): The ID of the insight type to retrieve (e.g., "pi-sync", "daily-progress")
         conn (Connection): Database connection from FastAPI dependency
         
     Returns:
@@ -1769,6 +1778,7 @@ def get_insight_type_by_id(insight_type_id: int, conn: Connection = None) -> Opt
 
 def get_insight_types(
     insight_type: Optional[str] = None,
+    insight_id: Optional[str] = None,
     insight_category: Optional[str] = None,
     active: Optional[bool] = None,
     search: Optional[str] = None,
@@ -1780,6 +1790,7 @@ def get_insight_types(
     
     Args:
         insight_type (Optional[str]): Filter by insight type (exact match)
+        insight_id (Optional[str]): Filter by insight id (exact match)
         insight_category (Optional[str]): Filter by insight category (exact match - checks if category exists in JSONB array)
         active (Optional[bool]): Filter by active status
         search (Optional[str]): Search term for insight_type (ILIKE search)
@@ -1794,6 +1805,10 @@ def get_insight_types(
         # Build WHERE clause dynamically based on filters
         where_conditions = []
         params = {}
+        
+        if insight_id:
+            where_conditions.append("id = :insight_id")
+            params["insight_id"] = insight_id
         
         if insight_type:
             where_conditions.append("insight_type = :insight_type")
@@ -1960,7 +1975,7 @@ def create_insight_type(data: Dict[str, Any], conn: Connection = None) -> Dict[s
         raise e
 
 
-def update_insight_type_by_id(insight_type_id: int, updates: Dict[str, Any], conn: Connection = None) -> Optional[Dict[str, Any]]:
+def update_insight_type_by_id(insight_type_id: str, updates: Dict[str, Any], conn: Connection = None) -> Optional[Dict[str, Any]]:
     """
     Update an existing insight type by id and return the updated row, or None if not found.
     
@@ -2059,12 +2074,12 @@ def update_insight_type_by_id(insight_type_id: int, updates: Dict[str, Any], con
         raise e
 
 
-def delete_insight_type_by_id(insight_type_id: int, conn: Connection = None) -> bool:
+def delete_insight_type_by_id(insight_type_id: str, conn: Connection = None) -> bool:
     """
     Hard delete an insight type by id. Returns True if deleted, False if not found.
     
     Args:
-        insight_type_id (int): The ID of the insight type to delete
+        insight_type_id (str): The ID of the insight type to delete (e.g., "pi-sync", "daily-progress")
         conn (Connection): Database connection from FastAPI dependency
     
     Returns:
