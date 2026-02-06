@@ -2130,14 +2130,60 @@ def insert_default_global_settings():
     try:
         with engine.connect() as conn:
             insert_sql = """
-            INSERT INTO public.global_settings (setting_key, setting_value, setting_type, description) 
+            INSERT INTO public.global_settings (setting_key, setting_value, setting_type, category, description) 
             VALUES 
-                ('enable_ai_insights', 'true', 'boolean', 'Enable AI insights feature')
+                -- Validation & Reporting (9 settings)
+                ('backend_default_validation_days_back', '180', 'integer', 'Validation & Reporting', 'Default number of days to look back for validation reports'),
+                ('backend_old_bugs_threshold_days', '90', 'integer', 'Validation & Reporting', 'Days threshold for identifying old bugs in validation'),
+                ('backend_stuck_stories_threshold_days', '30', 'integer', 'Validation & Reporting', 'Days threshold for stuck stories (hierarchy level 0)'),
+                ('backend_stuck_epics_threshold_days', '90', 'integer', 'Validation & Reporting', 'Days threshold for stuck epics'),
+                ('backend_dragged_sprints_threshold', '3', 'integer', 'Validation & Reporting', 'Number of sprints threshold for dragged issues'),
+                ('backend_epic_max_children_threshold', '25', 'integer', 'Validation & Reporting', 'Maximum children threshold for epic health validation'),
+                ('backend_max_sprint_count_for_reports', '20', 'integer', 'Validation & Reporting', 'Maximum sprint count limit for reports and past sprints analysis'),
+                ('backend_default_query_limit', '300', 'integer', 'Validation & Reporting', 'Default query limit for API endpoints'),
+                ('backend_default_hierarchy_limit', '500', 'integer', 'Validation & Reporting', 'Default limit for hierarchy queries'),
+                
+                -- Metrics & KPIs (18 settings)
+                ('backend_min_duration_and_cycle_time_days', '0.01', 'float', 'Metrics & KPIs', 'Unified minimum threshold (days) for both status durations and cycle times - filters out very short durations (< 0.24 hours) and unrealistic cycle times'),
+                ('backend_story_cycle_time_high', '10', 'integer', 'Metrics & KPIs', 'Story cycle time high threshold (days) - <= this value = High'),
+                ('backend_story_cycle_time_medium', '30', 'integer', 'Metrics & KPIs', 'Story cycle time medium threshold (days) - 10-30 days = Medium'),
+                ('backend_epic_cycle_time_high', '40', 'integer', 'Metrics & KPIs', 'Epic cycle time high threshold (days) - <= this value = High'),
+                ('backend_epic_cycle_time_medium', '75', 'integer', 'Metrics & KPIs', 'Epic cycle time medium threshold (days) - 40-75 days = Medium'),
+                ('backend_cycle_time_period_days', '30', 'integer', 'Metrics & KPIs', 'Period (days) for measuring story cycle time'),
+                ('backend_epic_cycle_time_period_days', '90', 'integer', 'Metrics & KPIs', 'Period (days) for measuring epic cycle time'),
+                ('backend_sprint_wip_high_threshold', '30', 'integer', 'Metrics & KPIs', 'Sprint WIP high threshold (%) - <= 30% = High (green)'),
+                ('backend_sprint_wip_medium_threshold', '50', 'integer', 'Metrics & KPIs', 'Sprint WIP medium threshold (%) - 30-50% = Medium (yellow)'),
+                ('backend_sprint_completion_high_threshold', '80', 'integer', 'Metrics & KPIs', 'Sprint completion high threshold (%) - >= 80% = High (green)'),
+                ('backend_sprint_completion_medium_threshold', '60', 'integer', 'Metrics & KPIs', 'Sprint completion medium threshold (%) - 60-79.9% = Medium (yellow)'),
+                ('backend_epic_wip_high_threshold', '30', 'integer', 'Metrics & KPIs', 'Epic WIP high threshold (%) - <= 30% = High (green)'),
+                ('backend_epic_wip_medium_threshold', '60', 'integer', 'Metrics & KPIs', 'Epic WIP medium threshold (%) - 30-60% = Medium (yellow)'),
+                ('backend_pi_completion_high_threshold', '75', 'integer', 'Metrics & KPIs', 'PI completion high threshold (%) - >= 75% = High (green)'),
+                ('backend_pi_completion_medium_threshold', '55', 'integer', 'Metrics & KPIs', 'PI completion medium threshold (%) - 55-74.9% = Medium (yellow)'),
+                ('backend_heatmap_low_volume_threshold', '2', 'integer', 'Metrics & KPIs', 'Heatmap low volume threshold - < 2 uncompleted issues = Low'),
+                ('backend_heatmap_medium_max_threshold', '5', 'integer', 'Metrics & KPIs', 'Heatmap medium max threshold - 2-5 uncompleted issues = Medium'),
+                ('backend_heatmap_icon_threshold', '10', 'integer', 'Metrics & KPIs', 'Heatmap icon threshold - icon shown if total_issues > this value'),
+                
+                -- Bug Tracking (4 settings)
+                ('backend_open_bugs_high_per_team', '6', 'integer', 'Bug Tracking', 'Open bugs high threshold per team - <= 6 bugs/team = High (green)'),
+                ('backend_open_bugs_medium_per_team', '15', 'integer', 'Bug Tracking', 'Open bugs medium threshold per team - 7-15 bugs/team = Medium (yellow)'),
+                ('backend_open_bugs_trend_period_days', '30', 'integer', 'Bug Tracking', 'Period (days) for calculating bug creation/resolution trend'),
+                ('backend_bug_issue_types', '["Bug", "Defect"]', 'json', 'Bug Tracking', 'List of issue types considered as bugs'),
+                
+                -- Cache Configuration (6 settings)
+                ('backend_cache_ttl_realtime', '60', 'integer', 'Cache Configuration', 'Cache TTL for realtime reports (current/progress/wip) - 1 minute - data changes frequently, needs fresh data'),
+                ('backend_cache_ttl_aggregate', '300', 'integer', 'Cache Configuration', 'Cache TTL for aggregate reports (burndown/trend/predictability/active) - 5 minutes - aggregates recent data, moderate freshness needed'),
+                ('backend_cache_ttl_historical', '1800', 'integer', 'Cache Configuration', 'Cache TTL for historical reports (closed/historical/summary) - 30 minutes - data rarely changes, can cache longer'),
+                ('backend_cache_ttl_definitions', '3600', 'integer', 'Cache Configuration', 'Cache TTL for report definitions/metadata - 1 hour - changes infrequently, cache for longer period'),
+                ('backend_cache_ttl_groups_teams', '3600', 'integer', 'Cache Configuration', 'Cache TTL for groups/teams data - 1 hour - changes infrequently, cache for longer period'),
+                ('backend_redis_failure_cooldown_seconds', '1800', 'integer', 'Cache Configuration', 'Redis failure cooldown period in seconds (30 minutes) - prevents repeated connection attempts when Redis is unavailable'),
+                
+                -- AI Chat Configuration (1 setting)
+                ('backend_ai_chat_max_question_length', '1000', 'integer', 'AI Chat', 'Maximum character length for AI chat questions')
             ON CONFLICT (setting_key) DO NOTHING;
             """
             conn.execute(text(insert_sql))
             conn.commit()
-            print("Default global settings inserted")
+            print("Default global settings inserted (33 backend settings)")
     except Exception as e:
         print(f"Error inserting default global settings: {e}")
 

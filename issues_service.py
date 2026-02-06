@@ -14,16 +14,15 @@ import logging
 import re
 import os
 from database_connection import get_db_connection
-from database_reports import MIN_CYCLE_TIME_DAYS
+from config import MIN_DURATION_AND_CYCLE_TIME_DAYS
 import config
 
 logger = logging.getLogger(__name__)
 
 issues_router = APIRouter()
 
-# Minimum duration threshold for issue status durations (in days)
-# Used to filter out very short durations that may not be meaningful
-MIN_DURATION_DAYS = 0.05
+# Use unified constant from config for both duration and cycle time filtering
+# This filters out very short durations that may not be meaningful
 
 def enrich_epic_hierarchy_with_dates(issues: List[Dict[str, Any]], conn: Connection) -> Dict[str, Any]:
     """
@@ -734,7 +733,7 @@ async def get_issue_status_duration(
         # Build WHERE clause conditions
         where_conditions = [
             "isd.status_category = 'In Progress'",
-            f"isd.duration_days >= {MIN_DURATION_DAYS}",
+            f"isd.duration_days >= {MIN_DURATION_AND_CYCLE_TIME_DAYS}",
             "isd.time_exited >= :start_date"
         ]
         
@@ -764,7 +763,7 @@ async def get_issue_status_duration(
             FROM public.issue_status_durations isd
             WHERE {where_clause}
             GROUP BY isd.status_name
-            HAVING AVG(isd.duration_days) >= {MIN_DURATION_DAYS}
+            HAVING AVG(isd.duration_days) >= {MIN_DURATION_AND_CYCLE_TIME_DAYS}
             ORDER BY
                 CASE
                     WHEN isd.status_name = 'In Progress' THEN 1
@@ -2578,7 +2577,7 @@ async def get_cycle_time_with_issue_keys(
         # Build WHERE clause conditions
         where_conditions = [
             "status_category = 'Done'",
-            f"cycle_time_days >= {MIN_CYCLE_TIME_DAYS}",
+            f"cycle_time_days >= {MIN_DURATION_AND_CYCLE_TIME_DAYS}",
             "resolved_at IS NOT NULL",
             "DATE(resolved_at) >= :period_start",
             "DATE(resolved_at) <= :period_end"
@@ -3169,7 +3168,7 @@ async def get_cycle_time_with_issue_keys(
         # Build WHERE clause conditions
         where_conditions = [
             "status_category = 'Done'",
-            f"cycle_time_days >= {MIN_CYCLE_TIME_DAYS}",
+            f"cycle_time_days >= {MIN_DURATION_AND_CYCLE_TIME_DAYS}",
             "resolved_at IS NOT NULL",
             "DATE(resolved_at) >= :period_start",
             "DATE(resolved_at) <= :period_end"

@@ -41,8 +41,8 @@ ReportDefinition = Dict[str, Any]
 ReportDataResult = Dict[str, Any]
 ReportDataFetcher = Callable[[Dict[str, Any], Connection], ReportDataResult]
 
-MIN_DURATION_DAYS = 0.05
-MIN_CYCLE_TIME_DAYS = 0.1  # Minimum cycle time threshold (in days) - filters out unrealistic zero/very short cycle times
+# Use unified constant from config for both duration and cycle time filtering
+MIN_DURATION_AND_CYCLE_TIME_DAYS = config.MIN_DURATION_AND_CYCLE_TIME_DAYS
 VALID_DURATION_MONTHS = {1, 2, 3, 4, 6, 9}
 DEFAULT_HIERARCHY_LIMIT = 500
 
@@ -1176,7 +1176,7 @@ def _fetch_issue_status_duration_summary(
 
     where_conditions = [
         "isd.status_category = 'In Progress'",
-        f"isd.duration_days >= {MIN_DURATION_DAYS}",
+        f"isd.duration_days >= {MIN_DURATION_AND_CYCLE_TIME_DAYS}",
         "isd.time_exited >= :start_date",
     ]
     params: Dict[str, Any] = {"start_date": start_date.strftime("%Y-%m-%d")}
@@ -1202,7 +1202,7 @@ def _fetch_issue_status_duration_summary(
         FROM public.issue_status_durations isd
         WHERE {where_clause}
         GROUP BY isd.status_name
-        HAVING AVG(isd.duration_days) >= {MIN_DURATION_DAYS}
+        HAVING AVG(isd.duration_days) >= {MIN_DURATION_AND_CYCLE_TIME_DAYS}
         ORDER BY
             CASE
                 WHEN isd.status_name = 'In Progress' THEN 1
@@ -1261,7 +1261,7 @@ def _fetch_issue_status_duration_monthly(
         "isd.time_exited >= :start_date",
         "isd.time_exited < :end_date",
         "isd.status_category = 'In Progress'",
-        f"isd.duration_days >= {MIN_DURATION_DAYS}",
+        f"isd.duration_days >= {MIN_DURATION_AND_CYCLE_TIME_DAYS}",
     ]
     params: Dict[str, Any] = {
         "start_date": start_date.strftime("%Y-%m-%d"),
@@ -1286,7 +1286,7 @@ def _fetch_issue_status_duration_monthly(
         FROM public.issue_status_durations isd
         WHERE {where_clause}
         GROUP BY isd.status_name, month_exited
-        HAVING AVG(isd.duration_days) >= {MIN_DURATION_DAYS}
+        HAVING AVG(isd.duration_days) >= {MIN_DURATION_AND_CYCLE_TIME_DAYS}
         ORDER BY
             CASE
                 WHEN isd.status_name = 'In Progress' THEN 1
@@ -1366,7 +1366,7 @@ def _fetch_issue_status_duration_detail(
     where_conditions = [
         "isd.status_category = 'In Progress'",
         "isd.status_name = :status_name",
-        f"isd.duration_days >= {MIN_DURATION_DAYS}",
+        f"isd.duration_days >= {MIN_DURATION_AND_CYCLE_TIME_DAYS}",
     ]
     params: Dict[str, Any] = {"status_name": status}
 
@@ -2236,7 +2236,7 @@ def _fetch_cycle_time_over_time(filters: Dict[str, Any], conn: Connection) -> Re
     # Build WHERE conditions for CompletedIssues CTE
     completed_where_conditions = [
         "status_category = 'Done'",
-        f"cycle_time_days >= {MIN_CYCLE_TIME_DAYS}",
+        f"cycle_time_days >= {MIN_DURATION_AND_CYCLE_TIME_DAYS}",
         "resolved_at IS NOT NULL",
         "resolved_at >= CURRENT_DATE - (:days_back || ' days')::interval"
     ]

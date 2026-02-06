@@ -18,9 +18,15 @@ logger = logging.getLogger(__name__)
 settings_router = APIRouter()
 
 
+class SettingUpdateItem(BaseModel):
+    """Individual setting update item with optional description"""
+    value: str = Field(..., description="The setting value")
+    description: Optional[str] = Field(None, description="Optional description to update")
+
+
 class BatchSettingsUpdateRequest(BaseModel):
     """Request model for batch updating settings"""
-    settings: Dict[str, str] = Field(..., description="Dictionary of setting_key: setting_value pairs")
+    settings: Dict[str, SettingUpdateItem] = Field(..., description="Dictionary of setting_key: SettingUpdateItem pairs")
     updated_by: Optional[str] = Field(None, description="Email of user making the change")
 
 
@@ -132,12 +138,17 @@ async def update_settings_batch(
         updated_by = request.updated_by or 'admin'
         
         # Log all settings received from client in compact format
-        settings_list = [f"{k}={v}" for k, v in request.settings.items()]
+        settings_list = [f"{k}={v.value}" for k, v in request.settings.items()]
         logger.info(f"Client settings: {', '.join(settings_list)}")
+        
+        # Convert SettingUpdateItem dict to format expected by database function
+        settings_dict = {k: v.value for k, v in request.settings.items()}
+        descriptions_dict = {k: v.description for k, v in request.settings.items() if v.description is not None}
         
         # Update settings in database
         results = set_settings_batch_db(
-            settings=request.settings,
+            settings=settings_dict,
+            descriptions=descriptions_dict if descriptions_dict else None,
             updated_by=updated_by,
             conn=conn
         )
@@ -171,6 +182,7 @@ async def update_settings_batch(
 async def update_setting(
     setting_key: str,
     value: str = Query(..., description="The value to set"),
+    description: Optional[str] = Query(None, description="Optional description to update"),
     conn: Connection = Depends(get_db_connection)
 ):
     """
@@ -182,18 +194,20 @@ async def update_setting(
     Args:
         setting_key: The setting key to update (path parameter)
         value: The value to set (query parameter)
+        description: Optional description to update (query parameter)
         
     Returns:
         JSON response with success status and message
     """
     try:
         # Log setting received from client
-        logger.info(f"Client setting: {setting_key}={value}")
+        logger.info(f"Client setting: {setting_key}={value}" + (f", description={description}" if description else ""))
         
         # Update setting in database
         success = set_setting_db(
             setting_key=setting_key,
             setting_value=value,
+            description=description,
             updated_by='admin',
             conn=conn
         )

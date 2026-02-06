@@ -12,8 +12,8 @@ from datetime import datetime, date, timedelta
 import logging
 import config
 
-# Calculate minimum cycle time in days from minutes constant
-MIN_CYCLE_TIME_DAYS = config.MIN_CYCLE_TIME_MINUTES / (24.0 * 60.0)
+# Use unified constant from config for both duration and cycle time filtering
+MIN_DURATION_AND_CYCLE_TIME_DAYS = config.MIN_DURATION_AND_CYCLE_TIME_DAYS
 
 logger = logging.getLogger(__name__)
 
@@ -45,7 +45,7 @@ def get_cycle_time_for_period(
             "status_category = 'Done'",
             "resolved_at IS NOT NULL",
             "cycle_time_days IS NOT NULL",
-            f"cycle_time_days >= {MIN_CYCLE_TIME_DAYS}",  # Cycle time >= minimum threshold (filter out invalid)
+            f"cycle_time_days >= {MIN_DURATION_AND_CYCLE_TIME_DAYS}",  # Cycle time >= minimum threshold (filter out invalid)
             "sprint_ids IS NOT NULL",  # Only issues associated with sprints (excludes Epics and non-sprint issues)
             "resolved_at >= :start_date",
             "resolved_at <= :end_date"

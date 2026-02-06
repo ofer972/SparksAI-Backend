@@ -1389,6 +1389,7 @@ def set_setting_db(
     setting_key: str,
     setting_value: str,
     updated_by: str = 'admin',
+    description: Optional[str] = None,
     conn: Connection = None
 ) -> bool:
     """
@@ -1398,6 +1399,7 @@ def set_setting_db(
         setting_key (str): The setting key to set
         setting_value (str): The value to set
         updated_by (str): Email of user making the change (default: 'admin')
+        description (Optional[str]): Optional description to update
         conn (Connection): Database connection from FastAPI dependency
         
     Returns:
@@ -1407,22 +1409,40 @@ def set_setting_db(
         # SECURE: Parameterized query prevents SQL injection
         # Use UPSERT (INSERT ... ON CONFLICT UPDATE)
         # setting_type defaults to 'string' for new inserts, preserved on updates
-        upsert_sql = """
-        INSERT INTO public.global_settings 
-        (setting_key, setting_value, setting_type, updated_at)
-        VALUES (:key, :value, 'string', CURRENT_TIMESTAMP)
-        ON CONFLICT (setting_key) 
-        DO UPDATE SET 
-            setting_value = EXCLUDED.setting_value,
-            updated_at = CURRENT_TIMESTAMP
-        """
+        if description is not None:
+            upsert_sql = """
+            INSERT INTO public.global_settings 
+            (setting_key, setting_value, setting_type, description, updated_at)
+            VALUES (:key, :value, 'string', :description, CURRENT_TIMESTAMP)
+            ON CONFLICT (setting_key) 
+            DO UPDATE SET 
+                setting_value = EXCLUDED.setting_value,
+                description = EXCLUDED.description,
+                updated_at = CURRENT_TIMESTAMP
+            """
+            params = {
+                'key': setting_key,
+                'value': setting_value,
+                'description': description
+            }
+        else:
+            upsert_sql = """
+            INSERT INTO public.global_settings 
+            (setting_key, setting_value, setting_type, updated_at)
+            VALUES (:key, :value, 'string', CURRENT_TIMESTAMP)
+            ON CONFLICT (setting_key) 
+            DO UPDATE SET 
+                setting_value = EXCLUDED.setting_value,
+                updated_at = CURRENT_TIMESTAMP
+            """
+            params = {
+                'key': setting_key,
+                'value': setting_value
+            }
         
-        logger.info(f"Setting global setting '{setting_key}' by {updated_by}")
+        logger.info(f"Setting global setting '{setting_key}' by {updated_by}" + (f" with description" if description else ""))
         
-        result = conn.execute(text(upsert_sql), {
-            'key': setting_key,
-            'value': setting_value
-        })
+        result = conn.execute(text(upsert_sql), params)
         conn.commit()
         
         logger.info(f"Successfully set global setting '{setting_key}'")
@@ -1577,6 +1597,7 @@ def set_llm_settings_batch_db(
 def set_settings_batch_db(
     settings: Dict[str, str],
     updated_by: str = 'admin',
+    descriptions: Optional[Dict[str, str]] = None,
     conn: Connection = None
 ) -> Dict[str, bool]:
     """
@@ -1585,6 +1606,7 @@ def set_settings_batch_db(
     Args:
         settings (Dict[str, str]): Dictionary of setting_key: setting_value pairs
         updated_by (str): Email of user making the change (default: 'admin')
+        descriptions (Optional[Dict[str, str]]): Optional dictionary of setting_key: description pairs to update
         conn (Connection): Database connection from FastAPI dependency
     
     Returns:
@@ -1595,23 +1617,29 @@ def set_settings_batch_db(
     try:
         # SECURE: Parameterized query prevents SQL injection
         # setting_type defaults to 'string' for new inserts, preserved on updates
+        # Use a single SQL that handles description updates when provided
         upsert_sql = """
         INSERT INTO public.global_settings 
-        (setting_key, setting_value, setting_type, updated_at)
-        VALUES (:key, :value, 'string', CURRENT_TIMESTAMP)
+        (setting_key, setting_value, setting_type, description, updated_at)
+        VALUES (:key, :value, 'string', :description, CURRENT_TIMESTAMP)
         ON CONFLICT (setting_key) 
         DO UPDATE SET 
             setting_value = EXCLUDED.setting_value,
+            description = COALESCE(EXCLUDED.description, global_settings.description),
             updated_at = CURRENT_TIMESTAMP
         """
         
-        logger.info(f"Setting {len(settings)} global settings by {updated_by}")
+        logger.info(f"Setting {len(settings)} global settings by {updated_by}" + (f" with {len(descriptions)} descriptions" if descriptions else ""))
         
         for setting_key, setting_value in settings.items():
             try:
+                # Get description if provided for this key, otherwise use None
+                description = descriptions.get(setting_key) if descriptions else None
+                
                 conn.execute(text(upsert_sql), {
                     'key': setting_key,
-                    'value': setting_value
+                    'value': setting_value,
+                    'description': description
                 })
                 results[setting_key] = True
                 logger.debug(f"Successfully set global setting '{setting_key}'")
