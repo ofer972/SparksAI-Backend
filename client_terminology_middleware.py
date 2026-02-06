@@ -23,7 +23,7 @@ load_dotenv()
 logger = logging.getLogger(__name__)
 
 # Read replacement term from environment variable
-REPLACEMENT_TERM = os.getenv("PI_TERMINOLOGY_REPLACEMENT")
+REPLACEMENT_TERM = os.getenv("PI_GLOBAL_TERMINOLOGY_REPLACEMENT")
 
 # Enable replacement only if environment variable exists
 ENABLE_TERMINOLOGY_REPLACEMENT = REPLACEMENT_TERM is not None
@@ -32,7 +32,7 @@ ENABLE_TERMINOLOGY_REPLACEMENT = REPLACEMENT_TERM is not None
 if ENABLE_TERMINOLOGY_REPLACEMENT:
     logger.info(f"✅ Terminology replacement ENABLED: 'PI' → '{REPLACEMENT_TERM}', 'PIs' → '{REPLACEMENT_TERM}s'")
 else:
-    logger.info("❌ Terminology replacement DISABLED: PI_TERMINOLOGY_REPLACEMENT environment variable not set")
+    logger.info("❌ Terminology replacement DISABLED: PI_GLOBAL_TERMINOLOGY_REPLACEMENT environment variable not set")
 
 # Fields to NEVER replace (these contain actual data values).
 # Uses substring matching: any field name containing one of these strings is excluded.
