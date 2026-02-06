@@ -116,8 +116,8 @@ def validate_limit(limit: int) -> int:
     if limit < 1:
         raise HTTPException(status_code=400, detail="Limit must be at least 1")
     
-    if limit > 50:  # Reasonable upper limit for getTopCards endpoints
-        raise HTTPException(status_code=400, detail="Limit cannot exceed 50")
+    if limit > config.AI_CARDS_LIMIT:  # Upper limit for getTopCards endpoints
+        raise HTTPException(status_code=400, detail=f"Limit cannot exceed {config.AI_CARDS_LIMIT}")
     
     return limit
 
@@ -139,7 +139,7 @@ async def get_ai_insights(
     team_name: Optional[str] = Query(None, description="Team name"),
     group_name: Optional[str] = Query(None, description="Group name"),
     pi: Optional[str] = Query(None, description="PI name (quarter)"),
-    limit: int = Query(config.DEFAULT_QUERY_LIMIT, description=f"Number of AI cards to return (default: {config.DEFAULT_QUERY_LIMIT}, max: 50)"),
+    limit: int = Query(config.AI_CARDS_LIMIT, description=f"Number of AI cards to return (default: {config.AI_CARDS_LIMIT}, max: {config.AI_CARDS_LIMIT})"),
     category: Optional[List[str]] = Query(None, description="Filter by insight category/categories (e.g., 'PI Events', 'Sprint Status'). Can specify multiple: ?category=PI Events&category=Sprint Status"),
     conn: Connection = Depends(get_db_connection)
 ):
@@ -296,7 +296,7 @@ async def get_ai_insights_with_recommendations(
     team_name: Optional[str] = Query(None, description="Team name"),
     group_name: Optional[str] = Query(None, description="Group name"),
     pi: Optional[str] = Query(None, description="PI name (quarter)"),
-    limit: int = Query(config.DEFAULT_QUERY_LIMIT, description=f"Number of AI cards to return (default: {config.DEFAULT_QUERY_LIMIT}, max: 50)"),
+    limit: int = Query(config.AI_CARDS_LIMIT, description=f"Number of AI cards to return (default: {config.AI_CARDS_LIMIT}, max: {config.AI_CARDS_LIMIT})"),
     recommendations_limit: int = Query(config.DEFAULT_QUERY_LIMIT, description=f"Max recommendations per card (default: {config.DEFAULT_QUERY_LIMIT})"),
     category: Optional[List[str]] = Query(None, description="Filter by insight category/categories (e.g., 'PI Events', 'Sprint Status'). Can specify multiple: ?category=PI Events&category=Sprint Status"),
     conn: Connection = Depends(get_db_connection)
@@ -364,7 +364,7 @@ async def get_ai_insights_with_recommendations(
             )
         
         validated_limit = validate_limit(limit)
-        validated_recommendations_limit = validate_limit(recommendations_limit)
+        validated_recommendations_limit = validate_limit_large(recommendations_limit)
         
         # Validate that insight_type and category are mutually exclusive
         if insight_type and category:

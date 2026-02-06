@@ -30,6 +30,7 @@ from goals_service import goals_router
 from releases_service import releases_router
 from validation_reports_service import router as validation_reports_router
 from validation_summary_service import router as validation_summary_router
+from client_terminology_middleware import terminology_replacement_middleware
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -192,6 +193,9 @@ async def timing_middleware(request: Request, call_next):
     finally:
         # Clear context variable after request
         _current_request_path.set(None)
+
+# Add terminology replacement middleware (replaces PI with configured term in responses)
+app.middleware("http")(terminology_replacement_middleware)
 
 # Include service routers
 app.include_router(teams_router, prefix="/api/v1", tags=["teams"])

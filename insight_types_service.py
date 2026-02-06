@@ -27,18 +27,20 @@ logger = logging.getLogger(__name__)
 insight_types_router = APIRouter()
 
 # Fixed list of insight categories - available for import by other services
-# Each category has a name and a class (PI or Sprint)
+# Each category has an insight_category_name and a class (PI or Sprint)
+# Note: key is 'insight_category_name' (not 'name') so the terminology middleware
+# excludes it and preserves the original values (e.g. "PI Events" stays as-is).
 INSIGHT_CATEGORIES = [
-    {"name": "PI Events", "class": "PI"},
-    {"name": "PI Status", "class": "PI"},
-    {"name": "Sprint Status", "class": "Sprint"},
-    {"name": "Sprint Events", "class": "Sprint"},
+    {"insight_category_name": "PI Events", "class": "PI"},
+    {"insight_category_name": "PI Status", "class": "PI"},
+    {"insight_category_name": "Sprint Status", "class": "Sprint"},
+    {"insight_category_name": "Sprint Events", "class": "Sprint"},
 ]
 
 
 def get_insight_category_names() -> List[str]:
     """Extract just the category names from INSIGHT_CATEGORIES for validation"""
-    return [cat["name"] for cat in INSIGHT_CATEGORIES]
+    return [cat["insight_category_name"] for cat in INSIGHT_CATEGORIES]
 
 
 def validate_insight_type(insight_type: str) -> str:

@@ -2142,6 +2142,7 @@ def insert_default_global_settings():
                 ('backend_max_sprint_count_for_reports', '20', 'integer', 'Validation & Reporting', 'Maximum sprint count limit for reports and past sprints analysis'),
                 ('backend_default_query_limit', '300', 'integer', 'Validation & Reporting', 'Default query limit for API endpoints'),
                 ('backend_default_hierarchy_limit', '500', 'integer', 'Validation & Reporting', 'Default limit for hierarchy queries'),
+                ('backend_ai_cards_limit', '20', 'integer', 'Validation & Reporting', 'Maximum limit for AI cards endpoints (getTopCards)'),
                 
                 -- Metrics & KPIs (18 settings)
                 ('backend_min_duration_and_cycle_time_days', '0.01', 'float', 'Metrics & KPIs', 'Unified minimum threshold (days) for both status durations and cycle times - filters out very short durations (< 0.24 hours) and unrealistic cycle times'),

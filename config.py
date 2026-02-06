@@ -147,6 +147,9 @@ MIN_CYCLE_TIME_MINUTES = 5
 # Key in global_settings: backend_default_query_limit
 DEFAULT_QUERY_LIMIT = 300
 
+# AI Cards limit - specific limit for getTopCards endpoints
+AI_CARDS_LIMIT = 20
+
 # --- JIRA URL Configuration ---
 from typing import Optional, Dict, Any
 from sqlalchemy.engine import Connection
