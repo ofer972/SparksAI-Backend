@@ -9,3 +9,4 @@ python-multipart
 httpx
 redis>=5.0.0
 hiredis>=2.2.0
+apscheduler>=3.10.0

@@ -94,15 +94,9 @@ REDIS_DB = int(os.getenv("REDIS_DB") or "0")
 REDIS_PASSWORD = os.getenv("REDIS_PASSWORD") or None
 REDIS_ENABLED = (os.getenv("REDIS_ENABLED") or "true").lower() == "true"
 
-# Cache TTL defaults (in seconds) by report type
-# NOTE: These constants should be read from global_settings table (keys: backend_cache_ttl_realtime, 
-# backend_cache_ttl_aggregate, backend_cache_ttl_historical, backend_cache_ttl_definitions, 
-# backend_cache_ttl_groups_teams). The global_settings table already contains these key values.
-CACHE_TTL_REALTIME = int(os.getenv("CACHE_TTL_REALTIME") or "60")  # 1 minute
-CACHE_TTL_AGGREGATE = int(os.getenv("CACHE_TTL_AGGREGATE") or "300")  # 5 minutes
-CACHE_TTL_HISTORICAL = int(os.getenv("CACHE_TTL_HISTORICAL") or "1800")  # 30 minutes
-CACHE_TTL_DEFINITIONS = int(os.getenv("CACHE_TTL_DEFINITIONS") or "3600")  # 1 hour
-CACHE_TTL_GROUPS_TEAMS = int(os.getenv("CACHE_TTL_GROUPS_TEAMS") or "3600")  # 1 hour
+# Cache TTL and metrics/validation constants: use global_settings_loader.settings
+# (CACHE_TTL_*, DEFAULT_VALIDATION_DAYS_BACK, MAX_SPRINT_COUNT_FOR_REPORTS,
+#  MIN_DURATION_AND_CYCLE_TIME_DAYS, DEFAULT_QUERY_LIMIT, AI_CARDS_LIMIT)
 
 # --- Priority Constants ---
 # Priority constants - single source of truth
@@ -124,31 +118,11 @@ def build_priority_case_sql() -> str:
 # Color lookup map
 PRIORITY_COLOR_MAP = {p["name"]: p["color"] for p in PRIORITIES}
 
-# --- Metrics and Reports Configuration Constants ---
-# NOTE: These constants should be read from global_settings table. The global_settings table already contains these key values.
-# Validation days to look back (default: 180 days)
-# Key in global_settings: backend_default_validation_days_back
-DEFAULT_VALIDATION_DAYS_BACK = 180
+# --- Metrics and Reports (from global_settings - use settings object) ---
+# Validation days, sprint count, query limit, AI cards limit, min duration: use global_settings_loader.settings
 
-# Maximum sprint count limit for reports and looking at past sprints in tables
-# Key in global_settings: backend_max_sprint_count_for_reports
-MAX_SPRINT_COUNT_FOR_REPORTS = 20
-
-# Minimum duration and cycle time filter (in days) - filters out unrealistic zero/very short durations and cycle times
-# Used for both status duration filtering and cycle time filtering
-# Key in global_settings: backend_min_duration_and_cycle_time_days
-MIN_DURATION_AND_CYCLE_TIME_DAYS = 0.01
-
-# Minimum cycle time filter (in minutes) - filters out unrealistic zero/very short cycle times
-# NOTE: This is kept for backward compatibility but should use MIN_DURATION_AND_CYCLE_TIME_DAYS instead
+# Minimum cycle time filter (in minutes) - kept for backward compatibility
 MIN_CYCLE_TIME_MINUTES = 5
-
-# Default query limit for API endpoints (consolidated from various limits: 200, 500, 100, etc.)
-# Key in global_settings: backend_default_query_limit
-DEFAULT_QUERY_LIMIT = 300
-
-# AI Cards limit - specific limit for getTopCards endpoints
-AI_CARDS_LIMIT = 20
 
 # --- JIRA URL Configuration ---
 from typing import Optional, Dict, Any

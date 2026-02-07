@@ -38,8 +38,8 @@ logger = logging.getLogger(__name__)
 
 ai_chat_router = APIRouter()
 
-# Maximum length for AI chat question
-MAX_QUESTION_LENGTH = 1000
+# Maximum length for AI chat question (from global_settings)
+from global_settings_loader import settings
 
 
 def convert_history_to_sql_format(history_json: Dict[str, Any]) -> List[Dict[str, Any]]:
@@ -1809,7 +1809,7 @@ async def ai_chat(
         print(f"[AI_CHAT_DEBUG] AI Chat Request Parameters: {json.dumps(ai_chat_params, indent=2, default=str)}")
         
         # Validate question length
-        if request.question and len(request.question) > MAX_QUESTION_LENGTH:
+        if request.question and len(request.question) > settings.AI_CHAT_MAX_QUESTION_LENGTH:
             raise HTTPException(
                 status_code=422,
                 detail="Question exceeds maximum length. Please shorten your question or contact your administrator."

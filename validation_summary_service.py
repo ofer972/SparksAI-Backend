@@ -15,13 +15,7 @@ from database_validation_queries import (
     query_dragged_sprints,
     query_epic_health_issues
 )
-from validation_constants import (
-    OLD_BUGS_THRESHOLD_DAYS,
-    STUCK_STORIES_THRESHOLD_DAYS,
-    STUCK_EPICS_THRESHOLD_DAYS,
-    DRAGGED_SPRINTS_THRESHOLD,
-    EPIC_MAX_CHILDREN_THRESHOLD
-)
+from global_settings_loader import settings
 import config
 
 router = APIRouter()
@@ -29,12 +23,12 @@ router = APIRouter()
 
 @router.get("/issues/validations/summary")
 async def get_validation_summary(
-    days_back: int = Query(config.DEFAULT_VALIDATION_DAYS_BACK, ge=1, le=365, description="Number of days to look back"),
-    old_bugs_threshold_days: int = Query(OLD_BUGS_THRESHOLD_DAYS, ge=1, description="Days threshold for old bugs"),
-    stuck_stories_threshold_days: int = Query(STUCK_STORIES_THRESHOLD_DAYS, ge=1, description="Days threshold for stuck stories"),
-    stuck_epics_threshold_days: int = Query(STUCK_EPICS_THRESHOLD_DAYS, ge=1, description="Days threshold for stuck epics"),
-    dragged_sprints_threshold: int = Query(DRAGGED_SPRINTS_THRESHOLD, ge=1, description="Sprints threshold for dragged issues"),
-    epic_max_children_threshold: int = Query(EPIC_MAX_CHILDREN_THRESHOLD, ge=1, description="Max children threshold for epics"),
+    days_back: int = Query(settings.DEFAULT_VALIDATION_DAYS_BACK, ge=1, le=365, description="Number of days to look back"),
+    old_bugs_threshold_days: int = Query(settings.OLD_BUGS_THRESHOLD_DAYS, ge=1, description="Days threshold for old bugs"),
+    stuck_stories_threshold_days: int = Query(settings.STUCK_STORIES_THRESHOLD_DAYS, ge=1, description="Days threshold for stuck stories"),
+    stuck_epics_threshold_days: int = Query(settings.STUCK_EPICS_THRESHOLD_DAYS, ge=1, description="Days threshold for stuck epics"),
+    dragged_sprints_threshold: int = Query(settings.DRAGGED_SPRINTS_THRESHOLD, ge=1, description="Sprints threshold for dragged issues"),
+    epic_max_children_threshold: int = Query(settings.EPIC_MAX_CHILDREN_THRESHOLD, ge=1, description="Max children threshold for epics"),
     team_name: Optional[str] = Query(None, description="Team or group name"),
     isGroup: bool = Query(False, description="If true, team_name is treated as group"),
     pi: Optional[str] = Query(None, description="PI name or comma-separated list (for epics)"),

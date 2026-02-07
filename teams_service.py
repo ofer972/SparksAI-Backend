@@ -14,6 +14,7 @@ import logging
 import re
 from database_connection import get_db_connection
 import config
+from global_settings_loader import settings
 
 logger = logging.getLogger(__name__)
 
@@ -110,7 +111,7 @@ async def get_all_teams(
     group_key: Optional[int] = Query(None, description="Filter by group key"),
     search: Optional[str] = Query(None, description="Search team names"),
     ai_insight: Optional[bool] = Query(None, description="Filter by AI insight flag (true/false)"),
-    limit: int = Query(config.DEFAULT_QUERY_LIMIT, description=f"Maximum number of teams to return (default: {config.DEFAULT_QUERY_LIMIT}, max: 1000)"),
+    limit: int = Query(settings.DEFAULT_QUERY_LIMIT, description=f"Maximum number of teams to return (default: {settings.DEFAULT_QUERY_LIMIT}, max: 1000)"),
     conn: Connection = Depends(get_db_connection)
 ):
     """

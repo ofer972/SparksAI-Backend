@@ -12,6 +12,7 @@ from typing import Dict, Any, Optional, List
 from datetime import date, datetime
 import logging
 from database_connection import get_db_connection
+from global_settings_loader import settings
 from database_team_metrics import (
     get_team_avg_sprint_metrics,
     get_team_count_in_progress,
@@ -35,82 +36,7 @@ logger = logging.getLogger(__name__)
 
 team_metrics_router = APIRouter()
 
-# ============================================================================
-# CYCLE TIME TIER THRESHOLDS (configurable in one place)
-# ============================================================================
-
-# Story/Sprint Issue Cycle Time Tiers (in days)
-STORY_CYCLE_TIME_HIGH = 10     # <= 10 days = High
-STORY_CYCLE_TIME_MEDIUM = 30   # 10-30 days = Medium
-                               # > 30 days = Low
-
-# Epic Cycle Time Tiers (in days)
-EPIC_CYCLE_TIME_HIGH = 40      # <= 40 days = High
-EPIC_CYCLE_TIME_MEDIUM = 75    # 40-75 days = Medium
-                               # > 75 days = Low
-
-# Cycle Time Measurement Periods (in days)
-CYCLE_TIME_PERIOD_DAYS = 30              # Stories: 30-day period
-EPIC_CYCLE_TIME_PERIOD_DAYS = 90         # Epics: 90-day period (3 months)
-
-# ============================================================================
-# WIP TIER THRESHOLDS (configurable in one place)
-# ============================================================================
-
-# Sprint WIP Tiers (percentage of total sprint issues)
-SPRINT_WIP_HIGH_THRESHOLD = 30      # <= 30% = High (green)
-SPRINT_WIP_MEDIUM_THRESHOLD = 50    # 30-50% = Medium (yellow)
-                                    # > 50% = Low (red)
-
-# Sprint Completion & Predictability Tiers (percentage completed/predictability)
-SPRINT_COMPLETION_HIGH_THRESHOLD = 80    # >= 80% = High (green)
-SPRINT_COMPLETION_MEDIUM_THRESHOLD = 60  # 60-79.9% = Medium (yellow)
-                                         # < 60% = Low (red)
-
-# Epic WIP Tiers (percentage of total epics in PI)
-EPIC_WIP_HIGH_THRESHOLD = 30        # <= 30% = High (green)
-EPIC_WIP_MEDIUM_THRESHOLD = 60      # 30-60% = Medium (yellow)
-                                    # > 60% = Low (red)
-
-# PI Completion Tiers (percentage completed) - More relaxed than Sprint
-PI_COMPLETION_HIGH_THRESHOLD = 75    # >= 75% = High (green)
-PI_COMPLETION_MEDIUM_THRESHOLD = 55  # 55-74.9% = Medium (yellow)
-                                     # < 55% = Low (red)
-
-# ============================================================================
-# OPEN BUGS KPI CONFIGURATION
-# ============================================================================
-# The Open Bugs KPI uses intelligent tier-based logic to prevent false alarms
-# from small number fluctuations while still alerting when there's a real problem.
-#
-# HOW IT WORKS:
-# 1. Tier Calculation: Thresholds scale with team count (6/15 bugs per team)
-#    - Single team: High ≤6, Medium 7-15, Low >15
-#    - 5-team group: High ≤30, Medium 31-75, Low >75
-#
-# 2. Tier-Based Trend Display:
-#    - HIGH TIER (green): Shows neutral/flat trend (no red arrows)
-#      → At low bug counts, small changes (+1, +2) are normal noise
-#      → Users don't need alarms when health is excellent
-#    
-#    - MEDIUM/LOW TIER (yellow/red): Shows full trend with arrows
-#      → Already have too many bugs - direction matters!
-#      → Users need to know if improving (green ↓) or worsening (red ↑)
-#
-# This prevents scenarios like "2 bugs → 4 bugs = RED ALARM!" while still
-# showing meaningful trends when bug counts are actually problematic.
-# ============================================================================
-
-# Bug Issue Types (configurable - different orgs may use different names)
-BUG_ISSUE_TYPES = ["Bug", "Defect"]      # Add more as needed: "Incident", "Issue", etc.
-
-# Open Bugs Measurement Period
-OPEN_BUGS_TREND_PERIOD_DAYS = 30         # Period to calculate bug creation/resolution trend
-
-# Open Bugs Tier Thresholds (PER TEAM - multiplied by team count for groups)
-OPEN_BUGS_HIGH_PER_TEAM = 6              # <= 6 bugs per team = High (green)
-OPEN_BUGS_MEDIUM_PER_TEAM = 15           # 7-15 bugs per team = Medium (yellow)
-                                         # > 15 bugs per team = Low (red)
+# Cycle time, WIP, completion, and open-bugs thresholds: use global_settings_loader.settings
 
 
 def validate_team_name(team_name: str) -> str:
@@ -202,9 +128,9 @@ def get_cycle_time_tier(cycle_time: float) -> str:
     if cycle_time == 0:
         return ""
     
-    if cycle_time <= STORY_CYCLE_TIME_HIGH:
+    if cycle_time <= settings.STORY_CYCLE_TIME_HIGH:
         return "high"  # Best tier for Sprint metrics is "high" (green)
-    elif cycle_time <= STORY_CYCLE_TIME_MEDIUM:
+    elif cycle_time <= settings.STORY_CYCLE_TIME_MEDIUM:
         return "medium"  # Acceptable performance
     else:
         return "low"  # Needs improvement
@@ -233,9 +159,9 @@ def get_epic_cycle_time_tier(cycle_time: float) -> str:
     if cycle_time == 0:
         return ""
     
-    if cycle_time <= EPIC_CYCLE_TIME_HIGH:
+    if cycle_time <= settings.EPIC_CYCLE_TIME_HIGH:
         return "high"  # Best tier for PI metrics is "high" (green)
-    elif cycle_time <= EPIC_CYCLE_TIME_MEDIUM:
+    elif cycle_time <= settings.EPIC_CYCLE_TIME_MEDIUM:
         return "medium"
     else:
         return "low"
@@ -264,9 +190,9 @@ def get_sprint_wip_tier(wip_percentage: float) -> str:
     if wip_percentage == 0:
         return ""
     
-    if wip_percentage <= SPRINT_WIP_HIGH_THRESHOLD:
+    if wip_percentage <= settings.SPRINT_WIP_HIGH_THRESHOLD:
         return "high"  # Healthy WIP
-    elif wip_percentage <= SPRINT_WIP_MEDIUM_THRESHOLD:
+    elif wip_percentage <= settings.SPRINT_WIP_MEDIUM_THRESHOLD:
         return "medium"  # Moderate WIP
     else:
         return "low"  # Too much WIP
@@ -295,9 +221,9 @@ def get_epic_wip_tier(wip_percentage: float) -> str:
     if wip_percentage == 0:
         return ""
     
-    if wip_percentage <= EPIC_WIP_HIGH_THRESHOLD:
+    if wip_percentage <= settings.EPIC_WIP_HIGH_THRESHOLD:
         return "high"  # Healthy epic WIP
-    elif wip_percentage <= EPIC_WIP_MEDIUM_THRESHOLD:
+    elif wip_percentage <= settings.EPIC_WIP_MEDIUM_THRESHOLD:
         return "medium"  # Moderate epic WIP
     else:
         return "low"  # Too much epic WIP
@@ -336,9 +262,9 @@ def get_pi_completion_tier(
     """
     # If dates not provided, use simple thresholds
     if start_date is None or end_date is None:
-        if percent_completed >= PI_COMPLETION_HIGH_THRESHOLD:
+        if percent_completed >= settings.PI_COMPLETION_HIGH_THRESHOLD:
             return "high"
-        elif percent_completed >= PI_COMPLETION_MEDIUM_THRESHOLD:
+        elif percent_completed >= settings.PI_COMPLETION_MEDIUM_THRESHOLD:
             return "medium"
         else:
             return "low"
@@ -353,18 +279,18 @@ def get_pi_completion_tier(
     
     # If PI hasn't started yet - use simple thresholds
     if today < start_date:
-        if percent_completed >= PI_COMPLETION_HIGH_THRESHOLD:
+        if percent_completed >= settings.PI_COMPLETION_HIGH_THRESHOLD:
             return "high"
-        elif percent_completed >= PI_COMPLETION_MEDIUM_THRESHOLD:
+        elif percent_completed >= settings.PI_COMPLETION_MEDIUM_THRESHOLD:
             return "medium"
         else:
             return "low"
     
     # If PI has ended - use simple thresholds
     if today >= end_date:
-        if percent_completed >= PI_COMPLETION_HIGH_THRESHOLD:
+        if percent_completed >= settings.PI_COMPLETION_HIGH_THRESHOLD:
             return "high"
-        elif percent_completed >= PI_COMPLETION_MEDIUM_THRESHOLD:
+        elif percent_completed >= settings.PI_COMPLETION_MEDIUM_THRESHOLD:
             return "medium"
         else:
             return "low"
@@ -373,9 +299,9 @@ def get_pi_completion_tier(
     total_pi_days = (end_date - start_date).days
     if total_pi_days <= 0:
         # Invalid PI duration, use simple thresholds
-        if percent_completed >= PI_COMPLETION_HIGH_THRESHOLD:
+        if percent_completed >= settings.PI_COMPLETION_HIGH_THRESHOLD:
             return "high"
-        elif percent_completed >= PI_COMPLETION_MEDIUM_THRESHOLD:
+        elif percent_completed >= settings.PI_COMPLETION_MEDIUM_THRESHOLD:
             return "medium"
         else:
             return "low"
@@ -433,9 +359,9 @@ def get_sprint_completion_tier(
     """
     # If dates not provided, use simple thresholds
     if start_date is None or end_date is None:
-        if percent_completed >= SPRINT_COMPLETION_HIGH_THRESHOLD:
+        if percent_completed >= settings.SPRINT_COMPLETION_HIGH_THRESHOLD:
             return "high"
-        elif percent_completed >= SPRINT_COMPLETION_MEDIUM_THRESHOLD:
+        elif percent_completed >= settings.SPRINT_COMPLETION_MEDIUM_THRESHOLD:
             return "medium"
         else:
             return "low"
@@ -450,18 +376,18 @@ def get_sprint_completion_tier(
     
     # If sprint hasn't started yet - use simple thresholds
     if today < start_date:
-        if percent_completed >= SPRINT_COMPLETION_HIGH_THRESHOLD:
+        if percent_completed >= settings.SPRINT_COMPLETION_HIGH_THRESHOLD:
             return "high"
-        elif percent_completed >= SPRINT_COMPLETION_MEDIUM_THRESHOLD:
+        elif percent_completed >= settings.SPRINT_COMPLETION_MEDIUM_THRESHOLD:
             return "medium"
         else:
             return "low"
     
     # If sprint has ended - use simple thresholds
     if today >= end_date:
-        if percent_completed >= SPRINT_COMPLETION_HIGH_THRESHOLD:
+        if percent_completed >= settings.SPRINT_COMPLETION_HIGH_THRESHOLD:
             return "high"
-        elif percent_completed >= SPRINT_COMPLETION_MEDIUM_THRESHOLD:
+        elif percent_completed >= settings.SPRINT_COMPLETION_MEDIUM_THRESHOLD:
             return "medium"
         else:
             return "low"
@@ -470,9 +396,9 @@ def get_sprint_completion_tier(
     total_sprint_days = (end_date - start_date).days
     if total_sprint_days <= 0:
         # Invalid sprint duration, use simple thresholds
-        if percent_completed >= SPRINT_COMPLETION_HIGH_THRESHOLD:
+        if percent_completed >= settings.SPRINT_COMPLETION_HIGH_THRESHOLD:
             return "high"
-        elif percent_completed >= SPRINT_COMPLETION_MEDIUM_THRESHOLD:
+        elif percent_completed >= settings.SPRINT_COMPLETION_MEDIUM_THRESHOLD:
             return "medium"
         else:
             return "low"
@@ -495,8 +421,8 @@ def get_sprint_completion_tier(
     adjusted_expected = (adjusted_days_elapsed / total_sprint_days) * 100
     
     # Use closed sprint constants proportionally
-    high_threshold = adjusted_expected * (SPRINT_COMPLETION_HIGH_THRESHOLD / 100)
-    medium_threshold = adjusted_expected * (SPRINT_COMPLETION_MEDIUM_THRESHOLD / 100)
+    high_threshold = adjusted_expected * (settings.SPRINT_COMPLETION_HIGH_THRESHOLD / 100)
+    medium_threshold = adjusted_expected * (settings.SPRINT_COMPLETION_MEDIUM_THRESHOLD / 100)
     
     # Determine tier based on comparison to adjusted expected
     if percent_completed >= high_threshold:
@@ -523,9 +449,9 @@ def get_sprint_predictability_tier(predictability: float) -> str:
     Returns:
         Tier string: 'high', 'medium', or 'low'
     """
-    if predictability >= SPRINT_COMPLETION_HIGH_THRESHOLD:
+    if predictability >= settings.SPRINT_COMPLETION_HIGH_THRESHOLD:
         return "high"
-    elif predictability >= SPRINT_COMPLETION_MEDIUM_THRESHOLD:
+    elif predictability >= settings.SPRINT_COMPLETION_MEDIUM_THRESHOLD:
         return "medium"
     else:
         return "low"
@@ -555,8 +481,8 @@ def get_open_bugs_tier(open_bugs_count: int, team_count: int) -> str:
         return "low"  # Invalid data = low tier
     
     # Adjust thresholds based on team count
-    high_threshold = OPEN_BUGS_HIGH_PER_TEAM * team_count      # e.g., 6 * 5 = 30
-    medium_threshold = OPEN_BUGS_MEDIUM_PER_TEAM * team_count  # e.g., 15 * 5 = 75
+    high_threshold = settings.OPEN_BUGS_HIGH_PER_TEAM * team_count      # e.g., 6 * 5 = 30
+    medium_threshold = settings.OPEN_BUGS_MEDIUM_PER_TEAM * team_count  # e.g., 15 * 5 = 75
     
     if open_bugs_count <= high_threshold:
         return "high"   # Green (good)
@@ -736,9 +662,9 @@ def get_percent_completed_status(
     # If sprint has ended
     if today >= end_date:
         # Compare actual completion to 100% expected
-        if percent_completed >= SPRINT_COMPLETION_HIGH_THRESHOLD:
+        if percent_completed >= settings.SPRINT_COMPLETION_HIGH_THRESHOLD:
             return "green"
-        elif percent_completed >= SPRINT_COMPLETION_MEDIUM_THRESHOLD:
+        elif percent_completed >= settings.SPRINT_COMPLETION_MEDIUM_THRESHOLD:
             return "yellow"
         else:
             return "red"
@@ -766,8 +692,8 @@ def get_percent_completed_status(
     adjusted_expected = (adjusted_days_elapsed / total_sprint_days) * 100
     
     # Use closed sprint constants proportionally
-    high_threshold = adjusted_expected * (SPRINT_COMPLETION_HIGH_THRESHOLD / 100)
-    medium_threshold = adjusted_expected * (SPRINT_COMPLETION_MEDIUM_THRESHOLD / 100)
+    high_threshold = adjusted_expected * (settings.SPRINT_COMPLETION_HIGH_THRESHOLD / 100)
+    medium_threshold = adjusted_expected * (settings.SPRINT_COMPLETION_MEDIUM_THRESHOLD / 100)
     
     # Determine status based on comparison to adjusted expected
     if percent_completed >= high_threshold:
@@ -871,7 +797,7 @@ def calculate_days_in_sprint(start_date: date, end_date: date) -> Optional[int]:
 @team_metrics_router.get("/team-metrics/get-avg-sprint-metrics")
 async def get_avg_sprint_metrics(
     team_name: str = Query(..., description="Team name or group name (if isGroup=true)"),
-    sprint_count: int = Query(5, description=f"Number of sprints to average (default: 5, max: {config.MAX_SPRINT_COUNT_FOR_REPORTS})", ge=1, le=config.MAX_SPRINT_COUNT_FOR_REPORTS),
+    sprint_count: int = Query(5, description=f"Number of sprints to average (default: 5, max: {settings.MAX_SPRINT_COUNT_FOR_REPORTS})", ge=1, le=settings.MAX_SPRINT_COUNT_FOR_REPORTS),
     isGroup: bool = Query(False, description="If true, team_name is treated as a group name"),
     conn: Connection = Depends(get_db_connection)
 ):
@@ -1774,7 +1700,7 @@ async def get_issues_trend(
 
 @team_metrics_router.get("/team-metrics/get-average-sprint-velocity-per-team")
 async def get_average_sprint_velocity_per_team_endpoint(
-    num_sprints: int = Query(5, description=f"Number of sprints to average (default: 5, max: {config.MAX_SPRINT_COUNT_FOR_REPORTS})", ge=1, le=config.MAX_SPRINT_COUNT_FOR_REPORTS),
+    num_sprints: int = Query(5, description=f"Number of sprints to average (default: 5, max: {settings.MAX_SPRINT_COUNT_FOR_REPORTS})", ge=1, le=settings.MAX_SPRINT_COUNT_FOR_REPORTS),
     team_name: Optional[str] = Query(None, description="Team name or group name (if isGroup=true)"),
     isGroup: bool = Query(False, description="If true, team_name is treated as a group name"),
     pi: Optional[str] = Query(None, description="Program Increment name - if provided, uses teams that participate in this PI"),
@@ -1994,9 +1920,9 @@ def get_cycle_time_metric(
     
     today = date.today()
     current_end_date = today
-    current_start_date = today - timedelta(days=CYCLE_TIME_PERIOD_DAYS)
+    current_start_date = today - timedelta(days=settings.CYCLE_TIME_PERIOD_DAYS)
     previous_end_date = current_start_date - timedelta(days=1)
-    previous_start_date = previous_end_date - timedelta(days=CYCLE_TIME_PERIOD_DAYS)
+    previous_start_date = previous_end_date - timedelta(days=settings.CYCLE_TIME_PERIOD_DAYS)
     
     avg_cycle_time = get_cycle_time_for_period(team_names_list, current_start_date, current_end_date, conn)
     if avg_cycle_time is None:
@@ -2011,12 +1937,12 @@ def get_cycle_time_metric(
     cycle_time_tier = get_cycle_time_tier(avg_cycle_time)
     
     # Build tooltip similar to DORA metrics format
-    tooltip = f"Average cycle time in the last {CYCLE_TIME_PERIOD_DAYS} days: {avg_cycle_time:.1f}d"
+    tooltip = f"Average cycle time in the last {settings.CYCLE_TIME_PERIOD_DAYS} days: {avg_cycle_time:.1f}d"
     if cycle_time_trend and cycle_time_trend.get('direction') and cycle_time_trend['direction'] != 'flat':
         if cycle_time_trend.get('improved'):
-            tooltip += f"\nThis represents a {cycle_time_trend['percentage']}% improvement compared to the previous {CYCLE_TIME_PERIOD_DAYS} days."
+            tooltip += f"\nThis represents a {cycle_time_trend['percentage']}% improvement compared to the previous {settings.CYCLE_TIME_PERIOD_DAYS} days."
         else:
-            tooltip += f"\nThis represents a {cycle_time_trend['percentage']}% regression compared to the previous {CYCLE_TIME_PERIOD_DAYS} days."
+            tooltip += f"\nThis represents a {cycle_time_trend['percentage']}% regression compared to the previous {settings.CYCLE_TIME_PERIOD_DAYS} days."
     
     return {
         "metric_id": "cycle_time",
@@ -2024,7 +1950,7 @@ def get_cycle_time_metric(
         "value": f"{avg_cycle_time:.1f}d",
         "tier_status": cycle_time_tier,
         "metric_type": "sprint",
-        "description": f"{validated_name}: Avg cycle time {avg_cycle_time:.1f} days (last {CYCLE_TIME_PERIOD_DAYS} days)",
+        "description": f"{validated_name}: Avg cycle time {avg_cycle_time:.1f} days (last {settings.CYCLE_TIME_PERIOD_DAYS} days)",
         "tooltip": tooltip,
         "trend": cycle_time_trend,
         "action": {
@@ -2049,9 +1975,9 @@ def get_epic_cycle_time_metric(
     
     today = date.today()
     current_end_date = today
-    current_start_date = today - timedelta(days=EPIC_CYCLE_TIME_PERIOD_DAYS)
+    current_start_date = today - timedelta(days=settings.EPIC_CYCLE_TIME_PERIOD_DAYS)
     previous_end_date = current_start_date - timedelta(days=1)
-    previous_start_date = previous_end_date - timedelta(days=EPIC_CYCLE_TIME_PERIOD_DAYS)
+    previous_start_date = previous_end_date - timedelta(days=settings.EPIC_CYCLE_TIME_PERIOD_DAYS)
     
     # Get epic cycle time for current period
     avg_cycle_time = get_cycle_time_for_period_by_issue_type(
@@ -2333,12 +2259,12 @@ def get_wip_metric(
     # Add tier context to tooltip
     if wip_count == 0:
         tooltip += f"\n\nNo work in progress. All issues are either completed or not started."
-    elif wip_percentage <= SPRINT_WIP_HIGH_THRESHOLD:
-        tooltip += f"\n\nHealthy WIP level (≤ {SPRINT_WIP_HIGH_THRESHOLD}% of sprint). Good flow with manageable work in progress."
-    elif wip_percentage <= SPRINT_WIP_MEDIUM_THRESHOLD:
-        tooltip += f"\n\nModerate WIP level ({SPRINT_WIP_HIGH_THRESHOLD}-{SPRINT_WIP_MEDIUM_THRESHOLD}% of sprint). Consider focusing on completing work before starting new items."
+    elif wip_percentage <= settings.SPRINT_WIP_HIGH_THRESHOLD:
+        tooltip += f"\n\nHealthy WIP level (≤ {settings.SPRINT_WIP_HIGH_THRESHOLD}% of sprint). Good flow with manageable work in progress."
+    elif wip_percentage <= settings.SPRINT_WIP_MEDIUM_THRESHOLD:
+        tooltip += f"\n\nModerate WIP level ({settings.SPRINT_WIP_HIGH_THRESHOLD}-{settings.SPRINT_WIP_MEDIUM_THRESHOLD}% of sprint). Consider focusing on completing work before starting new items."
     else:
-        tooltip += f"\n\nHigh WIP level (> {SPRINT_WIP_MEDIUM_THRESHOLD}% of sprint). Too much work in progress may indicate bottlenecks or multitasking issues."
+        tooltip += f"\n\nHigh WIP level (> {settings.SPRINT_WIP_MEDIUM_THRESHOLD}% of sprint). Too much work in progress may indicate bottlenecks or multitasking issues."
     
     return {
         "metric_id": "sprint_wip",
@@ -2428,11 +2354,11 @@ def get_completion_metric(
             # Sprint has ended - explain simple thresholds
             tooltip += f"\n\nSprint Completed: "
             if completion_tier == "high":
-                tooltip += f"Excellent completion rate (≥ {SPRINT_COMPLETION_HIGH_THRESHOLD}%)."
+                tooltip += f"Excellent completion rate (≥ {settings.SPRINT_COMPLETION_HIGH_THRESHOLD}%)."
             elif completion_tier == "medium":
-                tooltip += f"Good completion rate ({SPRINT_COMPLETION_MEDIUM_THRESHOLD}-{SPRINT_COMPLETION_HIGH_THRESHOLD-1}%)."
+                tooltip += f"Good completion rate ({settings.SPRINT_COMPLETION_MEDIUM_THRESHOLD}-{settings.SPRINT_COMPLETION_HIGH_THRESHOLD-1}%)."
             else:
-                tooltip += f"Low completion rate (< {SPRINT_COMPLETION_MEDIUM_THRESHOLD}%). Consider sprint planning improvements."
+                tooltip += f"Low completion rate (< {settings.SPRINT_COMPLETION_MEDIUM_THRESHOLD}%). Consider sprint planning improvements."
         else:
             # Sprint is active - explain timeline-based logic
             if completion_tier == "high":
@@ -2444,11 +2370,11 @@ def get_completion_metric(
     else:
         # No dates available - explain simple thresholds
         if completion_tier == "high":
-            tooltip += f"\n\nExcellent completion rate (≥ {SPRINT_COMPLETION_HIGH_THRESHOLD}%)."
+            tooltip += f"\n\nExcellent completion rate (≥ {settings.SPRINT_COMPLETION_HIGH_THRESHOLD}%)."
         elif completion_tier == "medium":
-            tooltip += f"\n\nGood completion rate ({SPRINT_COMPLETION_MEDIUM_THRESHOLD}-{SPRINT_COMPLETION_HIGH_THRESHOLD-1}%)."
+            tooltip += f"\n\nGood completion rate ({settings.SPRINT_COMPLETION_MEDIUM_THRESHOLD}-{settings.SPRINT_COMPLETION_HIGH_THRESHOLD-1}%)."
         else:
-            tooltip += f"\n\nLow completion rate (< {SPRINT_COMPLETION_MEDIUM_THRESHOLD}%)."
+            tooltip += f"\n\nLow completion rate (< {settings.SPRINT_COMPLETION_MEDIUM_THRESHOLD}%)."
     
     return {
         "metric_id": "sprint_completion",
@@ -2595,12 +2521,12 @@ def get_open_bugs_metric(
     
     today = date.today()
     end_date = today
-    start_date = today - timedelta(days=OPEN_BUGS_TREND_PERIOD_DAYS)
+    start_date = today - timedelta(days=settings.OPEN_BUGS_TREND_PERIOD_DAYS)
     
     # Get data from database - single efficient query
     bug_data = get_open_bugs_with_trend(
         team_names_list,
-        BUG_ISSUE_TYPES,  # Use constant array ["Bug", "Defect"]
+        settings.BUG_ISSUE_TYPES,  # Use constant array ["Bug", "Defect"]
         start_date,
         end_date,
         conn
@@ -2647,10 +2573,10 @@ def get_open_bugs_metric(
         if net_change != 0:
             # Show the change but frame it as minor
             change_sign = '+' if net_change > 0 else ''
-            tooltip += f"\nMinor change: {change_sign}{net_change} bugs in last {OPEN_BUGS_TREND_PERIOD_DAYS} days"
+            tooltip += f"\nMinor change: {change_sign}{net_change} bugs in last {settings.OPEN_BUGS_TREND_PERIOD_DAYS} days"
             tooltip += f"\nCreated: {bugs_created}, Resolved: {bugs_resolved}"
         else:
-            tooltip += f"\nNo change in last {OPEN_BUGS_TREND_PERIOD_DAYS} days"
+            tooltip += f"\nNo change in last {settings.OPEN_BUGS_TREND_PERIOD_DAYS} days"
     else:
         # Health is medium/low - show full trend with directional arrows
         # At this bug count, trend direction is critical information
@@ -2660,11 +2586,11 @@ def get_open_bugs_metric(
         tooltip = f"Current open bugs: {current_open_bugs}"
         if bug_trend:
             if net_change > 0:
-                tooltip += f"\n+{net_change} bugs in the last {OPEN_BUGS_TREND_PERIOD_DAYS} days (backlog growing)"
+                tooltip += f"\n+{net_change} bugs in the last {settings.OPEN_BUGS_TREND_PERIOD_DAYS} days (backlog growing)"
             elif net_change < 0:
-                tooltip += f"\n{net_change} bugs in the last {OPEN_BUGS_TREND_PERIOD_DAYS} days (backlog shrinking)"
+                tooltip += f"\n{net_change} bugs in the last {settings.OPEN_BUGS_TREND_PERIOD_DAYS} days (backlog shrinking)"
             else:
-                tooltip += f"\nNo net change in the last {OPEN_BUGS_TREND_PERIOD_DAYS} days"
+                tooltip += f"\nNo net change in the last {settings.OPEN_BUGS_TREND_PERIOD_DAYS} days"
             tooltip += f"\nCreated: {bugs_created}, Resolved: {bugs_resolved}"
     
     return {
@@ -2686,7 +2612,7 @@ def get_open_bugs_metric(
             "params": {
                 "team_name": validated_name,
                 "isGroup": isGroup,
-                "issue_type": BUG_ISSUE_TYPES[0]                  # "Bug" - matches all report defaults
+                "issue_type": settings.BUG_ISSUE_TYPES[0]                  # "Bug" - matches all report defaults
             }
         }
     }
@@ -2807,11 +2733,11 @@ def get_pi_completion_metric(
                     # PI has ended
                     tooltip += f"\n\nPI Completed: "
                     if completion_tier == "high":
-                        tooltip += f"Excellent completion rate (≥ {PI_COMPLETION_HIGH_THRESHOLD}%)."
+                        tooltip += f"Excellent completion rate (≥ {settings.PI_COMPLETION_HIGH_THRESHOLD}%)."
                     elif completion_tier == "medium":
-                        tooltip += f"Good completion rate ({PI_COMPLETION_MEDIUM_THRESHOLD}-{PI_COMPLETION_HIGH_THRESHOLD-1}%)."
+                        tooltip += f"Good completion rate ({settings.PI_COMPLETION_MEDIUM_THRESHOLD}-{settings.PI_COMPLETION_HIGH_THRESHOLD-1}%)."
                     else:
-                        tooltip += f"Low completion rate (< {PI_COMPLETION_MEDIUM_THRESHOLD}%)."
+                        tooltip += f"Low completion rate (< {settings.PI_COMPLETION_MEDIUM_THRESHOLD}%)."
                 else:
                     # PI is active
                     if completion_tier == "high":
@@ -2823,11 +2749,11 @@ def get_pi_completion_metric(
         else:
             # No dates available - explain simple thresholds
             if completion_tier == "high":
-                tooltip += f"\n\nExcellent completion rate (≥ {PI_COMPLETION_HIGH_THRESHOLD}%)."
+                tooltip += f"\n\nExcellent completion rate (≥ {settings.PI_COMPLETION_HIGH_THRESHOLD}%)."
             elif completion_tier == "medium":
-                tooltip += f"\n\nGood completion rate ({PI_COMPLETION_MEDIUM_THRESHOLD}-{PI_COMPLETION_HIGH_THRESHOLD-1}%)."
+                tooltip += f"\n\nGood completion rate ({settings.PI_COMPLETION_MEDIUM_THRESHOLD}-{settings.PI_COMPLETION_HIGH_THRESHOLD-1}%)."
             elif completion_tier == "low":
-                tooltip += f"\n\nLow completion rate (< {PI_COMPLETION_MEDIUM_THRESHOLD}%)."
+                tooltip += f"\n\nLow completion rate (< {settings.PI_COMPLETION_MEDIUM_THRESHOLD}%)."
         
         return {
             "metric_id": "pi_completion",
@@ -2889,12 +2815,12 @@ def get_pi_wip_metric(
     # Add tier context to tooltip
     if wip_count == 0:
         tooltip += f"\n\nNo work in progress. All epics are either completed or not started."
-    elif wip_percentage <= EPIC_WIP_HIGH_THRESHOLD:
-        tooltip += f"\n\nHealthy WIP level (≤ {EPIC_WIP_HIGH_THRESHOLD}% of PI). Good flow with manageable work in progress."
-    elif wip_percentage <= EPIC_WIP_MEDIUM_THRESHOLD:
-        tooltip += f"\n\nModerate WIP level ({EPIC_WIP_HIGH_THRESHOLD}-{EPIC_WIP_MEDIUM_THRESHOLD}% of PI). Consider focusing on completing epics before starting new ones."
+    elif wip_percentage <= settings.EPIC_WIP_HIGH_THRESHOLD:
+        tooltip += f"\n\nHealthy WIP level (≤ {settings.EPIC_WIP_HIGH_THRESHOLD}% of PI). Good flow with manageable work in progress."
+    elif wip_percentage <= settings.EPIC_WIP_MEDIUM_THRESHOLD:
+        tooltip += f"\n\nModerate WIP level ({settings.EPIC_WIP_HIGH_THRESHOLD}-{settings.EPIC_WIP_MEDIUM_THRESHOLD}% of PI). Consider focusing on completing epics before starting new ones."
     else:
-        tooltip += f"\n\nHigh WIP level (> {EPIC_WIP_MEDIUM_THRESHOLD}% of PI). Too much work in progress may indicate bottlenecks or scope issues."
+        tooltip += f"\n\nHigh WIP level (> {settings.EPIC_WIP_MEDIUM_THRESHOLD}% of PI). Too much work in progress may indicate bottlenecks or scope issues."
     
     return {
         "metric_id": "pi_wip",
@@ -3113,7 +3039,7 @@ async def get_general_kpis(
     isGroup: bool = Query(False, description="If true, team_name is treated as a group name"),
     pi: Optional[str] = Query(None, description="PI name (required when scope='pi')"),
     metrics: Optional[str] = Query(None, description="Comma-separated list of metric IDs. If omitted, returns all available metrics for the scope."),
-    sprint_count: int = Query(5, description=f"Number of sprints to average for velocity/predictability (default: 5, max: {config.MAX_SPRINT_COUNT_FOR_REPORTS})", ge=1, le=config.MAX_SPRINT_COUNT_FOR_REPORTS),
+    sprint_count: int = Query(5, description=f"Number of sprints to average for velocity/predictability (default: 5, max: {settings.MAX_SPRINT_COUNT_FOR_REPORTS})", ge=1, le=settings.MAX_SPRINT_COUNT_FOR_REPORTS),
     conn: Connection = Depends(get_db_connection)
 ):
     """

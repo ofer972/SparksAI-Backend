@@ -110,12 +110,68 @@ def get_status_code_colors(status_code: int, method_color: str) -> tuple[str, st
 
 # Simple comment for testing commit and push
 
+
+async def lifespan(app: FastAPI):
+    """Startup and shutdown via ASGI lifespan (replaces on_event)."""
+    # Startup
+    try:
+        from database_connection import get_connection_string, ensure_database_exists, get_db_engine
+        from database_table_creation import initialize_database_tables_with_engine
+
+        logger.info("🚀 Starting application initialization...")
+
+        connection_string = get_connection_string()
+        if not connection_string:
+            logger.error("❌ No database connection string configured. Application cannot start.")
+            raise Exception("Database connection string not configured")
+
+        logger.info("📦 Step 1/4: Ensuring database exists...")
+        ensure_database_exists(connection_string)
+
+        logger.info("🔧 Step 2/4: Creating database engine...")
+        engine = get_db_engine()
+        if not engine:
+            logger.error("❌ Failed to create database engine. Application cannot start.")
+            raise Exception("Database engine creation failed")
+
+        import database_connection
+        database_connection.engine = engine
+
+        logger.info("📊 Step 3/4: Initializing database tables...")
+        initialize_database_tables_with_engine(engine)
+
+        logger.info("⚙️  Step 4/4: Loading application settings...")
+        with engine.connect() as conn:
+            from groups_teams_cache import populate_groups_teams_cache
+            success, groups_count, teams_count = populate_groups_teams_cache(conn)
+            if success:
+                logger.info(f"✅ Cache populated: {groups_count} groups, {teams_count} teams")
+            else:
+                logger.warning("⚠️  Cache population failed (Redis unavailable).")
+
+        from global_settings_loader import refresh_globals_from_db, start_scheduler
+        refresh_globals_from_db()
+        start_scheduler()
+    except Exception as e:
+        logger.warning(f"⚠️  Startup failed: {e}")
+
+    yield
+
+    # Shutdown
+    try:
+        from global_settings_loader import stop_scheduler
+        stop_scheduler()
+    except Exception as e:
+        logger.warning(f"Shutdown: stop_scheduler failed: {e}")
+
+
 app = FastAPI(
     title="SparksAI Backend Services",
     description="Backend API services for SparksAI - REST API endpoints for various services",
     version="1.0.1",
     docs_url="/docs",
-    redoc_url="/redoc"
+    redoc_url="/redoc",
+    lifespan=lifespan,
 )
 
 # Add CORS middleware
@@ -220,55 +276,6 @@ app.include_router(goals_router, prefix="/api/v1", tags=["goals"])
 app.include_router(releases_router, prefix="/api/v1", tags=["releases"])
 app.include_router(validation_reports_router, prefix="/api/v1", tags=["validation-reports"])
 app.include_router(validation_summary_router, prefix="/api/v1", tags=["validation-summary"])
-
-@app.on_event("startup")
-async def startup_event():
-    """Application startup - ensure database exists, create engine, initialize tables, populate cache and load JIRA URL"""
-    try:
-        # Step 1: Ensure database exists
-        from database_connection import get_connection_string, ensure_database_exists, get_db_engine
-        from database_table_creation import initialize_database_tables_with_engine
-        
-        logger.info("🚀 Starting application initialization...")
-        
-        connection_string = get_connection_string()
-        if not connection_string:
-            logger.error("❌ No database connection string configured. Application cannot start.")
-            raise Exception("Database connection string not configured")
-        
-        logger.info("📦 Step 1/4: Ensuring database exists...")
-        ensure_database_exists(connection_string)
-        
-        # Step 2: Create database engine
-        logger.info("🔧 Step 2/4: Creating database engine...")
-        engine = get_db_engine()
-        if not engine:
-            logger.error("❌ Failed to create database engine. Application cannot start.")
-            raise Exception("Database engine creation failed")
-        
-        # Set the global engine variable so get_db_connection() can use it
-        import database_connection
-        database_connection.engine = engine
-        
-        # Step 3: Initialize database tables
-        logger.info("📊 Step 3/4: Initializing database tables...")
-        initialize_database_tables_with_engine(engine)
-        
-        # Step 4: Continue with other startup tasks
-        logger.info("⚙️  Step 4/4: Loading application settings...")
-        with engine.connect() as conn:
-            # Populate groups/teams cache
-            from groups_teams_cache import populate_groups_teams_cache
-            success, groups_count, teams_count = populate_groups_teams_cache(conn)
-            if success:
-                logger.info(f"✅ Cache populated: {groups_count} groups, {teams_count} teams")
-            else:
-                logger.warning("⚠️  Cache population failed (Redis unavailable).")
-            
-            # Note: JIRA settings will be loaded on first use via get_jira_url(conn) retry mechanism
-                
-    except Exception as e:
-        logger.warning(f"⚠️  Startup failed: {e}")
 
 
 @app.get("/")

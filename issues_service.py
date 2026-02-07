@@ -14,8 +14,8 @@ import logging
 import re
 import os
 from database_connection import get_db_connection
-from config import MIN_DURATION_AND_CYCLE_TIME_DAYS
 import config
+from global_settings_loader import settings
 
 logger = logging.getLogger(__name__)
 
@@ -391,7 +391,7 @@ def enrich_epic_hierarchy_with_dates(issues: List[Dict[str, Any]], conn: Connect
         # Remove sort helper field and limit to max sprint count for reports
         sprints_list = [
             {k: v for k, v in sprint.items() if k != "_sort_date"}
-            for sprint in sprints_with_dates[:config.MAX_SPRINT_COUNT_FOR_REPORTS]
+            for sprint in sprints_with_dates[:settings.MAX_SPRINT_COUNT_FOR_REPORTS]
         ]
     
     # Step 10: Convert pi_dates_dict to array format (sorted by start_date)
@@ -465,7 +465,7 @@ async def get_issues(
     isGroup: bool = Query(False, description="If true, team_name is treated as a group name"),
     pi: Optional[str] = Query(None, description="Filter by PI (quarter_pi)"),
     sprint_id: Optional[int] = Query(None, description="Filter by sprint ID (matches any sprint_ids array element)"),
-    limit: int = Query(config.DEFAULT_QUERY_LIMIT, description=f"Number of issues to return (default: {config.DEFAULT_QUERY_LIMIT}, max: 1000)"),
+    limit: int = Query(settings.DEFAULT_QUERY_LIMIT, description=f"Number of issues to return (default: {settings.DEFAULT_QUERY_LIMIT}, max: 1000)"),
     conn: Connection = Depends(get_db_connection)
 ):
     """
@@ -596,7 +596,7 @@ async def get_epics_hierarchy(
     pi: Optional[str] = Query(None, description="Filter by PI (quarter_pi_of_epic)"),
     team_name: Optional[str] = Query(None, description="Filter by team name or group name (if isGroup=true)"),
     isGroup: bool = Query(False, description="If true, team_name is treated as a group name"),
-    limit: int = Query(config.DEFAULT_QUERY_LIMIT, description=f"Number of records to return (default: {config.DEFAULT_QUERY_LIMIT}, max: 1000)"),
+    limit: int = Query(settings.DEFAULT_QUERY_LIMIT, description=f"Number of records to return (default: {settings.DEFAULT_QUERY_LIMIT}, max: 1000)"),
     conn: Connection = Depends(get_db_connection)
 ):
     """
@@ -733,7 +733,7 @@ async def get_issue_status_duration(
         # Build WHERE clause conditions
         where_conditions = [
             "isd.status_category = 'In Progress'",
-            f"isd.duration_days >= {MIN_DURATION_AND_CYCLE_TIME_DAYS}",
+            f"isd.duration_days >= {settings.MIN_DURATION_AND_CYCLE_TIME_DAYS}",
             "isd.time_exited >= :start_date"
         ]
         
@@ -763,7 +763,7 @@ async def get_issue_status_duration(
             FROM public.issue_status_durations isd
             WHERE {where_clause}
             GROUP BY isd.status_name
-            HAVING AVG(isd.duration_days) >= {MIN_DURATION_AND_CYCLE_TIME_DAYS}
+            HAVING AVG(isd.duration_days) >= {settings.MIN_DURATION_AND_CYCLE_TIME_DAYS}
             ORDER BY
                 CASE
                     WHEN isd.status_name = 'In Progress' THEN 1
@@ -2577,7 +2577,7 @@ async def get_cycle_time_with_issue_keys(
         # Build WHERE clause conditions
         where_conditions = [
             "status_category = 'Done'",
-            f"cycle_time_days >= {MIN_DURATION_AND_CYCLE_TIME_DAYS}",
+            f"cycle_time_days >= {settings.MIN_DURATION_AND_CYCLE_TIME_DAYS}",
             "resolved_at IS NOT NULL",
             "DATE(resolved_at) >= :period_start",
             "DATE(resolved_at) <= :period_end"
@@ -2992,7 +2992,7 @@ async def get_issues_list(
     dependency: Optional[bool] = Query(None, description="Filter by dependency flag"),
     flagged: Optional[bool] = Query(None, description="Filter by flagged flag"),
     sprint_id: Optional[int] = Query(None, description="Filter by sprint ID (matches any sprint_ids array element)"),
-    limit: int = Query(config.DEFAULT_QUERY_LIMIT, description=f"Number of issues to return (default: {config.DEFAULT_QUERY_LIMIT}, max: 1000)"),
+    limit: int = Query(settings.DEFAULT_QUERY_LIMIT, description=f"Number of issues to return (default: {settings.DEFAULT_QUERY_LIMIT}, max: 1000)"),
     conn: Connection = Depends(get_db_connection)
 ):
     """
@@ -3168,7 +3168,7 @@ async def get_cycle_time_with_issue_keys(
         # Build WHERE clause conditions
         where_conditions = [
             "status_category = 'Done'",
-            f"cycle_time_days >= {MIN_DURATION_AND_CYCLE_TIME_DAYS}",
+            f"cycle_time_days >= {settings.MIN_DURATION_AND_CYCLE_TIME_DAYS}",
             "resolved_at IS NOT NULL",
             "DATE(resolved_at) >= :period_start",
             "DATE(resolved_at) <= :period_end"

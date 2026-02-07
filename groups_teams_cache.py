@@ -12,6 +12,7 @@ from sqlalchemy.engine import Connection
 import logging
 from cache_utils import get_redis_client
 import config
+from global_settings_loader import settings
 
 logger = logging.getLogger(__name__)
 
@@ -60,7 +61,7 @@ def set_cached_groups(data: Dict[str, Any], ttl: Optional[int] = None) -> bool:
         if not client:
             return False
         
-        ttl = ttl or config.CACHE_TTL_GROUPS_TEAMS
+        ttl = ttl or settings.CACHE_TTL_GROUPS_TEAMS
         client.setex(CACHE_KEY_GROUPS, ttl, json.dumps(data, default=str))
         return True
     except Exception as e:
@@ -108,7 +109,7 @@ def set_cached_teams(data: Dict[str, Any], ttl: Optional[int] = None) -> bool:
         if not client:
             return False
         
-        ttl = ttl or config.CACHE_TTL_GROUPS_TEAMS
+        ttl = ttl or settings.CACHE_TTL_GROUPS_TEAMS
         client.setex(CACHE_KEY_TEAMS, ttl, json.dumps(data, default=str))
         return True
     except Exception as e:

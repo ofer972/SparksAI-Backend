@@ -9,6 +9,7 @@ from typing import Any, Optional
 import logging
 import time
 import config
+from global_settings_loader import settings
 
 logger = logging.getLogger(__name__)
 
@@ -18,7 +19,6 @@ _redis_client = None
 # Failure state cache - track when Redis failed to avoid repeated connection attempts
 _redis_failed_until = None  # Timestamp when we can retry again (None = no failure recorded)
 _redis_cooldown_logged = False  # Track if we've already logged the cooldown message for this period
-REDIS_FAILURE_COOLDOWN_SECONDS = 1800  # 30 minutes cooldown period
 
 
 def get_redis_client():
@@ -32,11 +32,12 @@ def get_redis_client():
     
     # Check if we're in failure cooldown period
     current_time = time.time()
+    cooldown_seconds = settings.REDIS_FAILURE_COOLDOWN_SECONDS
     if _redis_failed_until is not None and current_time < _redis_failed_until:
         # Still in cooldown - skip connection attempt
         # Only log once per cooldown period
         if not _redis_cooldown_logged:
-            cooldown_minutes = REDIS_FAILURE_COOLDOWN_SECONDS // 60
+            cooldown_minutes = cooldown_seconds // 60
             logger.info(f"⏸️  Redis connection will not be attempted in the next {cooldown_minutes} minutes")
             _redis_cooldown_logged = True
         return None
@@ -67,10 +68,10 @@ def get_redis_client():
             _redis_failed_until = None
             _redis_cooldown_logged = False
         except Exception as e:
-            logger.warning(f"⚠️  Redis connection failed: {e}. Caching disabled for {REDIS_FAILURE_COOLDOWN_SECONDS}s.")
+            logger.warning(f"⚠️  Redis connection failed: {e}. Caching disabled for {cooldown_seconds}s.")
             _redis_client = None
             # Set failure cooldown period (10 minutes from now)
-            _redis_failed_until = current_time + REDIS_FAILURE_COOLDOWN_SECONDS
+            _redis_failed_until = current_time + cooldown_seconds
             _redis_cooldown_logged = False  # Reset log flag so we log on next cooldown period
             return None
     
@@ -212,17 +213,12 @@ def get_report_cache_ttl(report_id: str) -> int:
     Returns:
         TTL in seconds
     """
-    # Smart defaults based on report type
+    # Smart defaults based on report type (from global_settings)
     if any(x in report_id for x in ["current", "progress", "wip"]):
-        # Real-time reports: 1 minute
-        return config.CACHE_TTL_REALTIME
+        return settings.CACHE_TTL_REALTIME
     elif any(x in report_id for x in ["burndown", "trend", "predictability", "active"]):
-        # Aggregate reports: 5 minutes
-        return config.CACHE_TTL_AGGREGATE
+        return settings.CACHE_TTL_AGGREGATE
     elif any(x in report_id for x in ["closed", "historical", "summary"]):
-        # Historical reports: 30 minutes
-        return config.CACHE_TTL_HISTORICAL
-    
-    # Default to aggregate TTL
-    return config.CACHE_TTL_AGGREGATE
+        return settings.CACHE_TTL_HISTORICAL
+    return settings.CACHE_TTL_AGGREGATE
 

@@ -18,6 +18,7 @@ from database_general import (
     delete_recommendation_by_id,
 )
 import config
+from global_settings_loader import settings
 
 logger = logging.getLogger(__name__)
 
@@ -56,7 +57,7 @@ def validate_limit(limit: int) -> int:
 async def get_recommendations_collection(
     date: Optional[str] = Query(None, description="Filter by date in YYYY-MM-DD format (e.g., '2025-12-05')"),
     team_name: Optional[str] = Query(None, description="Filter by team name"),
-    limit: int = Query(config.DEFAULT_QUERY_LIMIT, description=f"Maximum number of recommendations to return (default: {config.DEFAULT_QUERY_LIMIT})"),
+    limit: int = Query(settings.DEFAULT_QUERY_LIMIT, description=f"Maximum number of recommendations to return (default: {settings.DEFAULT_QUERY_LIMIT})"),
     conn: Connection = Depends(get_db_connection)
 ):
     """

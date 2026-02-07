@@ -10,14 +10,11 @@ from typing import List, Dict, Any, Optional
 import logging
 from datetime import datetime, date, timedelta
 
+from global_settings_loader import settings
+
 logger = logging.getLogger(__name__)
 
-# Dependency Heatmap Status Thresholds
-HEATMAP_LOW_VOLUME_THRESHOLD = 2  # Low: < 2 uncompleted issues
-HEATMAP_MEDIUM_MAX_THRESHOLD = 5  # Medium: 2-5 uncompleted issues, Critical: > 5
-HEATMAP_ICON_THRESHOLD = 10  # Icon shown if total_issues > this value (red exclamation mark)
-
-# Status values
+# Status values (thresholds from settings.HEATMAP_*)
 HEATMAP_STATUS_COMPLETED = "completed"  # 100% completion
 HEATMAP_STATUS_LOW = "low"  # < 2 uncompleted
 HEATMAP_STATUS_MEDIUM = "medium"  # 2-5 uncompleted
@@ -872,9 +869,9 @@ def fetch_epic_dependency_heatmap_data(
                 status = HEATMAP_STATUS_NONE
             elif completion_percentage >= 100.0:
                 status = HEATMAP_STATUS_COMPLETED
-            elif uncompleted_issues < HEATMAP_LOW_VOLUME_THRESHOLD:
+            elif uncompleted_issues < settings.HEATMAP_LOW_VOLUME_THRESHOLD:
                 status = HEATMAP_STATUS_LOW
-            elif uncompleted_issues <= HEATMAP_MEDIUM_MAX_THRESHOLD:
+            elif uncompleted_issues <= settings.HEATMAP_MEDIUM_MAX_THRESHOLD:
                 status = HEATMAP_STATUS_MEDIUM
             else:
                 status = HEATMAP_STATUS_CRITICAL
@@ -883,7 +880,7 @@ def fetch_epic_dependency_heatmap_data(
             row_dict['status'] = status
             
             # Add icon indication (true if total_issues > threshold)
-            row_dict['icon_indication'] = total_issues > HEATMAP_ICON_THRESHOLD
+            row_dict['icon_indication'] = total_issues > settings.HEATMAP_ICON_THRESHOLD
             
             records.append(row_dict)
         
@@ -943,15 +940,15 @@ def build_dependency_heatmap_response(
         },
         {
             "status": HEATMAP_STATUS_LOW,
-            "label": f"Low (<{HEATMAP_LOW_VOLUME_THRESHOLD} uncompleted issues)"
+            "label": f"Low (<{settings.HEATMAP_LOW_VOLUME_THRESHOLD} uncompleted issues)"
         },
         {
             "status": HEATMAP_STATUS_MEDIUM,
-            "label": f"Medium ({HEATMAP_LOW_VOLUME_THRESHOLD}-{HEATMAP_MEDIUM_MAX_THRESHOLD} uncompleted issues)"
+            "label": f"Medium ({settings.HEATMAP_LOW_VOLUME_THRESHOLD}-{settings.HEATMAP_MEDIUM_MAX_THRESHOLD} uncompleted issues)"
         },
         {
             "status": HEATMAP_STATUS_CRITICAL,
-            "label": f"Critical (>{HEATMAP_MEDIUM_MAX_THRESHOLD} uncompleted issues)"
+            "label": f"Critical (>{settings.HEATMAP_MEDIUM_MAX_THRESHOLD} uncompleted issues)"
         },
         {
             "status": HEATMAP_STATUS_NONE,
@@ -959,7 +956,7 @@ def build_dependency_heatmap_response(
         },
         {
             "status": "icon",
-            "label": f"High Volume Icon (>{HEATMAP_ICON_THRESHOLD} total dependencies)"
+            "label": f"High Volume Icon (>{settings.HEATMAP_ICON_THRESHOLD} total dependencies)"
         }
     ]
     

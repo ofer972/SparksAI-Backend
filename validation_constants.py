@@ -1,19 +1,9 @@
 """
-Validation thresholds - central configuration.
-Modify these constants to change validation behavior.
+Validation thresholds - use global_settings_loader.settings for DB-backed values.
+e.g. from global_settings_loader import settings
+     settings.STUCK_STORIES_THRESHOLD_DAYS, settings.OLD_BUGS_THRESHOLD_DAYS, etc.
 """
 
-# Old Bugs Validation
-OLD_BUGS_THRESHOLD_DAYS = 90
-
-# Stuck In Progress Validation (different for stories vs epics)
-STUCK_STORIES_THRESHOLD_DAYS = 30  # Hierarchy level 0 issues
-STUCK_EPICS_THRESHOLD_DAYS = 90    # Epic issue type
-
-# Dragged Sprints Validation
-DRAGGED_SPRINTS_THRESHOLD = 3
-
-# Epic Health Validation
-EPIC_MAX_CHILDREN_THRESHOLD = 25
-
-
+# Validation thresholds are now on settings:
+# OLD_BUGS_THRESHOLD_DAYS, STUCK_STORIES_THRESHOLD_DAYS, STUCK_EPICS_THRESHOLD_DAYS,
+# DRAGGED_SPRINTS_THRESHOLD, EPIC_MAX_CHILDREN_THRESHOLD

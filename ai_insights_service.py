@@ -16,6 +16,7 @@ import logging
 import re
 from database_connection import get_db_connection
 import config
+from global_settings_loader import settings
 from database_general import (
     get_top_ai_cards,
     get_top_ai_cards_filtered,
@@ -116,8 +117,8 @@ def validate_limit(limit: int) -> int:
     if limit < 1:
         raise HTTPException(status_code=400, detail="Limit must be at least 1")
     
-    if limit > config.AI_CARDS_LIMIT:  # Upper limit for getTopCards endpoints
-        raise HTTPException(status_code=400, detail=f"Limit cannot exceed {config.AI_CARDS_LIMIT}")
+    if limit > settings.AI_CARDS_LIMIT:  # Upper limit for getTopCards endpoints
+        raise HTTPException(status_code=400, detail=f"Limit cannot exceed {settings.AI_CARDS_LIMIT}")
     
     return limit
 
@@ -139,7 +140,7 @@ async def get_ai_insights(
     team_name: Optional[str] = Query(None, description="Team name"),
     group_name: Optional[str] = Query(None, description="Group name"),
     pi: Optional[str] = Query(None, description="PI name (quarter)"),
-    limit: int = Query(config.AI_CARDS_LIMIT, description=f"Number of AI cards to return (default: {config.AI_CARDS_LIMIT}, max: {config.AI_CARDS_LIMIT})"),
+    limit: int = Query(settings.AI_CARDS_LIMIT, description=f"Number of AI cards to return (default: {settings.AI_CARDS_LIMIT}, max: {settings.AI_CARDS_LIMIT})"),
     category: Optional[List[str]] = Query(None, description="Filter by insight category/categories (e.g., 'PI Events', 'Sprint Status'). Can specify multiple: ?category=PI Events&category=Sprint Status"),
     conn: Connection = Depends(get_db_connection)
 ):
@@ -296,8 +297,8 @@ async def get_ai_insights_with_recommendations(
     team_name: Optional[str] = Query(None, description="Team name"),
     group_name: Optional[str] = Query(None, description="Group name"),
     pi: Optional[str] = Query(None, description="PI name (quarter)"),
-    limit: int = Query(config.AI_CARDS_LIMIT, description=f"Number of AI cards to return (default: {config.AI_CARDS_LIMIT}, max: {config.AI_CARDS_LIMIT})"),
-    recommendations_limit: int = Query(config.DEFAULT_QUERY_LIMIT, description=f"Max recommendations per card (default: {config.DEFAULT_QUERY_LIMIT})"),
+    limit: int = Query(settings.AI_CARDS_LIMIT, description=f"Number of AI cards to return (default: {settings.AI_CARDS_LIMIT}, max: {settings.AI_CARDS_LIMIT})"),
+    recommendations_limit: int = Query(settings.DEFAULT_QUERY_LIMIT, description=f"Max recommendations per card (default: {settings.DEFAULT_QUERY_LIMIT})"),
     category: Optional[List[str]] = Query(None, description="Filter by insight category/categories (e.g., 'PI Events', 'Sprint Status'). Can specify multiple: ?category=PI Events&category=Sprint Status"),
     conn: Connection = Depends(get_db_connection)
 ):
@@ -465,7 +466,7 @@ async def get_ai_insights_collection(
     team_name: Optional[str] = Query(None, description="Filter by team name"),
     group_name: Optional[str] = Query(None, description="Filter by group name"),
     pi: Optional[str] = Query(None, description="Filter by PI name"),
-    limit: int = Query(config.DEFAULT_QUERY_LIMIT, description=f"Maximum number of cards to return (default: {config.DEFAULT_QUERY_LIMIT})"),
+    limit: int = Query(settings.DEFAULT_QUERY_LIMIT, description=f"Maximum number of cards to return (default: {settings.DEFAULT_QUERY_LIMIT})"),
     conn: Connection = Depends(get_db_connection)
 ):
     """
@@ -651,7 +652,7 @@ async def get_ai_insights_all_fields(
     team_name: Optional[str] = Query(None, description="Filter by team name"),
     group_name: Optional[str] = Query(None, description="Filter by group name"),
     pi: Optional[str] = Query(None, description="Filter by PI name"),
-    limit: int = Query(config.DEFAULT_QUERY_LIMIT, description=f"Maximum number of cards to return (default: {config.DEFAULT_QUERY_LIMIT})"),
+    limit: int = Query(settings.DEFAULT_QUERY_LIMIT, description=f"Maximum number of cards to return (default: {settings.DEFAULT_QUERY_LIMIT})"),
     conn: Connection = Depends(get_db_connection)
 ):
     """

@@ -21,6 +21,7 @@ from database_general import (
     delete_insight_type_by_id,
 )
 import config
+from global_settings_loader import settings
 
 logger = logging.getLogger(__name__)
 
@@ -119,7 +120,7 @@ async def get_insight_types_endpoint(
     insight_category: Optional[str] = Query(None, description="Filter by insight category (exact match)"),
     active: Optional[bool] = Query(None, description="Filter by active status"),
     search: Optional[str] = Query(None, description="Search in insight types"),
-    limit: int = Query(config.DEFAULT_QUERY_LIMIT, ge=1, le=1000, description=f"Maximum number of insight types to return (default: {config.DEFAULT_QUERY_LIMIT})"),
+    limit: int = Query(settings.DEFAULT_QUERY_LIMIT, ge=1, le=1000, description=f"Maximum number of insight types to return (default: {settings.DEFAULT_QUERY_LIMIT})"),
     conn: Connection = Depends(get_db_connection)
 ):
     """

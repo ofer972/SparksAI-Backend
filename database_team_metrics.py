@@ -10,10 +10,7 @@ from sqlalchemy.engine import Connection
 from typing import Dict, Any, List, Optional
 from datetime import datetime, date, timedelta
 import logging
-import config
-
-# Use unified constant from config for both duration and cycle time filtering
-MIN_DURATION_AND_CYCLE_TIME_DAYS = config.MIN_DURATION_AND_CYCLE_TIME_DAYS
+from global_settings_loader import settings
 
 logger = logging.getLogger(__name__)
 
@@ -45,7 +42,7 @@ def get_cycle_time_for_period(
             "status_category = 'Done'",
             "resolved_at IS NOT NULL",
             "cycle_time_days IS NOT NULL",
-            f"cycle_time_days >= {MIN_DURATION_AND_CYCLE_TIME_DAYS}",  # Cycle time >= minimum threshold (filter out invalid)
+            f"cycle_time_days >= {settings.MIN_DURATION_AND_CYCLE_TIME_DAYS}",  # Cycle time >= minimum threshold (filter out invalid)
             "sprint_ids IS NOT NULL",  # Only issues associated with sprints (excludes Epics and non-sprint issues)
             "resolved_at >= :start_date",
             "resolved_at <= :end_date"

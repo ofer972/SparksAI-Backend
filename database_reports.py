@@ -41,10 +41,9 @@ ReportDefinition = Dict[str, Any]
 ReportDataResult = Dict[str, Any]
 ReportDataFetcher = Callable[[Dict[str, Any], Connection], ReportDataResult]
 
-# Use unified constant from config for both duration and cycle time filtering
-MIN_DURATION_AND_CYCLE_TIME_DAYS = config.MIN_DURATION_AND_CYCLE_TIME_DAYS
+# Use unified constant from settings for both duration and cycle time filtering
+from global_settings_loader import settings
 VALID_DURATION_MONTHS = {1, 2, 3, 4, 6, 9}
-DEFAULT_HIERARCHY_LIMIT = 500
 
 
 def _ensure_json_field(row_dict: Dict[str, Any], field: str) -> None:
@@ -1176,7 +1175,7 @@ def _fetch_issue_status_duration_summary(
 
     where_conditions = [
         "isd.status_category = 'In Progress'",
-        f"isd.duration_days >= {MIN_DURATION_AND_CYCLE_TIME_DAYS}",
+        f"isd.duration_days >= {settings.MIN_DURATION_AND_CYCLE_TIME_DAYS}",
         "isd.time_exited >= :start_date",
     ]
     params: Dict[str, Any] = {"start_date": start_date.strftime("%Y-%m-%d")}
@@ -1202,7 +1201,7 @@ def _fetch_issue_status_duration_summary(
         FROM public.issue_status_durations isd
         WHERE {where_clause}
         GROUP BY isd.status_name
-        HAVING AVG(isd.duration_days) >= {MIN_DURATION_AND_CYCLE_TIME_DAYS}
+        HAVING AVG(isd.duration_days) >= {settings.MIN_DURATION_AND_CYCLE_TIME_DAYS}
         ORDER BY
             CASE
                 WHEN isd.status_name = 'In Progress' THEN 1
@@ -1261,7 +1260,7 @@ def _fetch_issue_status_duration_monthly(
         "isd.time_exited >= :start_date",
         "isd.time_exited < :end_date",
         "isd.status_category = 'In Progress'",
-        f"isd.duration_days >= {MIN_DURATION_AND_CYCLE_TIME_DAYS}",
+        f"isd.duration_days >= {settings.MIN_DURATION_AND_CYCLE_TIME_DAYS}",
     ]
     params: Dict[str, Any] = {
         "start_date": start_date.strftime("%Y-%m-%d"),
@@ -1286,7 +1285,7 @@ def _fetch_issue_status_duration_monthly(
         FROM public.issue_status_durations isd
         WHERE {where_clause}
         GROUP BY isd.status_name, month_exited
-        HAVING AVG(isd.duration_days) >= {MIN_DURATION_AND_CYCLE_TIME_DAYS}
+        HAVING AVG(isd.duration_days) >= {settings.MIN_DURATION_AND_CYCLE_TIME_DAYS}
         ORDER BY
             CASE
                 WHEN isd.status_name = 'In Progress' THEN 1
@@ -1366,7 +1365,7 @@ def _fetch_issue_status_duration_detail(
     where_conditions = [
         "isd.status_category = 'In Progress'",
         "isd.status_name = :status_name",
-        f"isd.duration_days >= {MIN_DURATION_AND_CYCLE_TIME_DAYS}",
+        f"isd.duration_days >= {settings.MIN_DURATION_AND_CYCLE_TIME_DAYS}",
     ]
     params: Dict[str, Any] = {"status_name": status}
 
@@ -1509,9 +1508,9 @@ def _fetch_issue_hierarchy(filters: Dict[str, Any], conn: Connection) -> ReportD
     is_group = filters.get("isGroup", False)
     hierarchy_level = filters.get("hierarchy_level")
     limit_value = filters.get("limit")
-    limit_int = _parse_int(limit_value, default=DEFAULT_HIERARCHY_LIMIT)
+    limit_int = _parse_int(limit_value, default=settings.DEFAULT_HIERARCHY_LIMIT)
     if limit_int <= 0 or limit_int > 1000:
-        limit_int = DEFAULT_HIERARCHY_LIMIT
+        limit_int = settings.DEFAULT_HIERARCHY_LIMIT
     
     # Validate hierarchy_level if provided
     if hierarchy_level is not None:
@@ -2236,7 +2235,7 @@ def _fetch_cycle_time_over_time(filters: Dict[str, Any], conn: Connection) -> Re
     # Build WHERE conditions for CompletedIssues CTE
     completed_where_conditions = [
         "status_category = 'Done'",
-        f"cycle_time_days >= {MIN_DURATION_AND_CYCLE_TIME_DAYS}",
+        f"cycle_time_days >= {settings.MIN_DURATION_AND_CYCLE_TIME_DAYS}",
         "resolved_at IS NOT NULL",
         "resolved_at >= CURRENT_DATE - (:days_back || ' days')::interval"
     ]

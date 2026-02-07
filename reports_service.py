@@ -28,6 +28,7 @@ from cache_utils import (
 )
 import config
 from config import get_jira_url
+from global_settings_loader import settings
 
 reports_router = APIRouter()
 
@@ -288,7 +289,7 @@ async def list_reports(
     }
     
     # Cache the result with definitions TTL
-    set_cached_report(cache_key, response_data, ttl=config.CACHE_TTL_DEFINITIONS)
+    set_cached_report(cache_key, response_data, ttl=settings.CACHE_TTL_DEFINITIONS)
 
     return {
         "success": True,
