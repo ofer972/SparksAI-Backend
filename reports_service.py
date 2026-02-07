@@ -31,6 +31,7 @@ from config import get_jira_url
 from global_settings_loader import settings
 
 reports_router = APIRouter()
+logger = logging.getLogger(__name__)
 
 
 def _normalize_filter_value(value: Any) -> Any:
@@ -204,6 +205,14 @@ async def forward_to_audit_service(report_id: str, filters: Dict[str, Any], defi
         params["status_code_max"] = filters["status_code_max"]
     if filters.get("search_query"):
         params["search_query"] = filters["search_query"]
+    if filters.get("severity"):
+        params["severity"] = filters["severity"]
+    if filters.get("date_from"):
+        params["date_from"] = filters["date_from"]
+    if filters.get("min_tokens"):
+        params["min_tokens"] = filters["min_tokens"]
+    if filters.get("limit"):
+        params["limit"] = filters["limit"]
     
     try:
         async with httpx.AsyncClient(timeout=30.0) as client:
@@ -219,6 +228,44 @@ async def forward_to_audit_service(report_id: str, filters: Dict[str, Any], defi
                 "meta": {
                     "service": "audit-service"
                 }
+            }
+    except httpx.HTTPStatusError as e:
+        logger = logging.getLogger(__name__)
+        logger.error(f"Audit service returned error: {e.response.status_code} - {e.response.text}")
+        raise HTTPException(
+            status_code=e.response.status_code,
+            detail=f"Audit service error: {e.response.text}"
+        )
+    except httpx.RequestError as e:
+        logger = logging.getLogger(__name__)
+        logger.error(f"Failed to connect to audit service: {e}")
+        raise HTTPException(
+            status_code=503,
+            detail=f"Failed to connect to audit service: {str(e)}"
+        )
+
+
+@reports_router.get("/audit-logs/filter-values")
+async def get_audit_logs_filter_values():
+    """
+    Get distinct filter values for audit logs dropdowns.
+    Proxies request to audit service.
+    """
+    audit_service_url = os.getenv("AUDIT_SERVICE_URL", "http://audit-service:8083")
+    endpoint = "/api/audit-logs/filter-values"
+    
+    try:
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            response = await client.get(
+                f"{audit_service_url}{endpoint}"
+            )
+            response.raise_for_status()
+            result_data = response.json()
+            
+            return {
+                "success": True,
+                "data": result_data,
+                "message": "Retrieved audit log filter values"
             }
     except httpx.HTTPStatusError as e:
         logger = logging.getLogger(__name__)
@@ -328,6 +375,9 @@ async def get_report_instance(
     detail_months: Optional[int] = Query(None), # New filter
     plan_grace_period: Optional[int] = Query(None), # New filter
     isGroup: Optional[bool] = Query(None), # New filter for group support
+    severity: Optional[str] = Query(None), # Audit logs filter
+    date_from: Optional[str] = Query(None, description="Filter from date (ISO format YYYY-MM-DD)"), # Audit logs filter
+    min_tokens: Optional[int] = Query(None), # Audit logs filter
 ):
     """
     Resolve a specific report by ID, merging defaults with provided filters.

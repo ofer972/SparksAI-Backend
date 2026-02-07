@@ -23,6 +23,7 @@ from database_goals import (
     update_goal_by_id,
     delete_goal_by_id
 )
+from audit_utils import create_change_audit_log
 from agent_llm_service import call_llm_service_process_single
 from pydantic import BaseModel, Field, ValidationError, model_validator
 import config
@@ -850,6 +851,7 @@ class GoalUpdateRequest(BaseModel):
     issue_keys: Optional[List[str]] = None  # Changed from epic_keys
     status: Optional[str] = None
     priority_bv: Optional[int] = None
+    updated_by: Optional[str] = Field(None, description="Email of user making the change")
 
 
 class GoalGenerateRequest(BaseModel):
@@ -1462,6 +1464,11 @@ async def update_goal_endpoint(
     """
     try:
         updates = request.model_dump(exclude_unset=True)
+        # Use updated_by from request or default to "system"
+        user_email = updates.pop("updated_by", None) or "system"
+        
+        # Read current goal before update for audit
+        current_goal = get_goal_by_id(goal_id, conn)
         
         # Convert group_name to group_id if provided
         if "group_name" in updates:
@@ -1488,6 +1495,55 @@ async def update_goal_endpoint(
                 status_code=404,
                 detail=f"Goal with ID {goal_id} not found"
             )
+        
+        # Create change audit log
+        if current_goal:
+            changes = []
+            for field, new_value in updates.items():
+                old_value = current_goal.get(field)
+                # Handle issue_keys - normalize for comparison
+                if field == "issue_keys":
+                    # Normalize old_value (could be JSON string or list)
+                    if isinstance(old_value, str):
+                        try:
+                            old_value = json.loads(old_value)
+                        except:
+                            old_value = []
+                    if old_value is None:
+                        old_value = []
+                    # Normalize new_value
+                    if new_value is None:
+                        new_value = []
+                    # Compare as sorted lists
+                    if sorted(old_value) != sorted(new_value):
+                        changes.append({
+                            "field": field,
+                            "from": old_value,
+                            "to": new_value
+                        })
+                else:
+                    # Direct comparison for other fields
+                    if old_value != new_value:
+                        changes.append({
+                            "field": field,
+                            "from": old_value,
+                            "to": new_value
+                        })
+            
+            # Create audit log if there are changes
+            if changes:
+                try:
+                    create_change_audit_log(
+                        change_type="goal_update",
+                        entity_id=goal_id,
+                        changes=changes,
+                        user_email=user_email,
+                        endpoint_path=f"/goals/{goal_id}",
+                        status_code=200,
+                        response_time_seconds=0.0
+                    )
+                except Exception as audit_err:
+                    logger.warning(f"Failed to create change audit log for goal {goal_id}: {audit_err}")
         
         # Enrich with group_name for UI compatibility
         enriched_goals = enrich_goals_with_group_names([updated_goal], conn)

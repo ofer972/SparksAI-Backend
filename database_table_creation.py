@@ -1034,6 +1034,31 @@ DEFAULT_REPORT_DEFINITIONS = [
                 "month": {"type": "string", "description": "Month in YYYY-MM format (e.g., '2026-01'). Defaults to current month."}
             }
         }
+    },
+    {
+        "report_id": "audit-logs",
+        "report_name": "Audit Logs",
+        "chart_type": "table",
+        "data_source": "audit_logs",
+        "description": "View and filter audit logs with detailed change tracking",
+        "default_filters": {
+            "limit": 100,
+            "date_from": None
+        },
+        "meta_schema": {
+            "required_filters": [],
+            "optional_filters": ["user_id", "severity", "action", "http_method", "status_code", "date_from", "min_tokens", "limit"],
+            "parameters": {
+                "user_id": {"type": "string", "description": "Filter by user ID (email)"},
+                "severity": {"type": "string", "description": "Filter by severity"},
+                "action": {"type": "string", "description": "Filter by action"},
+                "http_method": {"type": "string", "description": "Filter by HTTP method"},
+                "status_code": {"type": "integer", "description": "Filter by status code"},
+                "date_from": {"type": "string", "description": "Filter from date (ISO format YYYY-MM-DD, default: today)"},
+                "min_tokens": {"type": "integer", "description": "Minimum tokens used (>=)"},
+                "limit": {"type": "integer", "description": "Max records (default: 100, max: 500)"}
+            }
+        }
     }
 ]
 

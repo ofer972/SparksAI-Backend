@@ -12,6 +12,7 @@ from typing import Dict, Any, Optional
 import logging
 from database_connection import get_db_connection
 from database_general import get_all_settings_db, get_setting_db, set_setting_db, set_settings_batch_db
+from audit_utils import create_change_audit_log
 
 logger = logging.getLogger(__name__)
 
@@ -143,11 +144,18 @@ async def update_settings_batch(
                 detail="Settings dictionary cannot be empty"
             )
         
-        updated_by = request.updated_by or 'admin'
+        # Use updated_by from request or default to 'admin'
+        user_email = request.updated_by or 'admin'
         
         # Log all settings received from client in compact format
         settings_list = [f"{k}={v.value}" for k, v in request.settings.items()]
         logger.info(f"Client settings: {', '.join(settings_list)}")
+        
+        # Read current values from database before update for audit
+        current_values = {}
+        for key in request.settings.keys():
+            current_value = get_setting_db(key, conn)
+            current_values[key] = current_value
         
         # Convert SettingUpdateItem dict to format expected by database function
         settings_dict = {k: v.value for k, v in request.settings.items()}
@@ -157,9 +165,42 @@ async def update_settings_batch(
         results = set_settings_batch_db(
             settings=settings_dict,
             descriptions=descriptions_dict if descriptions_dict else None,
-            updated_by=updated_by,
+            updated_by=user_email,
             conn=conn
         )
+        
+        # Build changes array for audit
+        changes = []
+        for key, item in request.settings.items():
+            current_value = current_values.get(key)
+            new_value = item.value
+            # Only log if value actually changed (or if it's a new setting)
+            if current_value != new_value:
+                # Format key to be readable: remove "backend_" prefix, capitalize words, replace underscores
+                field_name = key.replace("backend_", "").replace("_", " ").title()
+                changes.append({
+                    "field": field_name,
+                    "from": current_value,
+                    "to": new_value
+                })
+        
+        # Create change audit log if there are changes
+        if changes:
+            try:
+                logger.info(f"Settings batch change detected: {len(changes)} changes, user={user_email}")
+                create_change_audit_log(
+                    change_type="settings_update",
+                    entity_id=None,
+                    changes=changes,
+                    user_email=user_email,
+                    endpoint_path="/settings/batch",
+                    status_code=200,
+                    response_time_seconds=0.0
+                )
+            except Exception as audit_err:
+                logger.warning(f"Failed to create change audit log: {audit_err}", exc_info=True)
+        else:
+            logger.debug(f"No changes detected in batch update (all values unchanged)")
         
         # Check if any failed
         failed = [key for key, success in results.items() if not success]
@@ -191,6 +232,7 @@ async def update_setting(
     setting_key: str,
     value: str = Query(..., description="The value to set"),
     description: Optional[str] = Query(None, description="Optional description to update"),
+    updated_by: Optional[str] = Query(None, description="Email of user making the change"),
     conn: Connection = Depends(get_db_connection)
 ):
     """
@@ -211,12 +253,18 @@ async def update_setting(
         # Log setting received from client
         logger.info(f"Client setting: {setting_key}={value}" + (f", description={description}" if description else ""))
         
+        # Read current value from database before update for audit
+        current_value = get_setting_db(setting_key, conn)
+        
+        # Use updated_by from request or default to 'admin'
+        user_email = updated_by or 'admin'
+        
         # Update setting in database
         success = set_setting_db(
             setting_key=setting_key,
             setting_value=value,
             description=description,
-            updated_by='admin',
+            updated_by=user_email,
             conn=conn
         )
         
@@ -225,6 +273,34 @@ async def update_setting(
                 status_code=500,
                 detail=f"Failed to update setting '{setting_key}'"
             )
+        
+        # Create change audit log if value changed
+        # Compare as strings to handle None vs empty string cases
+        current_str = str(current_value) if current_value is not None else None
+        new_str = str(value) if value is not None else None
+        if current_str != new_str:
+            try:
+                # Format key to be readable: remove "backend_" prefix, capitalize words, replace underscores
+                field_name = setting_key.replace("backend_", "").replace("_", " ").title()
+                changes = [{
+                    "field": field_name,
+                    "from": current_value,
+                    "to": value
+                }]
+                logger.info(f"Settings change detected: {setting_key} ({field_name}) from '{current_value}' to '{value}', user={user_email}")
+                create_change_audit_log(
+                    change_type="settings_update",
+                    entity_id=None,
+                    changes=changes,
+                    user_email=user_email,
+                    endpoint_path=f"/settings/{setting_key}",
+                    status_code=200,
+                    response_time_seconds=0.0
+                )
+            except Exception as audit_err:
+                logger.warning(f"Failed to create change audit log: {audit_err}", exc_info=True)
+        else:
+            logger.debug(f"No change detected for {setting_key}: '{current_value}' == '{value}'")
         
         return {
             "success": True,

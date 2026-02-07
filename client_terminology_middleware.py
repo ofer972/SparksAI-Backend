@@ -170,7 +170,7 @@ async def terminology_replacement_middleware(request: Request, call_next):
     # Only process JSON responses
     content_type = response.headers.get("content-type", "")
     if not content_type.startswith("application/json"):
-        logger.info(f"🔄 Middleware: Skipping {request.url.path} - not JSON (content-type: {content_type})")
+        logger.debug(f"Terminology: {request.url.path} - skipped (not JSON)")
         return response
     
     # Debug: Log response type and attributes
@@ -181,7 +181,7 @@ async def terminology_replacement_middleware(request: Request, call_next):
     # Skip actual StreamingResponse (for file downloads, etc.)
     from fastapi.responses import StreamingResponse
     if isinstance(response, StreamingResponse):
-        logger.info(f"🔄 Middleware: Skipping {request.url.path} - StreamingResponse")
+        logger.debug(f"Terminology: {request.url.path} - skipped (StreamingResponse)")
         return response
     
     try:
@@ -230,10 +230,7 @@ async def terminology_replacement_middleware(request: Request, call_next):
             original_str = json.dumps(data)
             transformed_str = json.dumps(transformed_data)
             if original_str != transformed_str:
-                logger.info(f"✅ Middleware: Terminology replacement applied on {request.url.path}")
-                logger.info(f"   Replacement: 'PI' → '{REPLACEMENT_TERM}', 'PIs' → '{REPLACEMENT_TERM}s'")
-            else:
-                logger.info(f"ℹ️  Middleware: No replacements needed on {request.url.path} (no 'PI' found in response)")
+                logger.info(f"Terminology: {request.url.path} - PI→{REPLACEMENT_TERM}")
             
         except Exception as e:
             # If transformation fails, log and return original
