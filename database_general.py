@@ -840,6 +840,7 @@ def get_prompt_by_email_and_name(
 
         query = text(f"""
             SELECT 
+                prompt_id,
                 email_address,
                 prompt_name,
                 prompt_description,
@@ -861,7 +862,7 @@ def get_prompt_by_email_and_name(
             return None
 
         # Replace placeholders in prompt_description only if requested
-        prompt_description = row[2]
+        prompt_description = row[3]
         if prompt_description and replace_placeholders:
             # Pass conn for lazy loading if needed
             prompt_description = replace_prompt_placeholders(str(prompt_description), conn=conn)
@@ -869,16 +870,93 @@ def get_prompt_by_email_and_name(
             prompt_description = str(prompt_description)
 
         return {
-            "email_address": row[0],
-            "prompt_name": row[1],
+            "prompt_id": row[0],
+            "email_address": row[1],
+            "prompt_name": row[2],
             "prompt_description": prompt_description,
-            "prompt_type": row[3],
-            "prompt_active": row[4],
-            "created_at": row[5],
-            "updated_at": row[6]
+            "prompt_type": row[4],
+            "prompt_active": row[5],
+            "created_at": row[6],
+            "updated_at": row[7]
         }
     except Exception as e:
         logger.error(f"Error fetching prompt '{prompt_name}' for '{email_address}': {e}")
+        raise e
+
+
+def get_prompt_by_id(
+    prompt_id: int,
+    conn: Connection = None,
+    active: Optional[bool] = None,
+    replace_placeholders: bool = False
+) -> Optional[Dict[str, Any]]:
+    """
+    Get a single prompt by prompt_id from the prompts table.
+    Optionally filter by prompt_active.
+
+    Args:
+        prompt_id: Prompt ID (primary key)
+        conn: Database connection
+        active: If True, require prompt_active=TRUE; if False, require prompt_active=FALSE; if None, no filter
+        replace_placeholders: If True, replace {{JIRA_URL}} with value from ETL settings (default: False)
+
+    Returns:
+        dict: Prompt row as dictionary or None if not found
+    """
+    try:
+        where_clauses = ["prompt_id = :prompt_id"]
+        params: Dict[str, Any] = {
+            "prompt_id": prompt_id
+        }
+
+        if active is True:
+            where_clauses.append("prompt_active = TRUE")
+        elif active is False:
+            where_clauses.append("prompt_active = FALSE")
+
+        query = text(f"""
+            SELECT 
+                prompt_id,
+                email_address,
+                prompt_name,
+                prompt_description,
+                prompt_type,
+                prompt_active,
+                created_at,
+                updated_at
+            FROM {config.PROMPTS_TABLE}
+            WHERE {' AND '.join(where_clauses)}
+        """)
+
+        logger.info(
+            f"Executing query to get prompt by ID {prompt_id} from {config.PROMPTS_TABLE} (active={active})"
+        )
+
+        result = conn.execute(query, params)
+        row = result.fetchone()
+        if not row:
+            return None
+
+        # Replace placeholders in prompt_description only if requested
+        prompt_description = row[3]
+        if prompt_description and replace_placeholders:
+            # Pass conn for lazy loading if needed
+            prompt_description = replace_prompt_placeholders(str(prompt_description), conn=conn)
+        elif prompt_description:
+            prompt_description = str(prompt_description)
+
+        return {
+            "prompt_id": row[0],
+            "email_address": row[1],
+            "prompt_name": row[2],
+            "prompt_description": prompt_description,
+            "prompt_type": row[4],
+            "prompt_active": row[5],
+            "created_at": row[6],
+            "updated_at": row[7]
+        }
+    except Exception as e:
+        logger.error(f"Error fetching prompt by ID {prompt_id}: {e}")
         raise e
 
 

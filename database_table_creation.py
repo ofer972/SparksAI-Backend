@@ -1136,6 +1136,7 @@ def create_prompts_table_if_not_exists(engine=None) -> bool:
                 print("Creating prompts table...")
                 create_table_sql = """
                 CREATE TABLE public.prompts (
+                    prompt_id SERIAL PRIMARY KEY,
                     email_address VARCHAR(255) NOT NULL,
                     prompt_name VARCHAR(255) NOT NULL,
                     prompt_description TEXT NULL,
@@ -1143,7 +1144,7 @@ def create_prompts_table_if_not_exists(engine=None) -> bool:
                     prompt_active BOOLEAN DEFAULT TRUE NULL,
                     created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP NULL,
                     updated_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP NULL,
-                    CONSTRAINT prompts_pkey PRIMARY KEY (email_address, prompt_name)
+                    CONSTRAINT prompts_email_name_unique UNIQUE (email_address, prompt_name)
                 );
                 
                 -- Intentionally no foreign key on email_address

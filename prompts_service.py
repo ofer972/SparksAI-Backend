@@ -13,7 +13,7 @@ from pydantic import BaseModel
 import logging
 import re
 from database_connection import get_db_connection
-from database_general import get_prompt_by_email_and_name
+from database_general import get_prompt_by_email_and_name, get_prompt_by_id
 import config
 from global_settings_loader import settings
 
@@ -115,6 +115,7 @@ async def get_prompts(
         # SECURE: Parameterized query prevents SQL injection
         query = text(f"""
             SELECT 
+                prompt_id,
                 email_address,
                 prompt_name,
                 CASE 
@@ -145,13 +146,14 @@ async def get_prompts(
         prompts = []
         for row in rows:
             prompt_dict = {
-                "email_address": row[0],
-                "prompt_name": row[1],
-                "prompt_description": row[2],  # Already truncated in SQL
-                "prompt_type": row[3],
-                "prompt_active": row[4],
-                "created_at": row[5],
-                "updated_at": row[6]
+                "prompt_id": row[0],
+                "email_address": row[1],
+                "prompt_name": row[2],
+                "prompt_description": row[3],  # Already truncated in SQL
+                "prompt_type": row[4],
+                "prompt_active": row[5],
+                "created_at": row[6],
+                "updated_at": row[7]
             }
             prompts.append(prompt_dict)
         
@@ -231,6 +233,56 @@ async def get_prompt(
             detail=f"Failed to fetch prompt: {str(e)}"
         )
 
+@prompts_router.get("/prompts/{prompt_id}")
+async def get_prompt_by_id_endpoint(
+    prompt_id: int,
+    replace_placeholders: bool = Query(False, description="If true, replace {{JIRA_URL}} with value from JIRA_URL env var"),
+    conn: Connection = Depends(get_db_connection)
+):
+    """
+    Get a single prompt by prompt_id.
+    Returns full prompt_description (not truncated).
+    
+    Args:
+        prompt_id: The ID of the prompt
+        replace_placeholders: If true, replace {{JIRA_URL}} with value from JIRA_URL env var (default: false)
+    
+    Returns:
+        JSON response with single prompt or 404 if not found
+    """
+    try:
+        # Use shared database function
+        prompt_row = get_prompt_by_id(
+            prompt_id=prompt_id,
+            conn=conn,
+            active=None,  # API returns even inactive prompts; filtering is up to caller
+            replace_placeholders=replace_placeholders
+        )
+
+        if not prompt_row:
+            raise HTTPException(
+                status_code=404,
+                detail=f"Prompt with ID {prompt_id} not found"
+            )
+
+        return {
+            "success": True,
+            "data": {
+                "prompt": prompt_row
+            },
+            "message": f"Retrieved prompt with ID {prompt_id}"
+        }
+
+    except HTTPException:
+        # Re-raise HTTP exceptions (like the 404 error above)
+        raise
+    except Exception as e:
+        logger.error(f"Error fetching prompt by ID {prompt_id}: {e}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to fetch prompt: {str(e)}"
+        )
+
 @prompts_router.post("/prompts")
 async def create_prompt(
     request: PromptRequest,
@@ -264,7 +316,7 @@ async def create_prompt(
             INSERT INTO {config.PROMPTS_TABLE} 
             (email_address, prompt_name, prompt_description, prompt_type, prompt_active, created_at, updated_at)
             VALUES (:email_address, :prompt_name, :prompt_description, :prompt_type, :prompt_active, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
-            RETURNING email_address, prompt_name, prompt_description, prompt_type, prompt_active, created_at, updated_at
+            RETURNING prompt_id, email_address, prompt_name, prompt_description, prompt_type, prompt_active, created_at, updated_at
         """)
         
         logger.info(f"Creating prompt '{validated_name}' for '{validated_email}'")
@@ -282,13 +334,14 @@ async def create_prompt(
         
         # Convert row to dictionary
         prompt = {
-            "email_address": row[0],
-            "prompt_name": row[1],
-            "prompt_description": row[2],
-            "prompt_type": row[3],
-            "prompt_active": row[4],
-            "created_at": row[5],
-            "updated_at": row[6]
+            "prompt_id": row[0],
+            "email_address": row[1],
+            "prompt_name": row[2],
+            "prompt_description": row[3],
+            "prompt_type": row[4],
+            "prompt_active": row[5],
+            "created_at": row[6],
+            "updated_at": row[7]
         }
         
         return {
@@ -373,7 +426,7 @@ async def update_prompt(
                 prompt_active = :prompt_active,
                 updated_at = CURRENT_TIMESTAMP
             WHERE email_address = :email_address AND prompt_name = :prompt_name
-            RETURNING email_address, prompt_name, prompt_description, prompt_type, prompt_active, created_at, updated_at
+            RETURNING prompt_id, email_address, prompt_name, prompt_description, prompt_type, prompt_active, created_at, updated_at
         """)
         
         logger.info(f"Updating prompt '{validated_name}' for '{validated_email}'")
@@ -398,13 +451,14 @@ async def update_prompt(
         
         # Convert row to dictionary
         prompt = {
-            "email_address": row[0],
-            "prompt_name": row[1],
-            "prompt_description": row[2],
-            "prompt_type": row[3],
-            "prompt_active": row[4],
-            "created_at": row[5],
-            "updated_at": row[6]
+            "prompt_id": row[0],
+            "email_address": row[1],
+            "prompt_name": row[2],
+            "prompt_description": row[3],
+            "prompt_type": row[4],
+            "prompt_active": row[5],
+            "created_at": row[6],
+            "updated_at": row[7]
         }
         
         return {
@@ -419,6 +473,101 @@ async def update_prompt(
         raise
     except Exception as e:
         logger.error(f"Error updating prompt {prompt_name} for {email_address}: {e}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to update prompt: {str(e)}"
+        )
+
+@prompts_router.put("/prompts/{prompt_id}")
+async def update_prompt_by_id(
+    prompt_id: int,
+    request: PromptRequest,
+    conn: Connection = Depends(get_db_connection)
+):
+    """
+    Update an existing prompt by prompt_id (full replacement - all fields required).
+    
+    Args:
+        prompt_id: ID of the prompt to update
+        request: PromptRequest containing all required fields (email_address, prompt_name, prompt_description, prompt_type, prompt_active)
+    
+    Returns:
+        JSON response with updated prompt
+    """
+    try:
+        # Validate inputs
+        validated_email = validate_email_address(request.email_address)
+        validated_name = validate_prompt_name(request.prompt_name)
+        
+        # Validate other fields
+        if not request.prompt_description or not isinstance(request.prompt_description, str):
+            raise HTTPException(status_code=400, detail="Prompt description is required and must be a string")
+        
+        if not request.prompt_type or not isinstance(request.prompt_type, str):
+            raise HTTPException(status_code=400, detail="Prompt type is required and must be a string")
+        
+        if len(request.prompt_type) > 100:
+            raise HTTPException(status_code=400, detail="Prompt type is too long (max 100 characters)")
+        
+        # SECURE: Parameterized query prevents SQL injection
+        # Full replacement - update all fields
+        query = text(f"""
+            UPDATE {config.PROMPTS_TABLE} 
+            SET email_address = :email_address,
+                prompt_name = :prompt_name,
+                prompt_description = :prompt_description,
+                prompt_type = :prompt_type,
+                prompt_active = :prompt_active,
+                updated_at = CURRENT_TIMESTAMP
+            WHERE prompt_id = :prompt_id
+            RETURNING prompt_id, email_address, prompt_name, prompt_description, prompt_type, prompt_active, created_at, updated_at
+        """)
+        
+        logger.info(f"Updating prompt with ID {prompt_id}")
+        
+        result = conn.execute(query, {
+            "prompt_id": prompt_id,
+            "email_address": validated_email,
+            "prompt_name": validated_name,
+            "prompt_description": request.prompt_description,
+            "prompt_type": request.prompt_type,
+            "prompt_active": request.prompt_active
+        })
+        
+        row = result.fetchone()
+        
+        if not row:
+            raise HTTPException(
+                status_code=404,
+                detail=f"Prompt with ID {prompt_id} not found"
+            )
+        
+        conn.commit()
+        
+        # Convert row to dictionary
+        prompt = {
+            "prompt_id": row[0],
+            "email_address": row[1],
+            "prompt_name": row[2],
+            "prompt_description": row[3],
+            "prompt_type": row[4],
+            "prompt_active": row[5],
+            "created_at": row[6],
+            "updated_at": row[7]
+        }
+        
+        return {
+            "success": True,
+            "data": {
+                "prompt": prompt
+            },
+            "message": f"Updated prompt with ID {prompt_id}"
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error updating prompt by ID {prompt_id}: {e}")
         raise HTTPException(
             status_code=500,
             detail=f"Failed to update prompt: {str(e)}"
@@ -449,7 +598,7 @@ async def delete_prompt(
         query = text(f"""
             DELETE FROM {config.PROMPTS_TABLE} 
             WHERE email_address = :email_address AND prompt_name = :prompt_name
-            RETURNING email_address, prompt_name
+            RETURNING prompt_id, email_address, prompt_name
         """)
         
         logger.info(f"Deleting prompt '{validated_name}' for '{validated_email}'")
@@ -472,8 +621,9 @@ async def delete_prompt(
             "success": True,
             "data": {
                 "deleted_prompt": {
-                    "email_address": row[0],
-                    "prompt_name": row[1]
+                    "prompt_id": row[0],
+                    "email_address": row[1],
+                    "prompt_name": row[2]
                 }
             },
             "message": f"Deleted prompt '{prompt_name}' for '{email_address}'"
@@ -483,6 +633,64 @@ async def delete_prompt(
         raise
     except Exception as e:
         logger.error(f"Error deleting prompt {prompt_name} for {email_address}: {e}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to delete prompt: {str(e)}"
+        )
+
+@prompts_router.delete("/prompts/{prompt_id}")
+async def delete_prompt_by_id(
+    prompt_id: int,
+    conn: Connection = Depends(get_db_connection)
+):
+    """
+    Delete a prompt permanently by prompt_id.
+    
+    Args:
+        prompt_id: ID of the prompt to delete
+    
+    Returns:
+        JSON response with success message
+    """
+    try:
+        # SECURE: Parameterized query prevents SQL injection
+        query = text(f"""
+            DELETE FROM {config.PROMPTS_TABLE} 
+            WHERE prompt_id = :prompt_id
+            RETURNING prompt_id, email_address, prompt_name
+        """)
+        
+        logger.info(f"Deleting prompt with ID {prompt_id}")
+        
+        result = conn.execute(query, {
+            "prompt_id": prompt_id
+        })
+        row = result.fetchone()
+        
+        if not row:
+            raise HTTPException(
+                status_code=404,
+                detail=f"Prompt with ID {prompt_id} not found"
+            )
+        
+        conn.commit()
+        
+        return {
+            "success": True,
+            "data": {
+                "deleted_prompt": {
+                    "prompt_id": row[0],
+                    "email_address": row[1],
+                    "prompt_name": row[2]
+                }
+            },
+            "message": f"Deleted prompt with ID {prompt_id}"
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error deleting prompt by ID {prompt_id}: {e}")
         raise HTTPException(
             status_code=500,
             detail=f"Failed to delete prompt: {str(e)}"
