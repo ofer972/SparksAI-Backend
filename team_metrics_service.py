@@ -531,46 +531,44 @@ def calculate_trend_for_cycle_time(current_value: float, previous_value: float) 
     }
 
 
-def calculate_trend_for_open_bugs(bugs_created: int, bugs_resolved: int) -> Optional[Dict]:
+def calculate_trend_for_open_bugs_percentage(
+    current_open_bugs: int, net_change: int
+) -> Optional[Dict]:
     """
-    Calculate trend for open bugs (fewer bugs = better).
-    
-    Formula: net_change = bugs_created - bugs_resolved
-    - Positive (backlog growing): Red Up Arrow (worse)
-    - Negative (backlog shrinking): Green Down Arrow (better)
-    
+    Calculate trend for open bugs as percentage change (fewer bugs = better).
+    Returns None when previous count was 0 (no trend shown; explanation only in tooltip).
+
     Args:
-        bugs_created: Number of bugs created in period
-        bugs_resolved: Number of bugs resolved in period
-    
+        current_open_bugs: Current open bug count
+        net_change: bugs_created - bugs_resolved in the period
+
     Returns:
-        Trend dict with direction, count, and improved flag
+        Trend dict with direction, percentage, label, improved; or None if previous was 0
     """
-    net_change = bugs_created - bugs_resolved
-    
+    previous_open_bugs = current_open_bugs - net_change
+    if previous_open_bugs <= 0:
+        return None
+
     if net_change == 0:
         return {
             "direction": "flat",
             "percentage": 0,
             "label": "vs previous 30 days",
-            "improved": True  # No change is neutral/acceptable
+            "improved": True
         }
-    
-    # Use absolute value for display
-    count = abs(net_change)
-    
+
+    percentage_float = (net_change / previous_open_bugs) * 100
+    percentage = int(round(abs(percentage_float)))
     if net_change > 0:
-        # Backlog growing (more created than resolved) - BAD
         direction = "up"
-        improved = False  # Getting worse (red up arrow)
+        improved = False
     else:
-        # Backlog shrinking (more resolved than created) - GOOD
         direction = "down"
-        improved = True  # Getting better (green down arrow)
-    
+        improved = True
+
     return {
         "direction": direction,
-        "percentage": count,  # Show actual count difference
+        "percentage": percentage,
         "label": "vs previous 30 days",
         "improved": improved
     }
@@ -2502,11 +2500,10 @@ def get_open_bugs_metric(
       Rationale: Already have too many bugs - trend direction becomes critical.
       Users need to know if situation is improving (green ↓) or worsening (red ↑).
     
-    Trend Calculation (for medium/low tiers):
-    - Formula: net_change = bugs_created - bugs_resolved (over last 30 days)
-    - Positive (+5): Red up arrow (backlog growing - bad)
-    - Negative (-5): Green down arrow (backlog shrinking - good)
-    - Zero: Flat (stable)
+    Trend Calculation:
+    - Trend shown as percentage change vs previous 30 days (previous = current - net_change).
+    - When previous open count was 0: no trend shown on card; explanation only in tooltip.
+    - When previous > 0: percentage and direction (up/down/flat). High tier shows flat arrow; medium/low show full direction.
     
     Args:
         team_names_list: List of team names to aggregate bugs for
@@ -2544,54 +2541,37 @@ def get_open_bugs_metric(
     
     # Calculate net change for trend and tooltip
     net_change = bugs_created - bugs_resolved
-    
-    # IMPORTANT: Tier-based trend logic to prevent false alarms on small numbers
-    # ============================================================================
-    # When tier is "high" (green - healthy status with few bugs), we show a neutral trend
-    # to avoid alarming users about minor fluctuations (e.g., 2→4 bugs showing red arrow).
-    # 
-    # Rationale:
-    # - "High" tier = ≤6 bugs per team (e.g., ≤6 for single team, ≤30 for 5-team group)
-    # - At this low bug count, small changes (+1, +2 bugs) are normal noise
-    # - Users don't need to see red arrows when overall health is excellent
-    # 
-    # When tier is "medium" or "low" (already have too many bugs), the trend becomes
-    # critical information - users need to know if the situation is improving or worsening.
-    # ============================================================================
-    
-    if tier_status == "high":
-        # Health is excellent - show neutral trend (no alarm for small changes)
+    previous_open_bugs = current_open_bugs - net_change
+
+    # Trend: show percentage only when previous count > 0; when previous was 0, no trend (explanation only in tooltip)
+    bug_trend = calculate_trend_for_open_bugs_percentage(current_open_bugs, net_change)
+    if bug_trend and tier_status == "high":
+        # High tier: show percentage but neutral direction (no alarm for small changes)
         bug_trend = {
             "direction": "flat",
-            "percentage": abs(net_change),
-            "label": "vs previous 30 days",
-            "improved": True  # Neutral/good status
+            "percentage": bug_trend["percentage"],
+            "label": bug_trend["label"],
+            "improved": True
         }
-        
-        # Enhanced tooltip for high tier - emphasize good health
+
+    # Tooltip: always show full explanation (created/resolved and net change)
+    if tier_status == "high":
         tooltip = f"Current open bugs: {current_open_bugs} ✓ (excellent)"
         if net_change != 0:
-            # Show the change but frame it as minor
             change_sign = '+' if net_change > 0 else ''
             tooltip += f"\nMinor change: {change_sign}{net_change} bugs in last {settings.OPEN_BUGS_TREND_PERIOD_DAYS} days"
             tooltip += f"\nCreated: {bugs_created}, Resolved: {bugs_resolved}"
         else:
             tooltip += f"\nNo change in last {settings.OPEN_BUGS_TREND_PERIOD_DAYS} days"
     else:
-        # Health is medium/low - show full trend with directional arrows
-        # At this bug count, trend direction is critical information
-        bug_trend = calculate_trend_for_open_bugs(bugs_created, bugs_resolved)
-        
-        # Standard tooltip emphasizing trend direction
         tooltip = f"Current open bugs: {current_open_bugs}"
-        if bug_trend:
-            if net_change > 0:
-                tooltip += f"\n+{net_change} bugs in the last {settings.OPEN_BUGS_TREND_PERIOD_DAYS} days (backlog growing)"
-            elif net_change < 0:
-                tooltip += f"\n{net_change} bugs in the last {settings.OPEN_BUGS_TREND_PERIOD_DAYS} days (backlog shrinking)"
-            else:
-                tooltip += f"\nNo net change in the last {settings.OPEN_BUGS_TREND_PERIOD_DAYS} days"
-            tooltip += f"\nCreated: {bugs_created}, Resolved: {bugs_resolved}"
+        if net_change > 0:
+            tooltip += f"\n+{net_change} bugs in the last {settings.OPEN_BUGS_TREND_PERIOD_DAYS} days (backlog growing)"
+        elif net_change < 0:
+            tooltip += f"\n{net_change} bugs in the last {settings.OPEN_BUGS_TREND_PERIOD_DAYS} days (backlog shrinking)"
+        else:
+            tooltip += f"\nNo net change in the last {settings.OPEN_BUGS_TREND_PERIOD_DAYS} days"
+        tooltip += f"\nCreated: {bugs_created}, Resolved: {bugs_resolved}"
     
     return {
         "metric_id": "open_bugs",
