@@ -702,9 +702,132 @@ def _fetch_team_closed_sprints(filters: Dict[str, Any], conn: Connection) -> Rep
     return _fetch_closed_sprints_flat_report(filters, conn, sort_by="default")
 
 
+def _aggregate_sprints_by_sprint_id(sprints: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """
+    Aggregate sprint rows that share the same sprint_id (multiple teams in same sprint).
+    
+    If multiple teams work in the same sprint (same sprint_id):
+    - Combine them into a single row
+    - Sum numeric metrics (issues_at_start, issues_added, issues_done, etc.)
+    - Combine issue key arrays (deduplicate)
+    - Set team_name to None (indicates aggregated data)
+    - Recalculate completed_percentage
+    
+    If a sprint has only one team, keep it as-is.
+    
+    Args:
+        sprints: List of sprint dictionaries
+        
+    Returns:
+        List of aggregated sprint dictionaries
+    """
+    from collections import defaultdict
+    
+    if not sprints:
+        return []
+    
+    # Group by sprint_id
+    sprints_by_id = defaultdict(list)
+    for sprint in sprints:
+        sprint_id = sprint.get('sprint_id')
+        if sprint_id is not None:
+            sprints_by_id[sprint_id].append(sprint)
+    
+    aggregated_sprints = []
+    
+    for sprint_id, sprint_list in sprints_by_id.items():
+        if len(sprint_list) == 1:
+            # Only one team for this sprint - keep as-is
+            aggregated_sprints.append(sprint_list[0])
+        else:
+            # Multiple teams for same sprint_id - aggregate them
+            first_sprint = sprint_list[0]
+            
+            # Sum numeric fields
+            issues_at_start = sum(s.get('issues_at_start', 0) or 0 for s in sprint_list)
+            issues_added = sum(s.get('issues_added', 0) or 0 for s in sprint_list)
+            issues_removed = sum(s.get('issues_removed', 0) or 0 for s in sprint_list)
+            issues_done = sum(s.get('issues_done', 0) or 0 for s in sprint_list)
+            issues_not_completed = sum(s.get('issues_not_completed', 0) or 0 for s in sprint_list)
+            
+            # Combine and deduplicate issue key arrays
+            def combine_arrays(key_name):
+                combined = []
+                for s in sprint_list:
+                    arr = s.get(key_name, []) or []
+                    if arr:
+                        combined.extend(arr)
+                # Remove duplicates and sort
+                return sorted(list(set(combined))) if combined else []
+            
+            issues_at_start_keys = combine_arrays('issues_at_start_keys')
+            issues_added_keys = combine_arrays('issues_added_keys')
+            issues_removed_keys = combine_arrays('issues_removed_keys')
+            completed_issue_keys = combine_arrays('completed_issue_keys')
+            issues_not_completed_keys = combine_arrays('issues_not_completed_keys')
+            
+            # Recalculate completed_percentage based on aggregated numbers
+            total_planned = issues_at_start + issues_added
+            completed_percentage = round((issues_done / total_planned * 100.0), 2) if total_planned > 0 else 0.0
+            
+            # Create aggregated sprint row
+            aggregated_sprint = {
+                'sprint_id': sprint_id,
+                'board_id': first_sprint.get('board_id'),
+                'project_key': first_sprint.get('project_key'),
+                'sprint_name': first_sprint.get('sprint_name'),
+                'team_name': None,  # Set to None for aggregated sprints (multiple teams)
+                'sprint_goal': first_sprint.get('sprint_goal'),
+                'start_date': first_sprint.get('start_date'),
+                'end_date': first_sprint.get('end_date'),
+                'complete_date': first_sprint.get('complete_date'),
+                'issues_at_start': issues_at_start,
+                'issues_added': issues_added,
+                'issues_removed': issues_removed,
+                'issues_done': issues_done,
+                'issues_not_completed': issues_not_completed,
+                'completed_percentage': completed_percentage,
+                'issues_at_start_keys': issues_at_start_keys,
+                'issues_added_keys': issues_added_keys,
+                'issues_removed_keys': issues_removed_keys,
+                'completed_issue_keys': completed_issue_keys,
+                'issues_not_completed_keys': issues_not_completed_keys,
+                'x_axis_name': first_sprint.get('sprint_name', ''),  # Use sprint_name only (no team)
+            }
+            
+            # Preserve any other fields that might exist (like closed_sprint_url)
+            for key in first_sprint:
+                if key not in aggregated_sprint:
+                    aggregated_sprint[key] = first_sprint[key]
+            
+            aggregated_sprints.append(aggregated_sprint)
+    
+    # Sort by start_date ASC to maintain the "advanced" sort order
+    aggregated_sprints.sort(key=lambda x: (x.get('start_date') or '', x.get('sprint_id', 0)))
+    
+    return aggregated_sprints
+
+
 def _fetch_team_sprint_velocity_advanced(filters: Dict[str, Any], conn: Connection) -> ReportDataResult:
-    """Fetch team sprint velocity advanced report (sorted by start_date ASC, team_name ASC)."""
-    return _fetch_closed_sprints_flat_report(filters, conn, sort_by="advanced")
+    """
+    Fetch team sprint velocity advanced report (sorted by start_date ASC).
+    
+    Aggregates sprints with the same sprint_id (multiple teams in same sprint) into single rows.
+    """
+    # Get raw data from flat report function
+    result = _fetch_closed_sprints_flat_report(filters, conn, sort_by="advanced")
+    
+    # Aggregate sprints with the same sprint_id (multiple teams in same sprint)
+    aggregated_sprints = _aggregate_sprints_by_sprint_id(result["data"])
+    
+    # Update metadata to reflect aggregated data
+    result["meta"]["count"] = len(aggregated_sprints)
+    
+    # Return with aggregated data
+    return {
+        "data": aggregated_sprints,
+        "meta": result["meta"]
+    }
 
 
 def _fetch_team_issues_trend(filters: Dict[str, Any], conn: Connection) -> ReportDataResult:

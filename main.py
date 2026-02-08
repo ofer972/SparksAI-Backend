@@ -19,6 +19,7 @@ from ai_insights_service import ai_insights_router
 from transcripts_service import transcripts_router
 from prompts_service import prompts_router
 from reports_service import reports_router
+from build_report_service import build_report_router
 from ai_chat_service import ai_chat_router
 from agent_llm_service import agent_llm_router
 from llm_settings_service import llm_settings_router
@@ -270,6 +271,7 @@ app.include_router(llm_settings_router, prefix="/api/v1", tags=["llm-settings"])
 app.include_router(issues_router, prefix="/api/v1", tags=["issues"])
 app.include_router(sprints_router, prefix="/api/v1", tags=["sprints"])
 app.include_router(insight_types_router, prefix="/api/v1", tags=["insight-types"])
+app.include_router(build_report_router, prefix="/api/v1", tags=["build-reports"])
 app.include_router(reports_router, prefix="/api/v1", tags=["reports"])
 app.include_router(etl_settings_router, prefix="/api/v1", tags=["etl-settings"])
 app.include_router(goals_router, prefix="/api/v1", tags=["goals"])

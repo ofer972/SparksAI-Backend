@@ -4,13 +4,15 @@ Reports Service - REST API endpoints for report metadata and resolved datasets.
 
 from __future__ import annotations
 
-from typing import Any, Dict, Optional, List
+from typing import Any, Dict, Optional, List, Union
 import logging
 import os
 import httpx
 
-from fastapi import APIRouter, Depends, HTTPException, Request, Query
+from fastapi import APIRouter, Depends, HTTPException, Request, Query, Body
 from sqlalchemy.engine import Connection
+from sqlalchemy import text
+from pydantic import BaseModel, field_validator, model_validator, ConfigDict
 
 from database_connection import get_db_connection
 from database_reports import (
@@ -345,8 +347,6 @@ async def list_reports(
         "message": f"Retrieved {len(summaries)} report definitions",
         "cached": False,
     }
-
-
 @reports_router.get("/reports/{report_id}", response_model=Dict[str, Any])
 async def get_report_instance(
     report_id: str,
@@ -677,5 +677,3 @@ async def get_cache_stats():
                 "error": str(e),
             }
     }
-
-
