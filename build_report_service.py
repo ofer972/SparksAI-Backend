@@ -7,6 +7,8 @@ from __future__ import annotations
 
 from typing import Any, Dict, Optional, List
 import logging
+import uuid
+import json
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Body
 from sqlalchemy.engine import Connection
@@ -590,5 +592,515 @@ async def build_report(
         raise HTTPException(
             status_code=500,
             detail=f"Failed to build report: {str(e)}"
+        )
+
+
+class SaveCustomReportRequest(BaseModel):
+    model_config = ConfigDict(extra='forbid')
+    
+    report_name: str
+    description: Optional[str] = None
+    report_type: str
+    selected_fields: Optional[List[str]] = None
+    x_axis: Optional[Any] = None
+    y_axis: Optional[str] = None
+    filters: List[Dict[str, Any]] = []
+    team_name: Optional[str] = None
+    isGroup: Optional[bool] = False
+
+
+@build_report_router.post("/reports/build/save")
+async def save_custom_report(
+    request: SaveCustomReportRequest = Body(...),
+    conn: Connection = Depends(get_db_connection)
+):
+    """
+    Save a custom report definition.
+    """
+    try:
+        # Validate report name length
+        if len(request.report_name) > 100:
+            raise HTTPException(
+                status_code=400,
+                detail="Report name must be 100 characters or less"
+            )
+        
+        # Validate report name is not empty
+        if not request.report_name or not request.report_name.strip():
+            raise HTTPException(
+                status_code=400,
+                detail="Report name is required"
+            )
+        
+        # Check for duplicate report name (globally among custom reports)
+        check_duplicate_query = text("""
+            SELECT report_id
+            FROM public.report_definitions
+            WHERE report_type = 'custom' AND LOWER(report_name) = LOWER(:report_name)
+        """)
+        duplicate_result = conn.execute(check_duplicate_query, {"report_name": request.report_name.strip()})
+        if duplicate_result.fetchone():
+            raise HTTPException(
+                status_code=400,
+                detail=f"A custom report with the name '{request.report_name}' already exists"
+            )
+        
+        # Generate unique report_id
+        report_id = f"custom-{uuid.uuid4()}"
+        
+        # Extract default filters (PI and Team/Group) from request
+        # These will be saved to the default_filters column (like system reports)
+        default_filters = {
+            "pi": None,
+            "team_name": None,
+            "isGroup": False
+        }
+        
+        # Extract PI from filters array
+        regular_filters = []
+        for f in request.filters:
+            if f.get("field") == "quarter_pi":
+                # Extract PI value
+                values = f.get("values", [])
+                if values and len(values) > 0:
+                    default_filters["pi"] = values[0] if isinstance(values, list) else values
+            elif f.get("field") != "team_name":
+                # Keep regular filters (exclude PI and team_name)
+                regular_filters.append(f)
+        
+        # Extract Team/Group from separate fields
+        if request.team_name:
+            default_filters["team_name"] = request.team_name
+            default_filters["isGroup"] = request.isGroup or False
+        
+        # Build meta_schema with build_report_config (only regular filters, no PI or team_name)
+        build_config = {
+            "report_type": request.report_type,
+            "filters": regular_filters  # Only regular filters
+        }
+        
+        if request.report_type == "table" and request.selected_fields:
+            build_config["selected_fields"] = request.selected_fields
+        elif request.report_type in ["bar_chart", "pie_chart"] and request.x_axis:
+            build_config["x_axis"] = request.x_axis
+            if request.report_type == "bar_chart" and request.y_axis:
+                build_config["y_axis"] = request.y_axis
+        
+        meta_schema = {
+            "build_report_config": build_config
+        }
+        
+        # Insert into database with default_filters column populated
+        insert_sql = text("""
+            INSERT INTO public.report_definitions (
+                report_id,
+                report_name,
+                chart_type,
+                data_source,
+                description,
+                report_type,
+                default_filters,
+                meta_schema,
+                created_at,
+                updated_at
+            ) VALUES (
+                :report_id,
+                :report_name,
+                :chart_type,
+                'build_report',
+                :description,
+                'custom',
+                CAST(:default_filters AS jsonb),
+                CAST(:meta_schema AS jsonb),
+                CURRENT_TIMESTAMP,
+                CURRENT_TIMESTAMP
+            )
+        """)
+        
+        conn.execute(
+            insert_sql,
+            {
+                "report_id": report_id,
+                "report_name": request.report_name.strip(),
+                "chart_type": request.report_type,
+                "description": request.description.strip() if request.description else None,
+                "default_filters": json.dumps(default_filters),
+                "meta_schema": json.dumps(meta_schema),
+            }
+        )
+        conn.commit()
+        
+        # Fetch the created report
+        get_report_query = text("""
+            SELECT
+                report_id,
+                report_name,
+                chart_type,
+                data_source,
+                description,
+                report_type,
+                default_filters,
+                meta_schema,
+                created_at,
+                updated_at
+            FROM public.report_definitions
+            WHERE report_id = :report_id
+        """)
+        
+        result = conn.execute(get_report_query, {"report_id": report_id})
+        row = result.fetchone()
+        if not row:
+            raise HTTPException(status_code=500, detail="Failed to retrieve saved report")
+        
+        row_dict = dict(row._mapping)
+        # Ensure JSON fields are parsed
+        if isinstance(row_dict.get("default_filters"), str):
+            row_dict["default_filters"] = json.loads(row_dict["default_filters"])
+        if isinstance(row_dict.get("meta_schema"), str):
+            row_dict["meta_schema"] = json.loads(row_dict["meta_schema"])
+        
+        return {
+            "success": True,
+            "data": row_dict,
+            "message": f"Report '{request.report_name}' saved successfully"
+        }
+    
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error saving custom report: {e}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to save report: {str(e)}"
+        )
+
+
+@build_report_router.get("/reports/custom")
+async def get_custom_reports(
+    conn: Connection = Depends(get_db_connection)
+):
+    """
+    Get all custom reports.
+    """
+    try:
+        limit = settings.DEFAULT_QUERY_LIMIT
+        
+        query = text(f"""
+            SELECT
+                report_id,
+                report_name,
+                chart_type,
+                data_source,
+                description,
+                report_type,
+                default_filters,
+                meta_schema,
+                created_at,
+                updated_at
+            FROM {config.REPORT_DEFINITIONS_TABLE}
+            WHERE report_type = 'custom'
+            ORDER BY report_name
+            LIMIT :limit
+        """)
+        
+        result = conn.execute(query, {"limit": limit})
+        reports = []
+        
+        for row in result:
+            row_dict = dict(row._mapping)
+            # Ensure JSON fields are parsed
+            if isinstance(row_dict.get("default_filters"), str):
+                row_dict["default_filters"] = json.loads(row_dict["default_filters"])
+            if isinstance(row_dict.get("meta_schema"), str):
+                row_dict["meta_schema"] = json.loads(row_dict["meta_schema"])
+            reports.append(row_dict)
+        
+        return {
+            "success": True,
+            "data": reports,
+            "count": len(reports),
+            "message": f"Retrieved {len(reports)} custom reports"
+        }
+    
+    except Exception as e:
+        logger.error(f"Error fetching custom reports: {e}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to fetch custom reports: {str(e)}"
+        )
+
+
+@build_report_router.get("/reports/custom/{report_id}")
+async def get_custom_report(
+    report_id: str,
+    conn: Connection = Depends(get_db_connection)
+):
+    """
+    Get a specific custom report by ID.
+    """
+    try:
+        query = text(f"""
+            SELECT
+                report_id,
+                report_name,
+                chart_type,
+                data_source,
+                description,
+                report_type,
+                default_filters,
+                meta_schema,
+                created_at,
+                updated_at
+            FROM {config.REPORT_DEFINITIONS_TABLE}
+            WHERE report_id = :report_id AND report_type = 'custom'
+        """)
+        
+        result = conn.execute(query, {"report_id": report_id})
+        row = result.fetchone()
+        
+        if not row:
+            raise HTTPException(
+                status_code=404,
+                detail=f"Custom report with ID '{report_id}' not found"
+            )
+        
+        row_dict = dict(row._mapping)
+        # Ensure JSON fields are parsed
+        if isinstance(row_dict.get("default_filters"), str):
+            row_dict["default_filters"] = json.loads(row_dict["default_filters"])
+        if isinstance(row_dict.get("meta_schema"), str):
+            row_dict["meta_schema"] = json.loads(row_dict["meta_schema"])
+        
+        return {
+            "success": True,
+            "data": row_dict,
+            "message": "Report retrieved successfully"
+        }
+    
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error fetching custom report: {e}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to fetch report: {str(e)}"
+        )
+
+
+@build_report_router.put("/reports/custom/{report_id}")
+async def update_custom_report(
+    report_id: str,
+    request: SaveCustomReportRequest = Body(...),
+    conn: Connection = Depends(get_db_connection)
+):
+    """
+    Update a custom report.
+    """
+    try:
+        # Validate report name length
+        if len(request.report_name) > 100:
+            raise HTTPException(
+                status_code=400,
+                detail="Report name must be 100 characters or less"
+            )
+        
+        # Validate report name is not empty
+        if not request.report_name or not request.report_name.strip():
+            raise HTTPException(
+                status_code=400,
+                detail="Report name is required"
+            )
+        
+        # Check if report exists and is custom
+        check_query = text("""
+            SELECT report_id
+            FROM public.report_definitions
+            WHERE report_id = :report_id AND report_type = 'custom'
+        """)
+        check_result = conn.execute(check_query, {"report_id": report_id})
+        if not check_result.fetchone():
+            raise HTTPException(
+                status_code=404,
+                detail=f"Custom report with ID '{report_id}' not found"
+            )
+        
+        # Check for duplicate report name (excluding current report)
+        check_duplicate_query = text("""
+            SELECT report_id
+            FROM public.report_definitions
+            WHERE report_type = 'custom' 
+            AND LOWER(report_name) = LOWER(:report_name)
+            AND report_id != :report_id
+        """)
+        duplicate_result = conn.execute(check_duplicate_query, {
+            "report_name": request.report_name.strip(),
+            "report_id": report_id
+        })
+        if duplicate_result.fetchone():
+            raise HTTPException(
+                status_code=400,
+                detail=f"A custom report with the name '{request.report_name}' already exists"
+            )
+        
+        # Extract default filters (PI and Team/Group) from request
+        # These will be saved to the default_filters column (like system reports)
+        default_filters = {
+            "pi": None,
+            "team_name": None,
+            "isGroup": False
+        }
+        
+        # Extract PI from filters array
+        regular_filters = []
+        for f in request.filters:
+            if f.get("field") == "quarter_pi":
+                # Extract PI value
+                values = f.get("values", [])
+                if values and len(values) > 0:
+                    default_filters["pi"] = values[0] if isinstance(values, list) else values
+            elif f.get("field") != "team_name":
+                # Keep regular filters (exclude PI and team_name)
+                regular_filters.append(f)
+        
+        # Extract Team/Group from separate fields
+        if request.team_name:
+            default_filters["team_name"] = request.team_name
+            default_filters["isGroup"] = request.isGroup or False
+        
+        # Build meta_schema with build_report_config (only regular filters, no PI or team_name)
+        build_config = {
+            "report_type": request.report_type,
+            "filters": regular_filters  # Only regular filters
+        }
+        
+        if request.report_type == "table" and request.selected_fields:
+            build_config["selected_fields"] = request.selected_fields
+        elif request.report_type in ["bar_chart", "pie_chart"] and request.x_axis:
+            build_config["x_axis"] = request.x_axis
+            if request.report_type == "bar_chart" and request.y_axis:
+                build_config["y_axis"] = request.y_axis
+        
+        meta_schema = {
+            "build_report_config": build_config
+        }
+        
+        # Update database with default_filters column
+        update_sql = text("""
+            UPDATE public.report_definitions
+            SET
+                report_name = :report_name,
+                chart_type = :chart_type,
+                description = :description,
+                default_filters = CAST(:default_filters AS jsonb),
+                meta_schema = CAST(:meta_schema AS jsonb),
+                updated_at = CURRENT_TIMESTAMP
+            WHERE report_id = :report_id AND report_type = 'custom'
+        """)
+        
+        conn.execute(
+            update_sql,
+            {
+                "report_id": report_id,
+                "report_name": request.report_name.strip(),
+                "chart_type": request.report_type,
+                "description": request.description.strip() if request.description else None,
+                "default_filters": json.dumps(default_filters),
+                "meta_schema": json.dumps(meta_schema),
+            }
+        )
+        conn.commit()
+        
+        # Fetch the updated report
+        get_report_query = text("""
+            SELECT
+                report_id,
+                report_name,
+                chart_type,
+                data_source,
+                description,
+                report_type,
+                default_filters,
+                meta_schema,
+                created_at,
+                updated_at
+            FROM public.report_definitions
+            WHERE report_id = :report_id
+        """)
+        
+        result = conn.execute(get_report_query, {"report_id": report_id})
+        row = result.fetchone()
+        if not row:
+            raise HTTPException(status_code=500, detail="Failed to retrieve updated report")
+        
+        row_dict = dict(row._mapping)
+        # Ensure JSON fields are parsed
+        if isinstance(row_dict.get("default_filters"), str):
+            row_dict["default_filters"] = json.loads(row_dict["default_filters"])
+        if isinstance(row_dict.get("meta_schema"), str):
+            row_dict["meta_schema"] = json.loads(row_dict["meta_schema"])
+        
+        return {
+            "success": True,
+            "data": row_dict,
+            "message": f"Report '{request.report_name}' updated successfully"
+        }
+    
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error updating custom report: {e}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to update report: {str(e)}"
+        )
+
+
+@build_report_router.delete("/reports/custom/{report_id}")
+async def delete_custom_report(
+    report_id: str,
+    conn: Connection = Depends(get_db_connection)
+):
+    """
+    Delete a custom report.
+    """
+    try:
+        # Check if report exists and is custom
+        check_query = text("""
+            SELECT report_id, report_name
+            FROM public.report_definitions
+            WHERE report_id = :report_id AND report_type = 'custom'
+        """)
+        check_result = conn.execute(check_query, {"report_id": report_id})
+        row = check_result.fetchone()
+        
+        if not row:
+            raise HTTPException(
+                status_code=404,
+                detail=f"Custom report with ID '{report_id}' not found"
+            )
+        
+        report_name = row[1]
+        
+        # Delete the report
+        delete_sql = text("""
+            DELETE FROM public.report_definitions
+            WHERE report_id = :report_id AND report_type = 'custom'
+        """)
+        
+        conn.execute(delete_sql, {"report_id": report_id})
+        conn.commit()
+        
+        return {
+            "success": True,
+            "message": f"Report '{report_name}' deleted successfully"
+        }
+    
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error deleting custom report: {e}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to delete report: {str(e)}"
         )
 

@@ -2036,6 +2036,7 @@ def create_report_definitions_table_if_not_exists(engine=None) -> bool:
                     chart_type VARCHAR(100) NOT NULL,
                     data_source VARCHAR(100) NOT NULL,
                     description TEXT,
+                    report_type VARCHAR(20) NOT NULL DEFAULT 'system',
                     default_filters JSONB NOT NULL DEFAULT '{}'::jsonb,
                     meta_schema JSONB NOT NULL DEFAULT '{}'::jsonb,
                     created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
@@ -2342,6 +2343,7 @@ def insert_default_report_definitions(engine=None):
                     chart_type,
                     data_source,
                     description,
+                    report_type,
                     default_filters,
                     meta_schema,
                     updated_at
@@ -2351,6 +2353,7 @@ def insert_default_report_definitions(engine=None):
                     :chart_type,
                     :data_source,
                     :description,
+                    'system',
                     CAST(:default_filters AS jsonb),
                     CAST(:meta_schema AS jsonb),
                     CURRENT_TIMESTAMP
@@ -2360,6 +2363,7 @@ def insert_default_report_definitions(engine=None):
                     chart_type = EXCLUDED.chart_type,
                     data_source = EXCLUDED.data_source,
                     description = EXCLUDED.description,
+                    report_type = EXCLUDED.report_type,
                     default_filters = EXCLUDED.default_filters,
                     meta_schema = EXCLUDED.meta_schema,
                     updated_at = CURRENT_TIMESTAMP
