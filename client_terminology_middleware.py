@@ -42,7 +42,7 @@ EXCLUDED_DATA_FIELDS = {
     'pi', 'pi_name', 'pi_names', 'pi_id', 'pi_key',
     'quarter_pi', 'quarter_pi_of_epic', 'pi_value',
     'selected_pi', 'pi_filter', 'pi_parameter',
-    'job_type', 'insight_type', 'insight_category_name',
+    'job_type', 'insight_category_name', 'insight_categories',
     # Pattern-based protections: any field whose name contains these substrings is excluded.
     # Note: 'api' is already covered by the 'pi' entry above (since 'api' contains 'pi').
     'url',        # Protects all URL fields (jira_url, closed_sprint_url, active_sprint_url, etc.)

@@ -5,6 +5,7 @@ Reports Service - REST API endpoints for report metadata and resolved datasets.
 from __future__ import annotations
 
 from typing import Any, Dict, Optional, List, Union
+import json
 import logging
 import os
 import httpx
@@ -27,6 +28,10 @@ from cache_utils import (
     get_report_cache_ttl,
     invalidate_report_cache,
     get_redis_client,
+)
+from build_report_service import (
+    _execute_build_report_logic,
+    BuildReportRequest,
 )
 import config
 from config import get_jira_url
@@ -291,15 +296,20 @@ async def list_reports(
     bypass_cache: Optional[bool] = Query(False, description="Skip cache lookup"),
     include_audit: Optional[bool] = Query(False, description="Include audit reports in results"),
     audit_only: Optional[bool] = Query(False, description="Return only audit reports"),
+    report_type: Optional[str] = Query(None, description="Filter by report type: 'system' or 'custom'"),
 ):
     """
     Return all available report definitions.
     Filtering by naming convention: audit reports have report_id starting with "audit-"
+    Filtering by report_type: 'system' or 'custom'
     """
     # Build cache key with filter parameters
-    cache_key = f"report:definitions:all:include_audit={include_audit}:audit_only={audit_only}"
+    cache_key = f"report:definitions:all:include_audit={include_audit}:audit_only={audit_only}:report_type={report_type}"
     
-    if not bypass_cache:
+    # IMPORTANT: Never cache custom report list - always fetch fresh
+    should_cache = report_type != 'custom' and not bypass_cache
+    
+    if should_cache:
         cached_data = get_cached_report(cache_key)
         if cached_data:
             return {
@@ -311,6 +321,10 @@ async def list_reports(
             }
     
     definitions = get_all_report_definitions(conn)
+    
+    # Filter by report_type if provided
+    if report_type:
+        definitions = [d for d in definitions if d.get("report_type") == report_type]
     
     # Filter by naming convention
     if audit_only:
@@ -337,8 +351,9 @@ async def list_reports(
         "message": f"Retrieved {len(summaries)} report definitions",
     }
     
-    # Cache the result with definitions TTL
-    set_cached_report(cache_key, response_data, ttl=settings.CACHE_TTL_DEFINITIONS)
+    # Only cache if not custom reports
+    if should_cache:
+        set_cached_report(cache_key, response_data, ttl=settings.CACHE_TTL_DEFINITIONS)
 
     return {
         "success": True,
@@ -395,7 +410,7 @@ async def get_report_instance(
     - issues-bugs-by-priority - Visualizes open bugs by priority level
     - issues-bugs-by-team - Visualizes open bugs grouped by team with priority breakdown
     - issues-flow-status-duration - Shows average time spent in each workflow status
-    - issues-epics-hierarchy - Displays the hierarchy of issues with status and dependency information
+    - issues-epics-hierarchy - Shows epic progress percentages with hierarchy, status, and dependencies
     - issues-epic-dependencies - Summarizes inbound and outbound epic dependencies for a PI
     - issues-release-predictability - Highlights release progress across epics and other issues over recent months
     - sprint-predictability - Provides sprint predictability metrics, cycle time, and completion breakdown
@@ -500,6 +515,9 @@ async def get_report_instance(
             resolved_payload = await forward_to_github_service(report_id, merged_filters, definition)
         elif definition["data_source"].startswith("audit_"):
             resolved_payload = await forward_to_audit_service(report_id, merged_filters, definition)
+        elif report_id.startswith("custom-") or definition["data_source"] == "build_report":
+            # Custom report - execute using build_report logic
+            resolved_payload = await execute_custom_report(definition, merged_filters, conn)
         else:
             resolved_payload = resolve_report_data(definition["data_source"], merged_filters, conn)
     except KeyError as err:
@@ -591,6 +609,148 @@ async def invalidate_cache(report_id: Optional[str] = Query(None)):
         "message": message,
         "count": count,
         "report_id": report_id,
+    }
+
+
+async def execute_custom_report(
+    definition: Dict[str, Any],
+    filters: Dict[str, Any],
+    conn: Connection
+) -> Dict[str, Any]:
+    """
+    Execute a custom report by extracting build_report_config and calling build_report logic.
+    
+    Custom reports store their configuration in meta_schema.build_report_config:
+    - report_type: 'table', 'bar_chart', or 'pie_chart'
+    - selected_fields: list of fields (for table)
+    - x_axis: string or list (for charts)
+    - y_axis: string (for bar_chart)
+    - filters: array of filter objects
+    
+    Returns the same format as other reports for consistency.
+    """
+    # Extract build_report_config from meta_schema
+    meta_schema = definition.get("meta_schema", {})
+    build_config = meta_schema.get("build_report_config")
+    
+    if not build_config:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Custom report '{definition['report_id']}' is missing build_report_config"
+        )
+    
+    # Extract default filters (PI and Team/Group) from definition
+    default_filters = definition.get("default_filters", {})
+    
+    # Merge default filters with provided filters
+    # Priority: provided filters > default filters
+    merged_default_filters = {
+        "pi": filters.get("pi") or default_filters.get("pi"),
+        "team_name": filters.get("team_name") or default_filters.get("team_name"),
+        "isGroup": filters.get("isGroup") if "isGroup" in filters else default_filters.get("isGroup", False),
+    }
+    
+    # Build filters array from build_config.filters (stored filters from Build Report)
+    # Start with stored filters from build_config
+    all_filters = list(build_config.get("filters", []))
+    
+    # Merge filter overrides from filters parameter (if provided)
+    # The filters parameter can contain filter overrides for custom report filters
+    # Format: filters["filter_overrides"] = [{"field":"status","operator":"equals","values":["Done"]}]
+    # Note: filter_overrides may come as a JSON string from query parameters
+    filter_overrides = filters.get("filter_overrides", [])
+    
+    # Parse JSON string if needed (when coming from query parameters)
+    if isinstance(filter_overrides, str):
+        try:
+            filter_overrides = json.loads(filter_overrides)
+        except (ValueError, TypeError) as e:
+            logger = logging.getLogger(__name__)
+            logger.warning(f"Failed to parse filter_overrides JSON: {filter_overrides}, error: {e}")
+            filter_overrides = []
+    
+    if filter_overrides and isinstance(filter_overrides, list):
+        # Update or add filters from overrides
+        for override in filter_overrides:
+            if not isinstance(override, dict) or "field" not in override:
+                continue
+            field_name = override.get("field")
+            # Find existing filter with same field
+            existing_index = next((i for i, f in enumerate(all_filters) if f.get("field") == field_name), None)
+            if existing_index is not None:
+                # Update existing filter
+                all_filters[existing_index] = {
+                    "field": field_name,
+                    "operator": override.get("operator", all_filters[existing_index].get("operator", "equals")),
+                    "values": override.get("values", all_filters[existing_index].get("values", []))
+                }
+            else:
+                # Add new filter (only if it's not a default filter)
+                if field_name not in ["quarter_pi", "team_name"]:
+                    all_filters.append({
+                        "field": field_name,
+                        "operator": override.get("operator", "equals"),
+                        "values": override.get("values", [])
+                    })
+    
+    # Check if PI filter already exists in stored filters
+    has_pi_filter = any(f.get("field") == "quarter_pi" for f in all_filters)
+    # Add or update PI filter from merged_default_filters
+    if merged_default_filters.get("pi"):
+        if not has_pi_filter:
+            all_filters.append({
+                "field": "quarter_pi",
+                "operator": "equals",
+                "values": [merged_default_filters["pi"]]
+            })
+        else:
+            # Update existing PI filter
+            for f in all_filters:
+                if f.get("field") == "quarter_pi":
+                    f["values"] = [merged_default_filters["pi"]]
+                    break
+    
+    # Remove team_name from all_filters if it exists (team_name is handled separately, not in filters array)
+    # This matches how the preview works - team_name is passed as a separate parameter
+    all_filters = [f for f in all_filters if f.get("field") != "team_name"]
+    
+    # Create BuildReportRequest from build_config
+    request_data = {
+        "report_type": build_config.get("report_type") or definition.get("chart_type"),
+        "selected_fields": build_config.get("selected_fields"),
+        "filters": all_filters,
+        "x_axis": build_config.get("x_axis"),
+        "y_axis": build_config.get("y_axis", "count"),
+        "team_name": merged_default_filters.get("team_name"),
+        "isGroup": merged_default_filters.get("isGroup", False),
+    }
+    
+    # Remove None values for optional fields
+    request_data = {k: v for k, v in request_data.items() if v is not None}
+    
+    try:
+        request = BuildReportRequest(**request_data)
+    except Exception as e:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Invalid custom report configuration: {str(e)}"
+        )
+    
+    # Execute the report
+    result = await _execute_build_report_logic(request, conn)
+    
+    # Log for debugging
+    logger = logging.getLogger(__name__)
+    logger.info(f"[execute_custom_report] Report '{definition['report_id']}' executed. Result keys: {result.keys()}, data type: {type(result.get('data'))}, data length/count: {len(result.get('data', [])) if isinstance(result.get('data'), (list, dict)) else 'N/A'}")
+    if isinstance(result.get('data'), dict):
+        logger.info(f"[execute_custom_report] Data keys: {list(result.get('data', {}).keys())}")
+    
+    # Return in the same format as other reports
+    return {
+        "data": result.get("data", []),
+        "count": result.get("count", 0),
+        "columns": result.get("columns", []),
+        "meta": result.get("meta", {})
     }
 
 

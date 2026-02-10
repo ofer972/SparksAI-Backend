@@ -297,14 +297,17 @@ class BuildReportRequest(BaseModel):
         return self
 
 
-@build_report_router.post("/reports/build")
-async def build_report(
-    request: BuildReportRequest = Body(...),
-    conn: Connection = Depends(get_db_connection)
-):
+async def _execute_build_report_logic(
+    request: BuildReportRequest,
+    conn: Connection
+) -> Dict[str, Any]:
     """
-    Build a report based on selected fields and filters.
-    Supports 'table', 'bar_chart', and 'pie_chart' report types.
+    Core logic for building reports. Can be called from both:
+    - POST /reports/build (direct user request)
+    - execute_custom_report() (when custom report is executed)
+    
+    Returns:
+        Dict with 'data', 'count', 'columns', and optionally 'meta'
     """
     try:
         # Validate report type
@@ -579,11 +582,19 @@ async def build_report(
         # Get Jira URL for issue key links
         jira_settings = get_jira_url(conn=conn)
         
-        # Add Jira URL to meta if available
+        # Build meta dict
+        meta = {}
         if jira_settings.get("url"):
-            response["meta"] = {"jira_url": jira_settings["url"]}
+            meta["jira_url"] = jira_settings["url"]
         
-        return response
+        # Return in standard format expected by get_report_instance
+        # Format: {"data": actual_data, "meta": {...}}
+        return {
+            "data": response["data"]["data"],
+            "count": response["data"]["count"],
+            "columns": response["data"]["columns"],
+            "meta": meta
+        }
     
     except HTTPException:
         raise
@@ -593,6 +604,30 @@ async def build_report(
             status_code=500,
             detail=f"Failed to build report: {str(e)}"
         )
+
+
+@build_report_router.post("/reports/build")
+async def build_report(
+    request: BuildReportRequest = Body(...),
+    conn: Connection = Depends(get_db_connection)
+):
+    """
+    Build a report based on selected fields and filters.
+    Supports 'table', 'bar_chart', and 'pie_chart' report types.
+    """
+    result = await _execute_build_report_logic(request, conn)
+    
+    # Return in API response format
+    return {
+        "success": True,
+        "data": {
+            "data": result["data"],
+            "count": result["count"],
+            "columns": result["columns"]
+        },
+        "meta": result.get("meta", {}),
+        "message": f"Retrieved {result['count']} rows"
+    }
 
 
 class SaveCustomReportRequest(BaseModel):

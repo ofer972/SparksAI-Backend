@@ -28,9 +28,17 @@ def enrich_epic_hierarchy_with_dates(issues: List[Dict[str, Any]], conn: Connect
     """
     Enrich epic hierarchy issues with Start Date, End Date, and Progress % fields.
     
+    The SQL function (get_epic_hierarchy_by_pi) returns raw data including number_of_children 
+    and number_of_completed_children. This function calculates Progress % and adds date fields.
+    
     Logic:
-    - Stories: Use Sprint field → sprint dates
-    - Epics: Start Date = PI start date, End Date = sprint end date (if Epic Target Completion is sprint) or PI end date
+    - Stories (Level 0): 
+        - Use Sprint field → sprint dates
+        - Progress % = None (stories don't have progress)
+    - Epics (Level 1): 
+        - Start Date = PI start date
+        - End Date = sprint end date (if Epic Target Completion is sprint) or PI end date
+        - Progress % = (number_of_completed_children / number_of_children) * 100
     - Level 2: Progress and dates calculated from Epics (Level 1) children
     - Level 3: Progress and dates calculated from Level 2 children
     
@@ -45,11 +53,26 @@ def enrich_epic_hierarchy_with_dates(issues: List[Dict[str, Any]], conn: Connect
         - pis: List of PI dictionaries with "PI name", "start date", "end date" (sorted by start_date)
         - releases: List of release dictionaries with "Release name", "start date", "end date" (sorted by start_date)
     """
-    # Step 1: Rename "Epic Progress %" to "Progress %" for all issues
+    # Step 1: Initialize Progress % field and calculate for Epics (Hierarchy Level 1)
+    # SQL function only returns raw data (number_of_children, number_of_completed_children)
+    # Python calculates Progress % from these fields
     for issue in issues:
-        if "Epic Progress %" in issue:
-            issue["Progress %"] = issue.pop("Epic Progress %")
-        elif "Progress %" not in issue:
+        issue_type = issue.get("Type")
+        hierarchy_level = issue.get("Hierarchy Level")
+        
+        # Only calculate for Epics (Level 1) - stories (Level 0) don't have children
+        # Level 2 and 3 progress is calculated later from their children
+        if issue_type == "Epic" and hierarchy_level == 1:
+            number_of_children = issue.get("number_of_children", 0)
+            number_of_completed_children = issue.get("number_of_completed_children", 0)
+            
+            if number_of_children > 0:
+                progress_percent = (number_of_completed_children / number_of_children) * 100
+                issue["Progress %"] = round(progress_percent, 1)
+            else:
+                issue["Progress %"] = 0.0
+        else:
+            # Initialize to None for stories and parent items (will be calculated later for Level 2/3)
             issue["Progress %"] = None
     
     # Step 2: Collect unique sprint names, PIs, and fix version IDs

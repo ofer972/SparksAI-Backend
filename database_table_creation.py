@@ -428,10 +428,10 @@ DEFAULT_REPORT_DEFINITIONS = [
     },
     {
         "report_id": "issues-epics-hierarchy",
-        "report_name": "Epics Hierarchy",
+        "report_name": "Epics Progress",
         "chart_type": "table",
         "data_source": "issues_hierarchy",
-        "description": "Displays the hierarchy of issues with status and dependency information.",
+        "description": "Shows epic progress percentages with hierarchy, status, and dependencies.",
         "max_records_for_llm": 50,
         "default_filters": {
             "pi": None,

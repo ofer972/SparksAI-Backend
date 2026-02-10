@@ -1386,7 +1386,7 @@ async def fetch_dashboard_reports_data(
     from datetime import datetime, date
     from decimal import Decimal
     from database_reports import get_report_definition_by_id, resolve_report_data
-    from reports_service import forward_to_github_service
+    from reports_service import forward_to_github_service, execute_custom_report
     from cache_utils import generate_cache_key, get_cached_report, set_cached_report, get_report_cache_ttl
     
     # Custom JSON encoder to handle datetime and Decimal objects
@@ -1526,6 +1526,9 @@ async def fetch_dashboard_reports_data(
                 # Check if report should be forwarded to external service
                 if definition["data_source"].startswith("github_service_"):
                     resolved_payload = await forward_to_github_service(report_id, merged_filters, definition)
+                elif report_id.startswith("custom-") or definition["data_source"] == "build_report":
+                    # Custom report - execute using build_report logic
+                    resolved_payload = await execute_custom_report(definition, merged_filters, conn)
                 else:
                     resolved_payload = resolve_report_data(definition["data_source"], merged_filters, conn)
                 
