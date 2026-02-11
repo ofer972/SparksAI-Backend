@@ -676,8 +676,8 @@ async def save_custom_report(
         duplicate_result = conn.execute(check_duplicate_query, {"report_name": request.report_name.strip()})
         if duplicate_result.fetchone():
             raise HTTPException(
-                status_code=400,
-                detail=f"A custom report with the name '{request.report_name}' already exists"
+                status_code=409,
+                detail="Duplicate report name. Please choose a different name."
             )
         
         # Generate unique report_id
@@ -973,8 +973,8 @@ async def update_custom_report(
         })
         if duplicate_result.fetchone():
             raise HTTPException(
-                status_code=400,
-                detail=f"A custom report with the name '{request.report_name}' already exists"
+                status_code=409,
+                detail="Duplicate report name. Please choose a different name."
             )
         
         # Extract default filters (PI and Team/Group) from request
