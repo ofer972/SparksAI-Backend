@@ -475,6 +475,19 @@ async def get_report_instance(
                 override_filters["pi_names"] = normalized_pi
                 override_filters["pi"] = normalized_pi[0]  # First PI as string for single-PI reports
 
+    # filter_overrides is JSON (array of filter objects); do not comma-split it
+    if "filter_overrides" in raw_params:
+        raw_value = raw_params.pop("filter_overrides")
+        if raw_value and len(raw_value) > 0:
+            s = raw_value[0].strip() if isinstance(raw_value[0], str) else str(raw_value[0])
+            if s and (s.startswith("[") or s.startswith("{")):
+                try:
+                    parsed = json.loads(s)
+                    if isinstance(parsed, list):
+                        override_filters["filter_overrides"] = parsed
+                except (ValueError, TypeError):
+                    pass
+
     # Remaining parameters: collapse repeated values, trim whitespace
     for key, values in raw_params.items():
         normalized_values = _normalize_multi_value(values)

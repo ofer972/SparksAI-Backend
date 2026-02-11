@@ -37,7 +37,8 @@ async def get_report_fields(
         # Standard dropdown fields (known fields that should have dropdowns)
         STANDARD_DROPDOWN_FIELDS = {
             'issue_type', 'quarter_pi', 'status', 'priority', 'status_category',
-            'resolution', 'project_key', 'project_name'
+            'resolution', 'project_key', 'project_name',
+            'reporter_name', 'assignee_name', 'labels', 'fix_version_ids', 'planned_or_added'
         }
         
         # 1. Get all columns from jira_issues table
@@ -109,8 +110,8 @@ async def get_report_fields(
             })
             
             # Determine if field is filterable and what filter type
-            # Exclude non-filterable fields (e.g., large text fields for performance)
-            NON_FILTERABLE_FIELDS = {'description'}
+            # Exclude non-filterable fields (e.g., large text, or internal like current_sprint_id)
+            NON_FILTERABLE_FIELDS = {'description', 'current_sprint_id'}
             if column_name in NON_FILTERABLE_FIELDS:
                 continue  # Skip this field - don't add to filterable_fields
             
@@ -400,6 +401,14 @@ async def _execute_build_report_logic(
             # Handle empty string values (for boolean "All" option)
             if isinstance(values, str) and values.strip() == '':
                 continue
+            
+            # Skip filters whose values are effectively empty (e.g. [""] or [" ", ""])
+            # Applying "field = ''" would return no rows; treat as "do not filter on this field"
+            if isinstance(values, list):
+                non_empty = [v for v in values if v is not None and (str(v).strip() if isinstance(v, str) else True)]
+                if not non_empty:
+                    continue
+                values = non_empty
             
             # Ensure operator is a valid string (handle None/null)
             if not operator or not isinstance(operator, str):
