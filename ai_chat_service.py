@@ -1135,12 +1135,13 @@ def handle_issue_suggestion_request(
         conn: Database connection
         
     Returns:
-        Formatted issue details string if detected and issue_key found, None otherwise
+        Tuple of (formatted_issue_details: Optional[str], issue_key: Optional[str]).
+        (None, None) if not detected or fetch failed; otherwise (formatted_str, issue_key used).
     """
     # 1. Detect if this is an issue suggestion request and extract issue key from question
     is_detected, issue_key_from_question = detect_issue_suggestion_request(question)
     if not is_detected:
-        return None
+        return None, None
     
     logger.info("Issue suggestion request detected - fetching issue details")
     
@@ -1165,13 +1166,13 @@ def handle_issue_suggestion_request(
             logger.info(f"Using issue_key from chat_history: {issue_key}")
         else:
             logger.info("No issue_key found in question or chat_history, skipping issue details fetch")
-            return None
+            return None, None
     
     # 3. Fetch issue details (unified function - will fetch children if Epic)
     issue_data = fetch_issue_details(issue_key, conn)
     if not issue_data:
         logger.warning(f"Could not fetch issue details for {issue_key}")
-        return None
+        return None, None
     
     issue_type = issue_data.get("issue", {}).get("issue_type", "")
     children_count = issue_data.get("children_count", 0)
@@ -1204,7 +1205,7 @@ def handle_issue_suggestion_request(
     else:
         logger.info(f"Issue details fetched: {issue_key} ({issue_type}, {len(formatted_issue_details)} chars)")
     
-    return formatted_issue_details
+    return formatted_issue_details, issue_key
 
 
 def extract_issue_key_from_response(response: str) -> Optional[str]:
@@ -2403,15 +2404,16 @@ Results ({row_count} row{'s' if row_count != 1 else ''}):
         
         # Check for issue suggestion request in follow-up questions (before building conversation_context_for_llm)
         issue_details_context = None
+        issue_details_issue_key = None  # issue key used for issue_details_context (for single-epic logic)
         if not is_initial_call and not sql_was_attempted:
             try:
-                issue_details_context = handle_issue_suggestion_request(
+                issue_details_context, issue_details_issue_key = handle_issue_suggestion_request(
                     request.question,
                     conversation_id,
                     conn
                 )
                 if issue_details_context:
-                    logger.info("Issue details context added for suggestion request")
+                    logger.info(f"Issue details context added for suggestion request (issue_key={issue_details_issue_key})")
             except Exception as e:
                 logger.error(f"Error handling issue suggestion request: {e}")
                 # Continue without issue details - don't block chat
@@ -2449,12 +2451,45 @@ Results ({row_count} row{'s' if row_count != 1 else ''}):
                         conversation_context_for_llm = stored_context if stored_context else conversation_context
                         logger.warning("Data-only context not found, using full context as fallback")
         
-        # Add issue details to conversation_context if available (for issue suggestion)
+        # Single-epic rule: if user asked about a specific issue/epic (issue_details_context),
+        # send ONLY that epic's context so we never send two epics and confuse the LLM.
+        # When the user switches to a different epic, update stored context so follow-ups use the new epic.
         if issue_details_context:
-            if conversation_context_for_llm:
-                conversation_context_for_llm = conversation_context_for_llm + "\n\n" + issue_details_context
-            else:
-                conversation_context_for_llm = issue_details_context
+            conversation_context_for_llm = issue_details_context
+            logger.info("Using only issue/epic from current question (single-epic); not appending stored context")
+            if issue_details_issue_key and not is_initial_call:
+                try:
+                    current_stored_key_result = conn.execute(
+                        text(f"SELECT issue_key FROM {config.CHAT_HISTORY_TABLE} WHERE id = :cid"),
+                        {"cid": int(conversation_id)}
+                    )
+                    row = current_stored_key_result.fetchone()
+                    stored_issue_key = row[0] if row and row[0] else None
+                    if stored_issue_key != issue_details_issue_key:
+                        history_json["initial_request_conversation_context"] = issue_details_context
+                        epic_marker = "=== EPIC INFORMATION FOR REFINEMENT ==="
+                        issue_marker = "=== ISSUE INFORMATION ==="
+                        if epic_marker in issue_details_context:
+                            idx = issue_details_context.find(epic_marker)
+                            history_json["initial_request_data_only"] = issue_details_context[idx:].strip()
+                        elif issue_marker in issue_details_context:
+                            idx = issue_details_context.find(issue_marker)
+                            history_json["initial_request_data_only"] = issue_details_context[idx:].strip()
+                        else:
+                            history_json["initial_request_data_only"] = issue_details_context
+                        conn.execute(
+                            text(f"UPDATE {config.CHAT_HISTORY_TABLE} SET issue_key = :ik, history_json = CAST(:hj AS jsonb) WHERE id = :cid"),
+                            {"ik": issue_details_issue_key, "hj": json.dumps(history_json), "cid": int(conversation_id)}
+                        )
+                        conn.commit()
+                        logger.info(f"Switched conversation to epic/issue {issue_details_issue_key} (was {stored_issue_key}); updated stored context and issue_key")
+                except Exception as e:
+                    logger.warning(f"Failed to update stored context for new epic/issue: {e}")
+                    if conn:
+                        try:
+                            conn.rollback()
+                        except Exception:
+                            pass
         
         # DIAGNOSTIC LOGGING: Verify what's in history_json for follow-up calls
         if not is_initial_call:
@@ -2498,15 +2533,32 @@ Results ({row_count} row{'s' if row_count != 1 else ''}):
         logger.info(f"system_message: {'SET' if system_message else 'None'}")
         logger.info("=" * 80)
         
+        # Inject epic/issue context as a dedicated user message so the LLM reliably sees Summary and Description
+        # (avoids the model ignoring long context prepended to the current question).
+        history_json_to_send = history_json
+        conversation_context_to_send = conversation_context_for_llm
+        if conversation_context_for_llm and (
+            "=== EPIC INFORMATION FOR REFINEMENT ===" in conversation_context_for_llm
+            or "=== ISSUE INFORMATION ===" in conversation_context_for_llm
+        ):
+            epic_instruction = "Use the Epic/Issue Summary and Description below for your answer. Do not ignore this data.\n\n"
+            injected_message = {"role": "user", "content": epic_instruction + conversation_context_for_llm}
+            history_json_to_send = {
+                **history_json,
+                "messages": history_json.get("messages", []) + [injected_message]
+            }
+            conversation_context_to_send = None
+            logger.info("Injected epic/issue context as dedicated user message so LLM reliably gets summary and description")
+        
         llm_response = await call_llm_service(
             conversation_id=conversation_id,
             question=question_to_send,
-            history_json=history_json,
+            history_json=history_json_to_send,
             user_id=request.user_id,
             selected_team=request.selected_team,
             selected_pi=request.selected_pi,
             chat_type=chat_type_str,
-            conversation_context=conversation_context_for_llm,
+            conversation_context=conversation_context_to_send,
             system_message=system_message
         )
         
