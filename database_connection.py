@@ -27,6 +27,9 @@ DB_APPLICATION_NAME = "SparksAI-Backend"
 _sql_log_env = os.getenv('SQL_LOG_ENABLED', 'true').strip().lower()
 SQL_LOG_ENABLED = _sql_log_env in ('1', 'true', 'yes', 'on')
 
+# Max characters for SQL log (statement + parameters); avoids huge chat history dumps
+SQL_LOG_MAX_CHARS = 1000
+
 # Context variable to store current request path for SQL logging control
 _current_request_path: ContextVar[Optional[str]] = ContextVar('current_request_path', default=None)
 
@@ -84,7 +87,10 @@ def receive_after_cursor_execute(conn, cursor, statement, parameters, context, e
             else:
                 params_str = repr(parameters)
         
-        logger.info(f"SQL:\n            {formatted_query}\n            Parameters: {params_str}\n            - EXECUTE (Duration: {total_time:.3f}s)")
+        log_msg = f"SQL:\n            {formatted_query}\n            Parameters: {params_str}\n            - EXECUTE (Duration: {total_time:.3f}s)"
+        if len(log_msg) > SQL_LOG_MAX_CHARS:
+            log_msg = log_msg[:SQL_LOG_MAX_CHARS] + f"... (truncated, {len(log_msg) - SQL_LOG_MAX_CHARS} more chars)"
+        logger.info(log_msg)
 
 
 def get_connection_string() -> Optional[str]:

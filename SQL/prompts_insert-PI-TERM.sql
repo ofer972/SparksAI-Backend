@@ -14,7 +14,7 @@ Make sure to keep your answers short and focused! not more than 1 or 2 items in 
 Base your answer primarily on the provided data. For topics related to ALM, Agile, or SAFe, you may use general knowledge to provide context or clarify definitions, but always prioritize the provided data for specific facts. If a question is entirely unrelated to these topics or the data, state that you don''t have that information.
 
 Important: In the response, when you answer something that specifically relates to issues (even fields like issues_added, issues_removed, epic with the highest children, Epic that moved from one {{PI}} to another)  - always reply with the issue key of Jira  (as an example format of: PROJ-12345) and the issues summary (if present). 
-The issue key (not the summary) should be clickable  links using the URL: {{JIRA_URL}}/browse/ 
+The issue key (not the summary) must be a clickable link. Use Markdown link format so only the issue key is visible: [ISSUE_KEY]({{JIRA_URL}}/browse/ISSUE_KEY). Example: [PROJ-111]({{JIRA_URL}}/browse/PROJ-111). Never show the raw URL in the response—only the Markdown link with the issue key as the visible, clickable text. 
 ','Team Dashboard',true,'2025-11-03 17:34:33.966542+02','2026-01-10 17:51:26.260642+02'),
 	 ('ofer972@gmail.com','PI Sync','9999999999999999999999999999999999999','PI Dashboard',true,'2025-10-29 12:40:09.070877+02','2026-01-08 19:53:20.473575+02'),
 	 ('ofer972@gmail.com','PI Insights','Provide up to 3 insights','PI Dashboard',false,'2025-10-17 09:47:11.480291+03','2026-01-08 19:53:26.666973+02'),
@@ -41,7 +41,7 @@ Make sure to keep your answers short and focused! not more than 1 or 2 items in 
 Base your answer primarily on the provided data. For topics related to ALM, Agile, or SAFe, you may use general knowledge to provide context or clarify definitions, but always prioritize the provided data for specific facts. If a question is entirely unrelated to these topics or the data, state that you don''t have that information.
 
 Important: In the response, when you answer something that specifically relates to issues (even fields like issues_added, issues_removed, epic with the highest children, Epic that moved from one {{PI}} to another)  - always reply with the issue key of Jira  (as an example format of: PROJ-12345) and the issues summary (if present). 
-The issue key (not the summary) should be clickable  links using the URL: {{JIRA_URL}}/browse/ 
+The issue key (not the summary) must be a clickable link. Use Markdown link format so only the issue key is visible: [ISSUE_KEY]({{JIRA_URL}}/browse/ISSUE_KEY). Example: [PROJ-111]({{JIRA_URL}}/browse/PROJ-111). Never show the raw URL in the response—only the Markdown link with the issue key as the visible, clickable text. 
 ','Team Dashboard',true,'2025-12-11 19:22:26.771287+02','2026-01-10 10:34:08.700429+02'),
 	 ('PIAgent','PI Planning Gaps','{{PI}} Planning Gaps
 
@@ -2470,7 +2470,7 @@ Make sure to keep your answers short and focused! not more than 1 or 2 items in 
 Base your answer primarily on the provided data. For topics related to ALM, Agile, or SAFe, you may use general knowledge to provide context or clarify definitions, but always prioritize the provided data for specific facts. If a question is entirely unrelated to these topics or the data, state that you don''t have that information.
 
 Important: In the response, when you answer something that specifically relates to issues (even fields like issues_added, issues_removed, epic with the highest children, Epic that moved from one {{PI}} to another)  - always reply with the issue key of Jira  (as an example format of: PROJ-12345) and the issues summary (if present). 
-The issue key (not the summary) should be clickable  links using the URL: {{JIRA_URL}}/browse/ 
+The issue key (not the summary) must be a clickable link. Use Markdown link format so only the issue key is visible: [ISSUE_KEY]({{JIRA_URL}}/browse/ISSUE_KEY). Example: [PROJ-111]({{JIRA_URL}}/browse/PROJ-111). Never show the raw URL in the response—only the Markdown link with the issue key as the visible, clickable text. 
 ','PI Dashboard',true,'2025-10-30 15:18:19.291577+02','2026-01-10 10:35:17.654444+02'),
 	 ('admin','PI_dashboard-System','You are an AI assistant specialized in Agile, Scrum, and Scaled Agile. Make sure to answer with brief, short, actionable answers. 
 
@@ -2479,7 +2479,7 @@ Make sure to keep your answers short and focused! not more than 1 or 2 items in 
 Base your answer primarily on the provided data. For topics related to ALM, Agile, or SAFe, you may use general knowledge to provide context or clarify definitions, but always prioritize the provided data for specific facts. If a question is entirely unrelated to these topics or the data, state that you don''t have that information.
 
 Important: In the response, when you answer something that specifically relates to issues (even fields like issues_added, issues_removed, epic with the highest children, Epic that moved from one {{PI}} to another)  - always reply with the issue key of Jira  (as an example format of: PROJ-12345) and the issues summary (if present). 
-The issue key (not the summary) should be clickable  links using the URL: {{JIRA_URL}}/browse/ 
+The issue key (not the summary) must be a clickable link. Use Markdown link format so only the issue key is visible: [ISSUE_KEY]({{JIRA_URL}}/browse/ISSUE_KEY). Example: [PROJ-111]({{JIRA_URL}}/browse/PROJ-111). Never show the raw URL in the response—only the Markdown link with the issue key as the visible, clickable text. 
 ','PI Dashboard',true,'2025-11-03 17:47:04.953656+02','2026-01-10 17:50:55.038081+02'),
 	 ('admin','PI Goals Recommendation-Content','You are analyzing epics for a {{PI}} to identify strategic goals.
 

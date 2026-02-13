@@ -18,6 +18,7 @@ import httpx
 import os
 import re
 from datetime import datetime, date
+from rapidfuzz import fuzz
 from database_connection import get_db_connection
 from database_general import get_ai_card_by_id, get_recommendation_by_id, get_prompt_by_email_and_name, get_formatted_job_data_for_llm_followup_insight, get_formatted_job_data_for_llm_followup_recommendation, get_insight_types
 from database_team_metrics import (
@@ -41,6 +42,15 @@ ai_chat_router = APIRouter()
 # Maximum length for AI chat question (from global_settings)
 from global_settings_loader import settings
 
+# Console log preview length (avoid dumping full LLM request/response)
+LOG_PREVIEW_CHARS = 200
+# ANSI green for refinement-path log
+GREEN = '\033[92m'
+RESET = '\033[0m'
+
+# Emojis for intent log messages
+EMOJI_REFINEMENT = "📐"
+EMOJI_CHAT = "💬"
 
 def convert_history_to_sql_format(history_json: Dict[str, Any]) -> List[Dict[str, Any]]:
     """
@@ -220,69 +230,54 @@ def get_or_create_chat_history(
 
 def update_chat_history(
     conversation_id: str,
-    user_message: str,
+    user_message: Optional[str],
     assistant_response: str,
-    conn: Connection
+    conn: Connection,
+    append_assistant_only: bool = False
 ) -> None:
     """
-    Update chat history with new user message and assistant response.
-    
-    Args:
-        conversation_id: Conversation ID (UUID)
-        user_message: User's question
-        assistant_response: Assistant's response
-        conn: Database connection
+    Update chat history with new message(s).
+    AI chat flow: we only append refinement answers or SQL answers (assistant only);
+    we do not append normal Q&A or the first exchange.
     """
     try:
-        # Fetch current history
         query = text(f"""
             SELECT history_json
             FROM {config.CHAT_HISTORY_TABLE}
             WHERE id = :conversation_id
         """)
-        
         result = conn.execute(query, {"conversation_id": conversation_id})
         row = result.fetchone()
-        
         if not row:
             logger.error(f"Chat history not found for conversation_id: {conversation_id}")
             raise HTTPException(
                 status_code=404,
                 detail=f"Chat history not found for conversation_id: {conversation_id}"
             )
-        
-        # Get current history
         history_json = row[0] if row[0] is not None else {"messages": []}
         if not isinstance(history_json, dict):
             history_json = {"messages": []}
         if "messages" not in history_json:
             history_json["messages"] = []
-        
-        # Add new messages
-        history_json["messages"].append({
-            "role": "user",
-            "content": user_message
-        })
-        history_json["messages"].append({
-            "role": "assistant",
-            "content": assistant_response
-        })
-        
-        # Update database
+
+        if append_assistant_only:
+            history_json["messages"].append({"role": "assistant", "content": assistant_response})
+        else:
+            if user_message is not None:
+                history_json["messages"].append({"role": "user", "content": user_message})
+            history_json["messages"].append({"role": "assistant", "content": assistant_response})
+
         update_query = text(f"""
             UPDATE {config.CHAT_HISTORY_TABLE}
             SET history_json = CAST(:history_json AS jsonb)
             WHERE id = :conversation_id
         """)
-        
         conn.execute(update_query, {
             "conversation_id": conversation_id,
             "history_json": json.dumps(history_json)
         })
         conn.commit()
-        
-        logger.info(f"Updated chat history for conversation_id: {conversation_id}")
-        
+        logger.info(f"Updated chat history for conversation_id: {conversation_id} (append_assistant_only={append_assistant_only})")
     except HTTPException:
         raise
     except Exception as e:
@@ -767,38 +762,62 @@ def format_pi_dashboard_data(
 # ============================================================================
 # Epic Refinement Request Handling
 # ============================================================================
+#
+# AI chat refinement flow:
+# 1. Try detect_epic_refinement_request(question): must have refinement keyword + subject (epic/issue/feature) + JIRA key in question.
+# 2. If no key in question but _has_refinement_intent(question): read issue_key from chat_history (saved when a link was detected in a prior reply).
+# 3. If we have an epic_key (from step 1 or 2): handle_epic_refinement_request(question, conn, epic_key) builds context = refinement prompt + epic details + children only (no report data).
+# 4. That context is set as conversation_context; Team_insights/report path is skipped for this request. One LLM call then uses this context.
+#
+# Refinement intent: exact substring or fuzzy match (typos). Subject stays exact to avoid false positives.
+# "should" added for "what should I do (about this epic)".
+REFINEMENT_KEYWORDS = (
+    'recommend', 'refined', 'refine', 'suggest', 'suggestion',
+    'improve', 'improvement', 'advise', 'advice', 'refinement',
+    'recommendation', 'split', 'break down', 'breakdown', 'work breakdown',
+    'should',
+)
+REFINEMENT_SUBJECT_KEYWORDS = ('epic', 'issue', 'feature')
+FUZZY_MATCH_THRESHOLD = 85  # 0-100; allows e.g. "recomend" -> "recommend"
+
+
+def _has_refinement_intent(question: str) -> bool:
+    """True if question has refinement keyword + subject (epic/issue/feature). No JIRA key required."""
+    if not question:
+        return False
+    question_lower = question.lower()
+    words = re.findall(r'\w+', question_lower)
+    has_refinement_keyword = any(
+        keyword in question_lower for keyword in REFINEMENT_KEYWORDS
+    ) or any(
+        fuzz.ratio(w, keyword) >= FUZZY_MATCH_THRESHOLD
+        for w in words for keyword in REFINEMENT_KEYWORDS
+    )
+    has_subject_keyword = any(kw in question_lower for kw in REFINEMENT_SUBJECT_KEYWORDS)
+    return has_refinement_keyword and has_subject_keyword
 
 
 def detect_epic_refinement_request(question: str) -> Optional[str]:
     """
-    Detect if question is requesting epic refinement/recommendation.
-    
-    Returns:
-        JIRA issue key if detected, None otherwise
+    Detect if question is requesting epic/issue/feature refinement or recommendation.
+    Uses keywords + fuzzy matching (typos). Subject: epic, issue, or feature.
+    Returns JIRA issue key if detected (from question), None otherwise.
     """
     if not question:
         return None
-    
     question_lower = question.lower()
-    
-    # Check for refinement keywords
+    words = re.findall(r'\w+', question_lower)
     has_refinement_keyword = any(
-        keyword in question_lower 
-        for keyword in ['recommend', 'refined', 'refine']
+        keyword in question_lower for keyword in REFINEMENT_KEYWORDS
+    ) or any(
+        fuzz.ratio(w, keyword) >= FUZZY_MATCH_THRESHOLD
+        for w in words for keyword in REFINEMENT_KEYWORDS
     )
-    
-    # Check for epic keyword
-    has_epic_keyword = 'epic' in question_lower
-    
-    # Extract JIRA issue key (format: UP_TO_10_CHARS-NUMBER)
-    # JIRA project keys can be 1-10 characters, but we allow up to 10 for flexibility
+    has_subject_keyword = any(kw in question_lower for kw in REFINEMENT_SUBJECT_KEYWORDS)
     jira_key_pattern = r'\b[A-Z]{1,10}-\d+\b'
     jira_keys = re.findall(jira_key_pattern, question.upper())
-    
-    # All conditions must be met
-    if has_refinement_keyword and has_epic_keyword and jira_keys:
-        return jira_keys[0]  # Return first matching key
-    
+    if has_refinement_keyword and has_subject_keyword and jira_keys:
+        return jira_keys[0]
     return None
 
 
@@ -1035,25 +1054,28 @@ Number of Completed Children: {issue.get('number_of_completed_children', 0)}
 
 def handle_epic_refinement_request(
     question: str,
-    conn: Connection
+    conn: Connection,
+    epic_key: Optional[str] = None,
 ) -> Optional[str]:
     """
     Handle epic refinement request if detected in question.
+    Returns only: Epic Refinement prompt (template) + epic details + children. No report/dashboard data.
     Uses unified fetch_issue_details() and format_issue_details_for_llm().
-    Always uses Epic Refinement template.
     
     Args:
         question: User's question
         conn: Database connection
+        epic_key: Optional JIRA key; when provided (e.g. from LLM intent flow), skip keyword detection.
         
     Returns:
-        Formatted conversation_context string if epic refinement detected, None otherwise
+        Formatted conversation_context string (refinement prompt + epic + children only), or None
         
     Raises:
         HTTPException: If epic refinement detected but template not found or epic not found
     """
-    # 1. Detect if this is an epic refinement request
-    epic_key = detect_epic_refinement_request(question)
+    # 1. Resolve epic key: use provided key or legacy keyword detection (currently returns None)
+    if not epic_key:
+        epic_key = detect_epic_refinement_request(question)
     if not epic_key:
         return None
     
@@ -1074,6 +1096,9 @@ def handle_epic_refinement_request(
             detail=f"Issue {epic_key} is not an Epic type"
         )
     
+    summary = (issue_data.get("issue") or {}).get("summary") or ""
+    logger.info(f"{GREEN}REFINEMENT PATH: issue_key={epic_key}, summary={summary[:LOG_PREVIEW_CHARS]}{'...' if len(summary) > LOG_PREVIEW_CHARS else ''}{RESET}")
+    
     # 3. Get Epic Refinement template (required - no fallback)
     logger.info("Fetching template 'Epic Refinement' for admin")
     refinement_template = get_prompt_by_email_and_name(
@@ -1093,7 +1118,7 @@ def handle_epic_refinement_request(
     template_text = str(refinement_template['prompt_description'])
     logger.info(f"Template retrieved (length: {len(template_text)} chars)")
     
-    # 4. Format context (unified function with Epic Refinement template)
+    # 4. Format context: refinement prompt + epic details + children only (no report/dashboard data)
     # Note: We need to add the "=== EPIC INFORMATION FOR REFINEMENT ===" marker for backward compatibility
     formatted_context = format_issue_details_for_llm(
         issue_data,
@@ -1107,7 +1132,7 @@ def handle_epic_refinement_request(
         "=== EPIC INFORMATION FOR REFINEMENT ==="
     )
     
-    logger.info(f"Epic refinement context prepared (length: {len(conversation_context)} chars)")
+    logger.info(f"Epic refinement context prepared (refinement prompt + epic + children only, no report data; length: {len(conversation_context)} chars)")
     
     return conversation_context
 
@@ -1173,6 +1198,9 @@ def handle_issue_suggestion_request(
     if not issue_data:
         logger.warning(f"Could not fetch issue details for {issue_key}")
         return None, None
+    
+    summary = (issue_data.get("issue") or {}).get("summary") or ""
+    logger.info(f"{GREEN}REFINEMENT PATH: issue_key={issue_key}, summary={summary[:LOG_PREVIEW_CHARS]}{'...' if len(summary) > LOG_PREVIEW_CHARS else ''}{RESET}")
     
     issue_type = issue_data.get("issue", {}).get("issue_type", "")
     children_count = issue_data.get("children_count", 0)
@@ -1266,23 +1294,14 @@ async def call_llm_service(
     """
     llm_service_url = f"{config.LLM_SERVICE_URL}/chat"
     
-    # OPTIMIZATION: Strip stored context from history_json before sending to LLM
-    # This prevents duplicate data: stored context is already sent via conversation_context parameter
-    # Keep stored context in database, but only send messages to LLM to reduce token usage
+    # When conversation_context is set it already includes data + refinement answers; send empty messages to avoid duplicate.
+    # When conversation_context is None (e.g. SQL path), send stored messages (refinement/SQL answers).
     history_json_for_llm = None
     if history_json and isinstance(history_json, dict):
-        # Create stripped version with only messages (conversation history)
-        # Remove stored context fields that are already sent via conversation_context
-        history_json_for_llm = {
-            "messages": history_json.get("messages", [])
-        }
-        
-        # Log the optimization
-        original_size = len(json.dumps(history_json))
-        stripped_size = len(json.dumps(history_json_for_llm))
-        reduction = original_size - stripped_size
-        if reduction > 0:
-            logger.info(f"Optimized history_json: reduced from {original_size} to {stripped_size} chars ({reduction} chars removed, {100 * reduction / original_size:.1f}% reduction)")
+        if conversation_context:
+            history_json_for_llm = {"messages": []}
+        else:
+            history_json_for_llm = {"messages": history_json.get("messages", [])}
     else:
         history_json_for_llm = history_json
     
@@ -1325,7 +1344,8 @@ async def call_llm_service(
     else:
         logger.info("No system message provided")
     
-    logger.info(f"{BOLD}{YELLOW}Question: {question}{RESET}")
+    question_preview = (question or "")[:LOG_PREVIEW_CHARS]
+    logger.info(f"{BOLD}{YELLOW}Question (first {LOG_PREVIEW_CHARS} chars): {question_preview}{'...' if question and len(question) > LOG_PREVIEW_CHARS else ''}{RESET}")
     logger.info(f"{BOLD}{CYAN}Total chars sent to LLM: {total_chars_sent}{RESET}")
     logger.debug(f"Payload: {payload}")
     
@@ -1845,18 +1865,33 @@ async def ai_chat(
         logger.info(f"Conversation ID: {conversation_id}")
         logger.info(f"History messages count: {len(history_json.get('messages', []))}")
         
-        # 2. Check for epic refinement request (before other chat type handlers)
+        # 2. Epic refinement: keyword + fuzzy detection; JIRA key from question or from chat_history
+        # When refinement is detected we store it to prepend to the rest of the request data (do not replace).
         conversation_context = None
-        try:
-            epic_refinement_context = handle_epic_refinement_request(request.question, conn)
-            if epic_refinement_context:
-                conversation_context = epic_refinement_context
-                logger.info("Using epic refinement context")
-        except HTTPException:
-            raise  # Re-raise HTTP exceptions (template/epic not found)
-        except Exception as e:
-            logger.error(f"Error handling epic refinement request: {e}")
-            # Continue without special context - let LLM handle the question normally
+        refinement_context_to_prepend = None
+        epic_key = detect_epic_refinement_request(request.question)
+        if not epic_key and _has_refinement_intent(request.question):
+            try:
+                q = text(f"SELECT issue_key FROM {config.CHAT_HISTORY_TABLE} WHERE id = :cid")
+                r = conn.execute(q, {"cid": int(conversation_id)})
+                row = r.fetchone()
+                if row and row[0]:
+                    epic_key = row[0]
+                    logger.info(f"Refinement intent detected; using issue_key from chat_history: {epic_key}")
+            except Exception as e:
+                logger.warning(f"Could not read issue_key from chat_history: {e}")
+        if epic_key:
+            try:
+                epic_refinement_context = handle_epic_refinement_request(
+                    request.question, conn, epic_key=epic_key
+                )
+                if epic_refinement_context:
+                    refinement_context_to_prepend = epic_refinement_context
+                    logger.info(f"{EMOJI_REFINEMENT} Refinement context will be prepended to request data (issue key={epic_key})")
+            except HTTPException:
+                raise
+            except Exception as e:
+                logger.error(f"Error handling epic refinement request: {e}")
         
         # 3. Handle Team_insights chat type - fetch card data and build context
         if not conversation_context and chat_type_str == "Team_insights":
@@ -2190,16 +2225,17 @@ async def ai_chat(
                 )
 
         # 2.9. On initial call, persist initial system/context snapshot into chat history
-        # Determine if this is the initial call (no messages in history yet)
-        is_initial_call = not history_json.get('messages') or len(history_json.get('messages', [])) == 0
+        # Initial = we have not yet stored data-only snapshot. Once we have initial_request_data_only,
+        # treat every subsequent request as follow-up (send data_only, not full prompt). We do not append
+        # the first Q&A to messages, so "no messages" would wrongly keep is_initial_call True on 2nd request.
+        is_initial_call = not history_json.get('initial_request_data_only')
         
         try:
             if is_initial_call:
                 if 'initial_request_system_message' not in history_json:
                     history_json['initial_request_system_message'] = system_message
-                if 'initial_request_conversation_context' not in history_json:
-                    history_json['initial_request_conversation_context'] = conversation_context
-                # Store data-only version (without content_intro) for follow-up calls
+                # Do not store the initial prompt in chat history; only store data (DATA_STARTS_HERE and after).
+                # Store data-only version for follow-up calls
                 # This allows LLM to access data without the confusing prompt instructions
                 # Applies to: Team_insights, PI_insights, Recommendation_reason, Team_dashboard, PI_dashboard, Epic Refinement
                 if 'initial_request_data_only' not in history_json and conversation_context:
@@ -2212,8 +2248,15 @@ async def ai_chat(
                         marker = "=== DATA_STARTS_HERE ==="
                     
                     if marker:
-                        marker_index = conversation_context.find(marker)
+                        # Use last occurrence of marker so we take only after the separator we add (prompt must not be stored).
+                        marker_index = conversation_context.rfind(marker)
                         data_only = conversation_context[marker_index + len(marker):].strip()
+                        # Defensive: if prompt text still appears after marker (e.g. duplicate marker in prompt), strip again.
+                        if "This is the discussion we had in the previous chat" in data_only:
+                            for m in ("=== DASHBOARD DATA STARTS HERE ===", "=== DATA_STARTS_HERE ==="):
+                                if m in data_only:
+                                    data_only = data_only.split(m, 1)[-1].strip()
+                                    break
                         history_json['initial_request_data_only'] = data_only
                         logger.info(f"Stored data-only context for {chat_type_str} follow-ups using marker (length: {len(data_only)} chars)")
                     else:
@@ -2256,32 +2299,21 @@ async def ai_chat(
                             except Exception as e:
                                 logger.warning(f"Failed to build data-only context for Recommendation_reason: {e}")
                         elif chat_type_str in ["Team_dashboard", "PI_dashboard"]:
-                            # Fallback: if marker not found, use full context (shouldn't happen but safe fallback)
-                            history_json['initial_request_data_only'] = conversation_context
-                            logger.warning(f"Marker not found in {chat_type_str} context, using full context as fallback")
+                            logger.warning(f"Marker not found in {chat_type_str} context; not storing prompt in history")
                         elif conversation_context and "=== EPIC INFORMATION FOR REFINEMENT ===" in conversation_context:
-                            # Handle Epic Refinement: extract data-only (epic data without template)
-                            # Epic refinement format: template_text + "\n\n" + epic_section
-                            # We want to extract just the epic_section part
                             epic_marker = "=== EPIC INFORMATION FOR REFINEMENT ==="
                             epic_marker_index = conversation_context.find(epic_marker)
                             if epic_marker_index >= 0:
-                                # Extract everything from the epic marker onwards (the data part)
                                 data_only = conversation_context[epic_marker_index:].strip()
                                 history_json['initial_request_data_only'] = data_only
                                 logger.info(f"Stored data-only context for Epic Refinement follow-ups (length: {len(data_only)} chars)")
                             else:
-                                # Fallback: use full context if marker not found
-                                history_json['initial_request_data_only'] = conversation_context
-                                logger.warning("Epic marker not found in Epic Refinement context, using full context as fallback")
+                                logger.warning("Epic marker not found in Epic Refinement context; not storing full context")
 
-                # Seed initial messages into history_json for follow-ups
+                # Seed initial messages into history_json for follow-ups.
+                # Do NOT add system message to history: it is sent once per request via system_message
+                # parameter to the LLM service; adding it here would duplicate it on every follow-up.
                 history_json.setdefault('messages', [])
-                if system_message:
-                    history_json['messages'].append({
-                        'role': 'system',
-                        'content': system_message
-                    })
                 # Note: conversation_context is sent as a parameter, not seeded into history_json
                 # This matches the original working approach
                 snapshot_update_query = text(f"""
@@ -2364,28 +2396,10 @@ Results ({row_count} row{'s' if row_count != 1 else ''}):
                 sql_was_triggered = True
                 sql_formatted_for_history = sql_formatted
                 
-                # CRITICAL FIX: Inject SQL results into history_json BEFORE calling LLM
-                # The LLM service processes history_json correctly, but doesn't process conversation_context correctly
-                # So we add SQL data as a user message in history so LLM sees it immediately
-                # Format: Make it clear this is the answer to the upcoming question
-                history_json.setdefault('messages', [])
-                history_json['messages'].append({
-                    'role': 'user',
-                    'content': f"Here is the database query result that answers the question '{clean_question_for_sql}':\n\n{sql_formatted}"
-                })
-                logger.info(f"Injected SQL results into history_json (status: {sql_status})")
-                
+                logger.info(f"SQL success (status: {sql_status}); will append only SQL answer to history after LLM response")
             except Exception as e:
                 logger.warning(f"SQL service processing failed: {e}")
-                # Continue without SQL data - don't block the chat flow
-                # Inject error message into history_json so LLM can see it
-                sql_error_msg = f"=== SQL Service Error ===\nFailed to process database query: {str(e)}\n=== End SQL Service Error ==="
-                history_json.setdefault('messages', [])
-                history_json['messages'].append({
-                    'role': 'user',
-                    'content': sql_error_msg
-                })
-                logger.info(f"Injected SQL error message into history_json")
+                # Do not store SQL error in history; LLM still gets error via question param if we inject it there, or we skip
 
         # 3. Call LLM service
         # Remove "!" trigger from question if present before sending to LLM
@@ -2418,43 +2432,39 @@ Results ({row_count} row{'s' if row_count != 1 else ''}):
                 logger.error(f"Error handling issue suggestion request: {e}")
                 # Continue without issue details - don't block chat
         
-        # Determine conversation_context parameter
-        # REVERTED TO SIMPLE APPROACH: Always send conversation_context (except for SQL calls)
-        # This matches the original working behavior before recent changes
-        # SQL calls: Don't send conversation_context (SQL results are in question parameter)
+        # Determine conversation_context: data + refinement answers (from history) on every follow-up.
+        # SQL calls: no conversation_context (SQL results are in question).
         if sql_was_attempted:
-            # SQL calls: don't send conversation_context parameter
-            # SQL results are already combined with question parameter
             conversation_context_for_llm = None
+        elif is_initial_call:
+            conversation_context_for_llm = conversation_context
         else:
-            # All other calls (initial and follow-up): send conversation_context
-            if is_initial_call:
-                # Initial call: send full conversation_context (with content_intro prompt)
-                conversation_context_for_llm = conversation_context
+            # Follow-up: send only data (after marker). Never send the initial prompt. Strip using both markers.
+            data_only = history_json.get("initial_request_data_only") or ""
+            if "=== DASHBOARD DATA STARTS HERE ===" in data_only:
+                data_only = data_only.split("=== DASHBOARD DATA STARTS HERE ===", 1)[-1].strip()
+            if "=== DATA_STARTS_HERE ===" in data_only:
+                data_only = data_only.split("=== DATA_STARTS_HERE ===", 1)[-1].strip()
+            messages = history_json.get("messages", [])
+            initial_prompt_phrase = "What follow-up question do you want to ask me?"
+            parts = [
+                m.get("content", "")
+                for m in messages
+                if m.get("role") == "assistant"
+                and m.get("content")
+                and initial_prompt_phrase not in (m.get("content") or "")
+            ]
+            if parts:
+                block = "\n\n".join(parts) + "\n\n=== DATA_STARTS_HERE ===\n\n" + data_only
             else:
-                # Follow-up: check if this is an epic refinement request
-                # Epic refinement is always a follow-up, and we need to send the template on every call
-                if conversation_context and "=== EPIC INFORMATION FOR REFINEMENT ===" in conversation_context:
-                    # Epic refinement: use fresh context (includes template) on every follow-up call
-                    conversation_context_for_llm = conversation_context
-                    logger.info(f"Using fresh epic refinement context for follow-up (includes template, length: {len(conversation_context)} chars)")
-                else:
-                    # Other follow-ups: send data-only version (without content_intro prompt)
-                    # This gives LLM access to data without confusing prompt instructions
-                    data_only = history_json.get('initial_request_data_only')
-                    if data_only:
-                        conversation_context_for_llm = data_only
-                        logger.info(f"Using data-only context for follow-up (length: {len(data_only)} chars, no prompt)")
-                    else:
-                        # Fallback: use full context if data-only not available
-                        stored_context = history_json.get('initial_request_conversation_context')
-                        conversation_context_for_llm = stored_context if stored_context else conversation_context
-                        logger.warning("Data-only context not found, using full context as fallback")
-        
+                block = "=== DATA_STARTS_HERE ===\n\n" + data_only
+            conversation_context_for_llm = block
+            logger.info(f"Follow-up: sending data + {len(parts)} history message(s) ({len(conversation_context_for_llm)} chars)")
+
         # Single-epic rule: if user asked about a specific issue/epic (issue_details_context),
         # send ONLY that epic's context so we never send two epics and confuse the LLM.
-        # When the user switches to a different epic, update stored context so follow-ups use the new epic.
-        if issue_details_context:
+        # When refinement is being prepended we keep the full request data and do not overwrite.
+        if issue_details_context and not refinement_context_to_prepend and not (conversation_context and "=== EPIC INFORMATION FOR REFINEMENT ===" in conversation_context):
             conversation_context_for_llm = issue_details_context
             logger.info("Using only issue/epic from current question (single-epic); not appending stored context")
             if issue_details_issue_key and not is_initial_call:
@@ -2466,7 +2476,6 @@ Results ({row_count} row{'s' if row_count != 1 else ''}):
                     row = current_stored_key_result.fetchone()
                     stored_issue_key = row[0] if row and row[0] else None
                     if stored_issue_key != issue_details_issue_key:
-                        history_json["initial_request_conversation_context"] = issue_details_context
                         epic_marker = "=== EPIC INFORMATION FOR REFINEMENT ==="
                         issue_marker = "=== ISSUE INFORMATION ==="
                         if epic_marker in issue_details_context:
@@ -2476,7 +2485,7 @@ Results ({row_count} row{'s' if row_count != 1 else ''}):
                             idx = issue_details_context.find(issue_marker)
                             history_json["initial_request_data_only"] = issue_details_context[idx:].strip()
                         else:
-                            history_json["initial_request_data_only"] = issue_details_context
+                            logger.warning("No epic/issue marker in issue_details_context; not storing full context in history")
                         conn.execute(
                             text(f"UPDATE {config.CHAT_HISTORY_TABLE} SET issue_key = :ik, history_json = CAST(:hj AS jsonb) WHERE id = :cid"),
                             {"ik": issue_details_issue_key, "hj": json.dumps(history_json), "cid": int(conversation_id)}
@@ -2491,65 +2500,21 @@ Results ({row_count} row{'s' if row_count != 1 else ''}):
                         except Exception:
                             pass
         
-        # DIAGNOSTIC LOGGING: Verify what's in history_json for follow-up calls
-        if not is_initial_call:
-            logger.info("=" * 80)
-            logger.info("FOLLOW-UP CALL DIAGNOSTICS")
-            logger.info("=" * 80)
-            messages = history_json.get('messages', [])
-            logger.info(f"Total messages in history_json: {len(messages)}")
-            logger.info(f"SQL was attempted: {sql_was_attempted}")
-            logger.info(f"conversation_context_for_llm: {'SET' if conversation_context_for_llm else 'None'}")
-            
-            # Log first few messages to see if context is there
-            if messages:
-                logger.info("First 3 messages in history_json['messages']:")
-                for i, msg in enumerate(messages[:3]):
-                    role = msg.get('role', 'unknown')
-                    content_preview = msg.get('content', '')[:200] if msg.get('content') else '(empty)'
-                    logger.info(f"  [{i}] role={role}, content_length={len(msg.get('content', ''))}, preview={content_preview}...")
-            
-            # Check if initial context is stored
-            stored_context = history_json.get('initial_request_conversation_context')
-            if stored_context:
-                logger.info(f"initial_request_conversation_context found: length={len(stored_context)} chars")
-                logger.info(f"  Preview: {stored_context[:200]}...")
-            else:
-                logger.warning("initial_request_conversation_context NOT found in history_json")
-            
-            logger.info("=" * 80)
+        # Prepend refinement prompt + epic details; follow-up already has data + history in conversation_context_for_llm
+        if refinement_context_to_prepend:
+            conversation_context_for_llm = refinement_context_to_prepend + "\n\n" + (conversation_context_for_llm or "")
+            logger.info(f"{EMOJI_REFINEMENT} Prepended refinement context (refinement + data, length: {len(conversation_context_for_llm)} chars)")
         
-        # DIAGNOSTIC LOGGING: Show what we're sending to LLM service
-        logger.info("=" * 80)
-        logger.info("SENDING TO LLM SERVICE")
-        logger.info("=" * 80)
-        logger.info(f"question length: {len(question_to_send)} chars")
-        logger.info(f"question preview: {question_to_send[:200]}...")
-        logger.info(f"conversation_context: {'SET' if conversation_context_for_llm else 'None'}")
-        if conversation_context_for_llm:
-            logger.info(f"conversation_context length: {len(conversation_context_for_llm)} chars")
-            logger.info(f"conversation_context preview: {conversation_context_for_llm[:200]}...")
-        logger.info(f"history_json['messages'] count: {len(history_json.get('messages', []))}")
-        logger.info(f"system_message: {'SET' if system_message else 'None'}")
-        logger.info("=" * 80)
-        
-        # Inject epic/issue context as a dedicated user message so the LLM reliably sees Summary and Description
-        # (avoids the model ignoring long context prepended to the current question).
+        # Log what we send to LLM (flow visibility without debug detail)
+        logger.info(
+            f"Sending to LLM: question_len={len(question_to_send)}, "
+            f"conversation_context={'SET' if conversation_context_for_llm else 'None'}"
+            + (f" ({len(conversation_context_for_llm)} chars)" if conversation_context_for_llm else "")
+            + f", messages_count={len(history_json.get('messages', []))}"
+        )
         history_json_to_send = history_json
         conversation_context_to_send = conversation_context_for_llm
-        if conversation_context_for_llm and (
-            "=== EPIC INFORMATION FOR REFINEMENT ===" in conversation_context_for_llm
-            or "=== ISSUE INFORMATION ===" in conversation_context_for_llm
-        ):
-            epic_instruction = "Use the Epic/Issue Summary and Description below for your answer. Do not ignore this data.\n\n"
-            injected_message = {"role": "user", "content": epic_instruction + conversation_context_for_llm}
-            history_json_to_send = {
-                **history_json,
-                "messages": history_json.get("messages", []) + [injected_message]
-            }
-            conversation_context_to_send = None
-            logger.info("Injected epic/issue context as dedicated user message so LLM reliably gets summary and description")
-        
+
         llm_response = await call_llm_service(
             conversation_id=conversation_id,
             question=question_to_send,
@@ -2576,7 +2541,7 @@ Results ({row_count} row{'s' if row_count != 1 else ''}):
         logger.info("=" * 80)
         logger.info(f"Response length: {len(ai_response)} chars")
         if ai_response:
-            preview_length = min(500, len(ai_response))
+            preview_length = min(LOG_PREVIEW_CHARS, len(ai_response))
             logger.info(f"Response preview (first {preview_length} chars): {ai_response[:preview_length]}...")
             if len(ai_response) > preview_length:
                 logger.info(f"... (truncated, {len(ai_response) - preview_length} more chars)")
@@ -2609,28 +2574,27 @@ Results ({row_count} row{'s' if row_count != 1 else ''}):
                 # Don't fail the request if issue_key update fails
                 conn.rollback()
         
-        # 4. Update chat history with new exchange
-        # Remove "!" trigger from question before saving to history
-        clean_question_for_history = request.question
-        if request.question and request.question.startswith(config.SQL_AI_TRIGGER):
-            # Remove trigger from start
-            clean_question_for_history = request.question[1:].strip()
-        
-        # If SQL was triggered, append SQL results to user message
-        if sql_was_triggered and sql_formatted_for_history:
-            # Combine cleaned question + SQL results
-            user_message_with_sql = f"{clean_question_for_history}\n\n{sql_formatted_for_history}"
-            user_message_to_save = user_message_with_sql
-            logger.info(f"Appending SQL results to chat history (question length: {len(clean_question_for_history)}, SQL data length: {len(sql_formatted_for_history)})")
+        # 4. Update chat history: only refinement answers and SQL success (assistant only). No first Q&A, no normal follow-up Q&A.
+        if is_initial_call:
+            pass  # do not append first exchange to messages
+        elif refinement_context_to_prepend:
+            update_chat_history(
+                conversation_id=conversation_id,
+                user_message=None,
+                assistant_response=ai_response,
+                conn=conn,
+                append_assistant_only=True
+            )
+        elif sql_was_triggered and sql_formatted_for_history:
+            update_chat_history(
+                conversation_id=conversation_id,
+                user_message=None,
+                assistant_response=sql_formatted_for_history,
+                conn=conn,
+                append_assistant_only=True
+            )
         else:
-            user_message_to_save = clean_question_for_history
-        
-        update_chat_history(
-            conversation_id=conversation_id,
-            user_message=user_message_to_save,
-            assistant_response=ai_response,
-            conn=conn
-        )
+            pass  # normal follow-up: do not append
         
         # 5. Prepare response
         input_params = {
