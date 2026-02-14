@@ -31,6 +31,7 @@ from cache_utils import (
 )
 from build_report_service import (
     _execute_build_report_logic,
+    _merge_custom_report_filters,
     BuildReportRequest,
 )
 import config
@@ -642,91 +643,14 @@ async def execute_custom_report(
     
     Returns the same format as other reports for consistency.
     """
-    # Extract build_report_config from meta_schema
-    meta_schema = definition.get("meta_schema", {})
-    build_config = meta_schema.get("build_report_config")
-    
+    all_filters, merged_default_filters, build_config = _merge_custom_report_filters(definition, filters)
+
     if not build_config:
         raise HTTPException(
             status_code=400,
             detail=f"Custom report '{definition['report_id']}' is missing build_report_config"
         )
-    
-    # Extract default filters (PI and Team/Group) from definition
-    default_filters = definition.get("default_filters", {})
-    
-    # Merge default filters with provided filters
-    # Priority: provided filters > default filters
-    merged_default_filters = {
-        "pi": filters.get("pi") or default_filters.get("pi"),
-        "team_name": filters.get("team_name") or default_filters.get("team_name"),
-        "isGroup": filters.get("isGroup") if "isGroup" in filters else default_filters.get("isGroup", False),
-    }
-    
-    # Build filters array from build_config.filters (stored filters from Build Report)
-    # Start with stored filters from build_config
-    all_filters = list(build_config.get("filters", []))
-    
-    # Merge filter overrides from filters parameter (if provided)
-    # The filters parameter can contain filter overrides for custom report filters
-    # Format: filters["filter_overrides"] = [{"field":"status","operator":"equals","values":["Done"]}]
-    # Note: filter_overrides may come as a JSON string from query parameters
-    filter_overrides = filters.get("filter_overrides", [])
-    
-    # Parse JSON string if needed (when coming from query parameters)
-    if isinstance(filter_overrides, str):
-        try:
-            filter_overrides = json.loads(filter_overrides)
-        except (ValueError, TypeError) as e:
-            logger = logging.getLogger(__name__)
-            logger.warning(f"Failed to parse filter_overrides JSON: {filter_overrides}, error: {e}")
-            filter_overrides = []
-    
-    if filter_overrides and isinstance(filter_overrides, list):
-        # Update or add filters from overrides
-        for override in filter_overrides:
-            if not isinstance(override, dict) or "field" not in override:
-                continue
-            field_name = override.get("field")
-            # Find existing filter with same field
-            existing_index = next((i for i, f in enumerate(all_filters) if f.get("field") == field_name), None)
-            if existing_index is not None:
-                # Update existing filter
-                all_filters[existing_index] = {
-                    "field": field_name,
-                    "operator": override.get("operator", all_filters[existing_index].get("operator", "equals")),
-                    "values": override.get("values", all_filters[existing_index].get("values", []))
-                }
-            else:
-                # Add new filter (only if it's not a default filter)
-                if field_name not in ["quarter_pi", "team_name"]:
-                    all_filters.append({
-                        "field": field_name,
-                        "operator": override.get("operator", "equals"),
-                        "values": override.get("values", [])
-                    })
-    
-    # Check if PI filter already exists in stored filters
-    has_pi_filter = any(f.get("field") == "quarter_pi" for f in all_filters)
-    # Add or update PI filter from merged_default_filters
-    if merged_default_filters.get("pi"):
-        if not has_pi_filter:
-            all_filters.append({
-                "field": "quarter_pi",
-                "operator": "equals",
-                "values": [merged_default_filters["pi"]]
-            })
-        else:
-            # Update existing PI filter
-            for f in all_filters:
-                if f.get("field") == "quarter_pi":
-                    f["values"] = [merged_default_filters["pi"]]
-                    break
-    
-    # Remove team_name from all_filters if it exists (team_name is handled separately, not in filters array)
-    # This matches how the preview works - team_name is passed as a separate parameter
-    all_filters = [f for f in all_filters if f.get("field") != "team_name"]
-    
+
     # Create BuildReportRequest from build_config
     request_data = {
         "report_type": build_config.get("report_type") or definition.get("chart_type"),

@@ -5,7 +5,7 @@ Supports table, bar chart, and pie chart report types with dynamic field selecti
 
 from __future__ import annotations
 
-from typing import Any, Dict, Optional, List
+from typing import Any, Dict, List, Optional, Set, Tuple
 import logging
 import uuid
 import json
@@ -298,6 +298,160 @@ class BuildReportRequest(BaseModel):
         return self
 
 
+def _merge_custom_report_filters(
+    definition: Dict[str, Any],
+    filters: Dict[str, Any],
+) -> Tuple[List[Dict[str, Any]], Dict[str, Any], Dict[str, Any]]:
+    """
+    Merge a custom report definition with request filters.
+    Returns (all_filters, merged_defaults, build_config).
+    merged_defaults has pi, team_name, isGroup; build_config is from meta_schema.
+    Shared by execute_custom_report (reports_service) and get_build_report_issues.
+    """
+    default_filters = definition.get("default_filters") or {}
+    if isinstance(default_filters, str):
+        try:
+            default_filters = json.loads(default_filters)
+        except (ValueError, TypeError):
+            default_filters = {}
+    meta_schema = definition.get("meta_schema") or {}
+    if isinstance(meta_schema, str):
+        try:
+            meta_schema = json.loads(meta_schema)
+        except (ValueError, TypeError):
+            meta_schema = {}
+    build_config = meta_schema.get("build_report_config") or {}
+
+    merged = {
+        "pi": filters.get("pi") or default_filters.get("pi"),
+        "team_name": filters.get("team_name") or default_filters.get("team_name"),
+        "isGroup": filters.get("isGroup") if "isGroup" in filters else default_filters.get("isGroup", False),
+    }
+    all_filters = list(build_config.get("filters", []))
+
+    filter_overrides = filters.get("filter_overrides", [])
+    if isinstance(filter_overrides, str):
+        try:
+            filter_overrides = json.loads(filter_overrides)
+        except (ValueError, TypeError):
+            filter_overrides = []
+    if isinstance(filter_overrides, list):
+        for override in filter_overrides:
+            if not isinstance(override, dict) or "field" not in override:
+                continue
+            field_name = override.get("field")
+            existing_index = next((i for i, f in enumerate(all_filters) if f.get("field") == field_name), None)
+            if existing_index is not None:
+                all_filters[existing_index] = {
+                    "field": field_name,
+                    "operator": override.get("operator", all_filters[existing_index].get("operator", "equals")),
+                    "values": override.get("values", all_filters[existing_index].get("values", [])),
+                }
+            elif field_name not in ("quarter_pi", "team_name"):
+                all_filters.append({
+                    "field": field_name,
+                    "operator": override.get("operator", "equals"),
+                    "values": override.get("values", []),
+                })
+
+    has_pi_filter = any(f.get("field") == "quarter_pi" for f in all_filters)
+    if merged.get("pi"):
+        if not has_pi_filter:
+            all_filters.append({"field": "quarter_pi", "operator": "equals", "values": [merged["pi"]]})
+        else:
+            for f in all_filters:
+                if f.get("field") == "quarter_pi":
+                    f["values"] = [merged["pi"]]
+                    break
+
+    all_filters = [f for f in all_filters if f.get("field") != "team_name"]
+    return all_filters, merged, build_config
+
+
+def _build_where_from_request(
+    request: BuildReportRequest,
+    conn: Connection,
+) -> Tuple[str, Dict[str, Any], Set[str]]:
+    """
+    Build WHERE clause and params from BuildReportRequest (filters + team_name).
+    Returns (where_clause, base_params, valid_columns). Shared by report execution and issues fetch.
+    """
+    columns_query = text("""
+        SELECT column_name
+        FROM information_schema.columns
+        WHERE table_schema = 'public' AND table_name = :table_name
+    """)
+    result = conn.execute(columns_query, {"table_name": config.WORK_ITEMS_TABLE})
+    valid_columns = {row[0] for row in result}
+
+    where_conditions = []
+    base_params: Dict[str, Any] = {}
+
+    for idx, filter_item in enumerate(request.filters):
+        field = filter_item.get("field")
+        operator = filter_item.get("operator", "equals")
+        values = filter_item.get("values", [])
+
+        if not field or field not in valid_columns:
+            continue
+        if not values or (isinstance(values, list) and len(values) == 0):
+            continue
+        if isinstance(values, str) and values.strip() == "":
+            continue
+        if isinstance(values, list):
+            non_empty = [v for v in values if v is not None and (str(v).strip() if isinstance(v, str) else True)]
+            if not non_empty:
+                continue
+            values = non_empty
+        if not operator or not isinstance(operator, str):
+            operator = "equals"
+
+        field_sql = f'"{field}"'
+        if operator == "equals":
+            if isinstance(values, list) and len(values) > 1:
+                placeholders = ", ".join([f":filter_{idx}_val_{i}" for i in range(len(values))])
+                where_conditions.append(f"{field_sql} IN ({placeholders})")
+                for i, val in enumerate(values):
+                    if isinstance(val, str) and val.lower() in ("true", "false"):
+                        base_params[f"filter_{idx}_val_{i}"] = val.lower() == "true"
+                    else:
+                        base_params[f"filter_{idx}_val_{i}"] = val
+            else:
+                single_val = values[0] if isinstance(values, list) else values
+                if isinstance(single_val, str) and single_val.lower() in ("true", "false"):
+                    base_params[f"filter_{idx}_val"] = single_val.lower() == "true"
+                else:
+                    base_params[f"filter_{idx}_val"] = single_val
+                where_conditions.append(f"{field_sql} = :filter_{idx}_val")
+        elif operator == "contains":
+            single_val = values[0] if isinstance(values, list) else values
+            where_conditions.append(f"{field_sql} ILIKE :filter_{idx}_val")
+            base_params[f"filter_{idx}_val"] = f"%{single_val}%"
+        elif operator == "greater_than":
+            single_val = values[0] if isinstance(values, list) else values
+            where_conditions.append(f"{field_sql} > :filter_{idx}_val")
+            base_params[f"filter_{idx}_val"] = single_val
+        elif operator == "less_than":
+            single_val = values[0] if isinstance(values, list) else values
+            where_conditions.append(f"{field_sql} < :filter_{idx}_val")
+            base_params[f"filter_{idx}_val"] = single_val
+
+    if request.team_name:
+        try:
+            from database_team_metrics import resolve_team_names_from_filter
+            team_names_list = resolve_team_names_from_filter(request.team_name, request.isGroup or False, conn)
+            if team_names_list:
+                placeholders = ", ".join([f":team_name_{i}" for i in range(len(team_names_list))])
+                where_conditions.append(f"team_name IN ({placeholders})")
+                for i, name in enumerate(team_names_list):
+                    base_params[f"team_name_{i}"] = name
+        except Exception as e:
+            logger.warning(f"Failed to resolve team names: {e}")
+
+    where_clause = " AND ".join(where_conditions) if where_conditions else "1=1"
+    return where_clause, base_params, valid_columns
+
+
 async def _execute_build_report_logic(
     request: BuildReportRequest,
     conn: Connection
@@ -348,17 +502,10 @@ async def _execute_build_report_logic(
                     detail=f"Y-axis '{request.y_axis}' is not supported. Only 'count' is currently supported."
                 )
         
-        # 1. Validate all fields exist in the table
-        columns_query = text("""
-            SELECT column_name
-            FROM information_schema.columns
-            WHERE table_schema = 'public' 
-            AND table_name = :table_name
-        """)
-        
-        result = conn.execute(columns_query, {"table_name": config.WORK_ITEMS_TABLE})
-        valid_columns = {row[0] for row in result}
-        
+        # 1. Build WHERE from filters and get valid columns (shared helper)
+        where_clause, base_params, valid_columns = _build_where_from_request(request, conn)
+
+        # 2. Validate all fields exist in the table
         if request.report_type == "table":
             invalid_fields = [f for f in request.selected_fields if f not in valid_columns]
             if invalid_fields:
@@ -367,7 +514,6 @@ async def _execute_build_report_logic(
                     detail=f"Invalid fields: {', '.join(invalid_fields)}"
                 )
         elif request.report_type in ["bar_chart", "pie_chart"]:
-            # Validate x_axis fields
             if request.report_type == "pie_chart":
                 x_axis_list = [request.x_axis] if isinstance(request.x_axis, str) else request.x_axis
                 invalid_fields = [f for f in x_axis_list if f not in valid_columns]
@@ -376,104 +522,14 @@ async def _execute_build_report_logic(
                         status_code=400,
                         detail=f"Invalid Group By fields: {', '.join(invalid_fields)}"
                     )
-            else:  # bar_chart
+            else:
                 if request.x_axis not in valid_columns:
                     raise HTTPException(
                         status_code=400,
                         detail=f"Invalid X-axis field: {request.x_axis}"
                     )
-        
-        # 2. Build WHERE clause from filters (shared across all queries)
-        where_conditions = []
-        base_params = {}
-        
-        for idx, filter_item in enumerate(request.filters):
-            field = filter_item.get("field")
-            operator = filter_item.get("operator", "equals")
-            values = filter_item.get("values", [])
-            
-            if not field or field not in valid_columns:
-                continue
-            
-            if not values or (isinstance(values, list) and len(values) == 0):
-                continue
-            
-            # Handle empty string values (for boolean "All" option)
-            if isinstance(values, str) and values.strip() == '':
-                continue
-            
-            # Skip filters whose values are effectively empty (e.g. [""] or [" ", ""])
-            # Applying "field = ''" would return no rows; treat as "do not filter on this field"
-            if isinstance(values, list):
-                non_empty = [v for v in values if v is not None and (str(v).strip() if isinstance(v, str) else True)]
-                if not non_empty:
-                    continue
-                values = non_empty
-            
-            # Ensure operator is a valid string (handle None/null)
-            if not operator or not isinstance(operator, str):
-                operator = "equals"
-            
-            # Sanitize field name
-            field_sql = f'"{field}"'
-            
-            if operator == "equals":
-                if isinstance(values, list) and len(values) > 1:
-                    # Multiple values - use IN clause
-                    placeholders = ", ".join([f":filter_{idx}_val_{i}" for i in range(len(values))])
-                    where_conditions.append(f"{field_sql} IN ({placeholders})")
-                    for i, val in enumerate(values):
-                        # Convert boolean string to actual boolean
-                        if isinstance(val, str) and val.lower() in ['true', 'false']:
-                            base_params[f"filter_{idx}_val_{i}"] = val.lower() == 'true'
-                        else:
-                            base_params[f"filter_{idx}_val_{i}"] = val
-                else:
-                    # Single value
-                    single_val = values[0] if isinstance(values, list) else values
-                    # Convert boolean string to actual boolean
-                    if isinstance(single_val, str) and single_val.lower() in ['true', 'false']:
-                        where_conditions.append(f"{field_sql} = :filter_{idx}_val")
-                        base_params[f"filter_{idx}_val"] = single_val.lower() == 'true'
-                    else:
-                        where_conditions.append(f"{field_sql} = :filter_{idx}_val")
-                        base_params[f"filter_{idx}_val"] = single_val
-            elif operator == "contains":
-                # Contains - use ILIKE for case-insensitive search
-                single_val = values[0] if isinstance(values, list) else values
-                where_conditions.append(f"{field_sql} ILIKE :filter_{idx}_val")
-                base_params[f"filter_{idx}_val"] = f"%{single_val}%"
-            elif operator == "greater_than":
-                # Greater than - for dates and numbers
-                single_val = values[0] if isinstance(values, list) else values
-                where_conditions.append(f"{field_sql} > :filter_{idx}_val")
-                base_params[f"filter_{idx}_val"] = single_val
-            elif operator == "less_than":
-                # Less than - for dates and numbers
-                single_val = values[0] if isinstance(values, list) else values
-                where_conditions.append(f"{field_sql} < :filter_{idx}_val")
-                base_params[f"filter_{idx}_val"] = single_val
-        
-        # 2.5. Handle team_name and isGroup (translate groups to teams)
-        if request.team_name:
-            try:
-                from database_team_metrics import resolve_team_names_from_filter
-                team_names_list = resolve_team_names_from_filter(request.team_name, request.isGroup, conn)
-                
-                if team_names_list:
-                    # Add team filter to WHERE clause
-                    placeholders = ", ".join([f":team_name_{i}" for i in range(len(team_names_list))])
-                    where_conditions.append(f"team_name IN ({placeholders})")
-                    for i, name in enumerate(team_names_list):
-                        base_params[f"team_name_{i}"] = name
-            except Exception as e:
-                logger.warning(f"Failed to resolve team names: {e}")
-                # Continue without team filter if resolution fails
-        
-        # 3. Build WHERE clause
-        where_clause = " AND ".join(where_conditions) if where_conditions else "1=1"
-        
-        # 4. Handle different report types
+
+        # 3. Handle different report types
         if request.report_type == "table":
             # Table: SELECT selected fields
             selected_fields_sql = ", ".join([f'"{field}"' for field in request.selected_fields])
@@ -637,6 +693,120 @@ async def build_report(
         "meta": result.get("meta", {}),
         "message": f"Retrieved {result['count']} rows"
     }
+
+
+class BuildReportIssuesRequest(BaseModel):
+    """Request body for fetching issues for a chart segment (bar or pie slice)."""
+    report_id: str
+    filters: Dict[str, Any] = {}
+    segment: Dict[str, Any]  # x_value (required), group_by_field (optional, for pie)
+
+
+async def _fetch_build_report_issues(
+    request: BuildReportRequest,
+    x_value: Any,
+    group_by_field: Optional[str],
+    conn: Connection,
+) -> List[Dict[str, Any]]:
+    """
+    Fetch issue rows for a chart segment using the same filters as the report.
+    Returns list of dicts with: issue_key, issue_type, status, summary, created_at, updated_at, assignee_name.
+    """
+    where_clause, base_params, valid_columns = _build_where_from_request(request, conn)
+
+    # Add segment filter: bar_chart -> x_axis = x_value; pie_chart -> group_by_field = x_value
+    segment_field = None
+    if request.report_type == "bar_chart" and request.x_axis and request.x_axis in valid_columns:
+        segment_field = request.x_axis
+    elif request.report_type == "pie_chart" and group_by_field and group_by_field in valid_columns:
+        segment_field = group_by_field
+    if segment_field:
+        base_params = {**base_params, "segment_x_value": x_value}
+        segment_cond = f'"{segment_field}" = :segment_x_value'
+        final_where = f"{where_clause} AND {segment_cond}" if where_clause != "1=1" else segment_cond
+    else:
+        final_where = where_clause
+    issue_columns = ["issue_key", "issue_type", "status", "summary", "created_at", "updated_at", "assignee_name"]
+    # Only select columns that exist
+    existing_issue_cols = [c for c in issue_columns if c in valid_columns]
+    if not existing_issue_cols:
+        return []
+    selected_sql = ", ".join([f'"{c}"' for c in existing_issue_cols])
+    limit = min(getattr(settings, "DEFAULT_QUERY_LIMIT", 1000), 500)
+    base_params["limit"] = limit
+
+    query = text(f"""
+        SELECT {selected_sql}
+        FROM {config.WORK_ITEMS_TABLE}
+        WHERE {final_where}
+        ORDER BY issue_key
+        LIMIT :limit
+    """)
+    result = conn.execute(query, base_params)
+    rows = result.fetchall()
+    issues = []
+    for row in rows:
+        issues.append(dict(zip(existing_issue_cols, row)))
+    return issues
+
+
+@build_report_router.post("/reports/build/issues")
+async def get_build_report_issues(
+    body: BuildReportIssuesRequest = Body(...),
+    conn: Connection = Depends(get_db_connection),
+):
+    """
+    Return issues for a chart segment (bar or pie slice) of a custom build report.
+    Uses report_id to load definition, merges filters, and returns issues matching the segment.
+    """
+    try:
+        # Load report definition
+        query = text(f"""
+            SELECT report_id, chart_type, default_filters, meta_schema
+            FROM {config.REPORT_DEFINITIONS_TABLE}
+            WHERE report_id = :report_id AND report_type = 'custom'
+        """)
+        result = conn.execute(query, {"report_id": body.report_id})
+        row = result.fetchone()
+        if not row:
+            raise HTTPException(status_code=404, detail=f"Custom report '{body.report_id}' not found")
+
+        row_dict = dict(row._mapping)
+        all_filters, merged, build_config = _merge_custom_report_filters(row_dict, body.filters or {})
+        if not build_config:
+            raise HTTPException(status_code=400, detail="Report has no build_report_config")
+
+        report_type = build_config.get("report_type") or row_dict.get("chart_type")
+        if report_type not in ("bar_chart", "pie_chart"):
+            raise HTTPException(status_code=400, detail="Drill-down issues only supported for bar_chart and pie_chart")
+
+        x_value = body.segment.get("x_value")
+        if x_value is None:
+            raise HTTPException(status_code=400, detail="segment.x_value is required")
+        group_by_field = body.segment.get("group_by_field")
+
+        request_data = {
+            "report_type": report_type,
+            "filters": all_filters,
+            "x_axis": build_config.get("x_axis"),
+            "y_axis": build_config.get("y_axis", "count"),
+            "team_name": merged.get("team_name"),
+            "isGroup": merged.get("isGroup", False),
+        }
+        request_data = {k: v for k, v in request_data.items() if v is not None}
+        build_req = BuildReportRequest(**request_data)
+
+        issues = await _fetch_build_report_issues(build_req, x_value, group_by_field, conn)
+        return {
+            "success": True,
+            "data": {"issues": issues},
+            "message": f"Retrieved {len(issues)} issues",
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error fetching build report issues: %s", e)
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 class DefaultSortConfig(BaseModel):
