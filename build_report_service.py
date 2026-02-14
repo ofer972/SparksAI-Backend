@@ -715,14 +715,25 @@ async def _fetch_build_report_issues(
     where_clause, base_params, valid_columns = _build_where_from_request(request, conn)
 
     # Add segment filter: bar_chart -> x_axis = x_value; pie_chart -> group_by_field = x_value
+    # Treat "Unknown", null, or empty string as "not set" -> filter by IS NULL or empty string
+    def _is_unknown_or_empty(val: Any) -> bool:
+        if val is None:
+            return True
+        if isinstance(val, str) and (val.strip().lower() == "unknown" or val.strip() == ""):
+            return True
+        return False
+
     segment_field = None
     if request.report_type == "bar_chart" and request.x_axis and request.x_axis in valid_columns:
         segment_field = request.x_axis
     elif request.report_type == "pie_chart" and group_by_field and group_by_field in valid_columns:
         segment_field = group_by_field
     if segment_field:
-        base_params = {**base_params, "segment_x_value": x_value}
-        segment_cond = f'"{segment_field}" = :segment_x_value'
+        if _is_unknown_or_empty(x_value):
+            segment_cond = f'("{segment_field}" IS NULL OR "{segment_field}" = \'\')'
+        else:
+            base_params = {**base_params, "segment_x_value": x_value}
+            segment_cond = f'"{segment_field}" = :segment_x_value'
         final_where = f"{where_clause} AND {segment_cond}" if where_clause != "1=1" else segment_cond
     else:
         final_where = where_clause
@@ -781,8 +792,6 @@ async def get_build_report_issues(
             raise HTTPException(status_code=400, detail="Drill-down issues only supported for bar_chart and pie_chart")
 
         x_value = body.segment.get("x_value")
-        if x_value is None:
-            raise HTTPException(status_code=400, detail="segment.x_value is required")
         group_by_field = body.segment.get("group_by_field")
 
         request_data = {
