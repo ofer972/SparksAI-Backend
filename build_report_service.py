@@ -639,6 +639,11 @@ async def build_report(
     }
 
 
+class DefaultSortConfig(BaseModel):
+    key: str
+    direction: str = "asc"  # 'asc' | 'desc'
+
+
 class SaveCustomReportRequest(BaseModel):
     model_config = ConfigDict(extra='forbid')
     
@@ -651,6 +656,7 @@ class SaveCustomReportRequest(BaseModel):
     filters: List[Dict[str, Any]] = []
     team_name: Optional[str] = None
     isGroup: Optional[bool] = False
+    default_sort: Optional[DefaultSortConfig] = None
 
 
 @build_report_router.post("/reports/build/save")
@@ -725,6 +731,11 @@ async def save_custom_report(
         
         if request.report_type == "table" and request.selected_fields:
             build_config["selected_fields"] = request.selected_fields
+            if request.default_sort and request.default_sort.key:
+                build_config["default_sort"] = {
+                    "key": request.default_sort.key,
+                    "direction": request.default_sort.direction or "asc",
+                }
         elif request.report_type in ["bar_chart", "pie_chart"] and request.x_axis:
             build_config["x_axis"] = request.x_axis
             if request.report_type == "bar_chart" and request.y_axis:
@@ -1019,6 +1030,11 @@ async def update_custom_report(
         
         if request.report_type == "table" and request.selected_fields:
             build_config["selected_fields"] = request.selected_fields
+            if request.default_sort and request.default_sort.key:
+                build_config["default_sort"] = {
+                    "key": request.default_sort.key,
+                    "direction": request.default_sort.direction or "asc",
+                }
         elif request.report_type in ["bar_chart", "pie_chart"] and request.x_axis:
             build_config["x_axis"] = request.x_axis
             if request.report_type == "bar_chart" and request.y_axis:
