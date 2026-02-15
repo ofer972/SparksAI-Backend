@@ -233,12 +233,14 @@ def update_chat_history(
     user_message: Optional[str],
     assistant_response: str,
     conn: Connection,
-    append_assistant_only: bool = False
+    append_assistant_only: bool = False,
+    refinement_block: Optional[str] = None
 ) -> None:
     """
     Update chat history with new message(s).
-    AI chat flow: we only append refinement answers or SQL answers (assistant only);
-    we do not append normal Q&A or the first exchange.
+    Initial and normal follow-up: append user question then assistant response (chronological order).
+    Refinement and SQL: append assistant only.
+    When refinement_block is provided with append_assistant_only, store it so it appears in chronological order (dashboard first, then refinement blocks and answers in order).
     """
     try:
         query = text(f"""
@@ -260,6 +262,14 @@ def update_chat_history(
         if "messages" not in history_json:
             history_json["messages"] = []
 
+        # Store refinement block (if any) before the assistant we're about to append; index = current assistant count
+        if refinement_block and refinement_block.strip():
+            history_json.setdefault("refinement_blocks", [])
+            assistant_count = sum(1 for m in history_json["messages"] if m.get("role") == "assistant")
+            history_json["refinement_blocks"].append({
+                "before_assistant_index": assistant_count,
+                "content": refinement_block.strip()
+            })
         if append_assistant_only:
             history_json["messages"].append({"role": "assistant", "content": assistant_response})
         else:
@@ -1089,13 +1099,11 @@ def handle_epic_refinement_request(
             detail=f"Epic {epic_key} not found"
         )
     
-    # Verify it's an Epic
+    # If key from history is not an Epic (e.g. story/task from prior answer), skip refinement and continue as normal chat
     if issue_data.get("issue", {}).get("issue_type") != "Epic":
-        raise HTTPException(
-            status_code=400,
-            detail=f"Issue {epic_key} is not an Epic type"
-        )
-    
+        logger.info(f"Skipping epic refinement: issue {epic_key} is not an Epic type, continuing as normal chat")
+        return None
+
     summary = (issue_data.get("issue") or {}).get("summary") or ""
     logger.info(f"{GREEN}REFINEMENT PATH: issue_key={epic_key}, summary={summary[:LOG_PREVIEW_CHARS]}{'...' if len(summary) > LOG_PREVIEW_CHARS else ''}{RESET}")
     
@@ -2309,6 +2317,14 @@ async def ai_chat(
                                 logger.info(f"Stored data-only context for Epic Refinement follow-ups (length: {len(data_only)} chars)")
                             else:
                                 logger.warning("Epic marker not found in Epic Refinement context; not storing full context")
+                # Epic refinement: we set refinement_context_to_prepend, not conversation_context, so store from it here.
+                if 'initial_request_data_only' not in history_json and refinement_context_to_prepend and "=== EPIC INFORMATION FOR REFINEMENT ===" in refinement_context_to_prepend:
+                    epic_marker = "=== EPIC INFORMATION FOR REFINEMENT ==="
+                    idx = refinement_context_to_prepend.find(epic_marker)
+                    if idx >= 0:
+                        data_only = refinement_context_to_prepend[idx:].strip()
+                        history_json['initial_request_data_only'] = data_only
+                        logger.info(f"Stored Epic Refinement data-only context for follow-ups (epic + children, length: {len(data_only)} chars)")
 
                 # Seed initial messages into history_json for follow-ups.
                 # Do NOT add system message to history: it is sent once per request via system_message
@@ -2439,7 +2455,7 @@ Results ({row_count} row{'s' if row_count != 1 else ''}):
         elif is_initial_call:
             conversation_context_for_llm = conversation_context
         else:
-            # Follow-up: send only data (after marker). Never send the initial prompt. Strip using both markers.
+            # Follow-up: dashboard first (fixed prefix for token caching), then chronological appends (refinement blocks + assistant answers in order).
             data_only = history_json.get("initial_request_data_only") or ""
             if "=== DASHBOARD DATA STARTS HERE ===" in data_only:
                 data_only = data_only.split("=== DASHBOARD DATA STARTS HERE ===", 1)[-1].strip()
@@ -2454,12 +2470,23 @@ Results ({row_count} row{'s' if row_count != 1 else ''}):
                 and m.get("content")
                 and initial_prompt_phrase not in (m.get("content") or "")
             ]
-            if parts:
-                block = "\n\n".join(parts) + "\n\n=== DATA_STARTS_HERE ===\n\n" + data_only
+            refinement_blocks = history_json.get("refinement_blocks") or []
+            if not isinstance(refinement_blocks, list):
+                refinement_blocks = []
+            # Dashboard first (fixed), then chronological: for each assistant message, insert any refinement block(s) that belong before it, then the message.
+            dashboard_first = "=== DATA_STARTS_HERE ===\n\n" + data_only
+            chunks = []
+            for i, part in enumerate(parts):
+                for r in refinement_blocks:
+                    if isinstance(r, dict) and r.get("before_assistant_index") == i:
+                        chunks.append(r.get("content", ""))
+                chunks.append(part)
+            if chunks:
+                block = dashboard_first + "\n\n" + "\n\n".join(chunks)
             else:
-                block = "=== DATA_STARTS_HERE ===\n\n" + data_only
+                block = dashboard_first
             conversation_context_for_llm = block
-            logger.info(f"Follow-up: sending data + {len(parts)} history message(s) ({len(conversation_context_for_llm)} chars)")
+            logger.info(f"Follow-up: dashboard first + {len(parts)} answer(s) + {len(refinement_blocks)} refinement block(s) ({len(conversation_context_for_llm)} chars)")
 
         # Single-epic rule: if user asked about a specific issue/epic (issue_details_context),
         # send ONLY that epic's context so we never send two epics and confuse the LLM.
@@ -2500,10 +2527,10 @@ Results ({row_count} row{'s' if row_count != 1 else ''}):
                         except Exception:
                             pass
         
-        # Prepend refinement prompt + epic details; follow-up already has data + history in conversation_context_for_llm
+        # Append refinement (prompt + epic) at the end for this request; dashboard stayed first. Stored in refinement_blocks on update for next time.
         if refinement_context_to_prepend:
-            conversation_context_for_llm = refinement_context_to_prepend + "\n\n" + (conversation_context_for_llm or "")
-            logger.info(f"{EMOJI_REFINEMENT} Prepended refinement context (refinement + data, length: {len(conversation_context_for_llm)} chars)")
+            conversation_context_for_llm = (conversation_context_for_llm or "") + "\n\n" + refinement_context_to_prepend
+            logger.info(f"{EMOJI_REFINEMENT} Appended refinement context (refinement + epic, length: {len(refinement_context_to_prepend)} chars)")
         
         # Log what we send to LLM (flow visibility without debug detail)
         logger.info(
@@ -2574,16 +2601,23 @@ Results ({row_count} row{'s' if row_count != 1 else ''}):
                 # Don't fail the request if issue_key update fails
                 conn.rollback()
         
-        # 4. Update chat history: only refinement answers and SQL success (assistant only). No first Q&A, no normal follow-up Q&A.
+        # 4. Update chat history. Initial and normal follow-up: append user + assistant (chronological order). Refinement/SQL: assistant only.
         if is_initial_call:
-            pass  # do not append first exchange to messages
+            update_chat_history(
+                conversation_id=conversation_id,
+                user_message=request.question,
+                assistant_response=ai_response,
+                conn=conn,
+                append_assistant_only=False
+            )
         elif refinement_context_to_prepend:
             update_chat_history(
                 conversation_id=conversation_id,
-                user_message=None,
+                user_message=request.question,
                 assistant_response=ai_response,
                 conn=conn,
-                append_assistant_only=True
+                append_assistant_only=False,
+                refinement_block=refinement_context_to_prepend
             )
         elif sql_was_triggered and sql_formatted_for_history:
             update_chat_history(
@@ -2594,7 +2628,13 @@ Results ({row_count} row{'s' if row_count != 1 else ''}):
                 append_assistant_only=True
             )
         else:
-            pass  # normal follow-up: do not append
+            update_chat_history(
+                conversation_id=conversation_id,
+                user_message=request.question,
+                assistant_response=ai_response,
+                conn=conn,
+                append_assistant_only=False
+            )
         
         # 5. Prepare response
         input_params = {
