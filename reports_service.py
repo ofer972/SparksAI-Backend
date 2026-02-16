@@ -660,6 +660,12 @@ async def execute_custom_report(
         "y_axis": build_config.get("y_axis", "count"),
         "team_name": merged_default_filters.get("team_name"),
         "isGroup": merged_default_filters.get("isGroup", False),
+        "period": build_config.get("period"),
+        "lookback_months": build_config.get("lookback_months"),
+        "bar_1_metric": build_config.get("bar_1_metric"),
+        "bar_2_metric": build_config.get("bar_2_metric"),
+        "stack_by": build_config.get("stack_by"),
+        "bar_color": build_config.get("bar_color"),
     }
     
     # Remove None values for optional fields

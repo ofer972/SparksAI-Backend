@@ -5,6 +5,7 @@ Supports table, bar chart, and pie chart report types with dynamic field selecti
 
 from __future__ import annotations
 
+from datetime import datetime, date, timedelta
 from typing import Any, Dict, List, Optional, Set, Tuple
 import logging
 import uuid
@@ -271,6 +272,14 @@ class BuildReportRequest(BaseModel):
     y_axis: Optional[str] = None
     team_name: Optional[str] = None
     isGroup: Optional[bool] = False
+    # Bar chart (optional stack by and bar color)
+    bar_color: Optional[str] = None  # hex color for bar chart bar/segments
+    # Multi-bar (time-based, two metrics; optional stack by a dimension)
+    period: Optional[str] = None  # "month" | "week" | "day"
+    lookback_months: Optional[int] = None
+    bar_1_metric: Optional[str] = None
+    bar_2_metric: Optional[str] = None
+    stack_by: Optional[str] = None  # column name to stack bars by (bar_chart or multi_bar)
     
     @model_validator(mode='before')
     @classmethod
@@ -452,6 +461,44 @@ def _build_where_from_request(
     return where_clause, base_params, valid_columns
 
 
+def _build_report_run_grouped_count(
+    conn: Connection,
+    table_name: str,
+    where_clause: str,
+    params: Dict[str, Any],
+    bucket_column: str,
+    stack_by_column: Optional[str] = None,
+) -> List[Dict[str, Any]]:
+    """
+    Shared helper for Build Report: grouped count with optional stack-by dimension.
+    Used by bar_chart (single metric) and by multi_bar stacked path (called twice).
+    Returns list of {bucket, count} or {bucket, stacked: {segment: count}}.
+    """
+    bucket_sql = f'"{bucket_column}"'
+    if not stack_by_column:
+        q = text(
+            f'SELECT {bucket_sql}, COUNT(*)::int FROM {table_name} WHERE {where_clause} '
+            f'GROUP BY {bucket_sql} ORDER BY {bucket_sql}'
+        )
+        r = conn.execute(q, params)
+        return [{"bucket": row[0], "count": row[1]} for row in r]
+    seg_expr = f'COALESCE("{stack_by_column}"::text, \'(Blank)\')'
+    q = text(
+        f'SELECT {bucket_sql}, {seg_expr}, COUNT(*)::int FROM {table_name} WHERE {where_clause} '
+        f'GROUP BY {bucket_sql}, {seg_expr} ORDER BY {bucket_sql}, {seg_expr}'
+    )
+    r = conn.execute(q, params)
+    out: Dict[Any, Dict[str, int]] = {}
+    bucket_order: List[Any] = []
+    for row in r:
+        b, seg, cnt = row[0], row[1], row[2]
+        if b not in out:
+            out[b] = {}
+            bucket_order.append(b)
+        out[b][seg] = cnt
+    return [{"bucket": b, "stacked": out[b]} for b in bucket_order]
+
+
 async def _execute_build_report_logic(
     request: BuildReportRequest,
     conn: Connection
@@ -466,11 +513,24 @@ async def _execute_build_report_logic(
     """
     try:
         # Validate report type
-        if request.report_type not in ["table", "bar_chart", "pie_chart"]:
+        if request.report_type not in ["table", "bar_chart", "pie_chart", "multi_bar"]:
             raise HTTPException(
                 status_code=400,
-                detail=f"Report type '{request.report_type}' is not supported. Only 'table', 'bar_chart', and 'pie_chart' are supported."
+                detail=f"Report type '{request.report_type}' is not supported. Only 'table', 'bar_chart', 'pie_chart', and 'multi_bar' are supported."
             )
+        
+        # Multi-bar validation
+        MULTI_BAR_METRICS = {"created", "resolved", "updated"}
+        if request.report_type == "multi_bar":
+            if not request.period or request.period not in ("month", "week", "day"):
+                raise HTTPException(status_code=400, detail="Multi-bar requires period 'month', 'week', or 'day'")
+            valid_lookback = {1, 2, 3, 4, 6, 9, 12}
+            if request.lookback_months is None or request.lookback_months not in valid_lookback:
+                raise HTTPException(status_code=400, detail="Multi-bar lookback_months must be one of: 1, 2, 3, 4, 6, 9, 12")
+            if not request.bar_1_metric or request.bar_1_metric not in MULTI_BAR_METRICS:
+                raise HTTPException(status_code=400, detail=f"Multi-bar bar_1_metric must be one of: {sorted(MULTI_BAR_METRICS)}")
+            if not request.bar_2_metric or request.bar_2_metric not in MULTI_BAR_METRICS:
+                raise HTTPException(status_code=400, detail=f"Multi-bar bar_2_metric must be one of: {sorted(MULTI_BAR_METRICS)}")
         
         # Validate based on report type
         if request.report_type == "table":
@@ -505,7 +565,7 @@ async def _execute_build_report_logic(
         # 1. Build WHERE from filters and get valid columns (shared helper)
         where_clause, base_params, valid_columns = _build_where_from_request(request, conn)
 
-        # 2. Validate all fields exist in the table
+        # 2. Validate all fields exist in the table (skip for multi_bar; it uses metric keys)
         if request.report_type == "table":
             invalid_fields = [f for f in request.selected_fields if f not in valid_columns]
             if invalid_fields:
@@ -513,7 +573,19 @@ async def _execute_build_report_logic(
                     status_code=400,
                     detail=f"Invalid fields: {', '.join(invalid_fields)}"
                 )
-        elif request.report_type in ["bar_chart", "pie_chart"]:
+        elif request.report_type == "multi_bar":
+            if request.stack_by and request.stack_by not in valid_columns:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Invalid stack_by field '{request.stack_by}' for multi-bar."
+                )
+        elif request.report_type == "bar_chart":
+            if request.stack_by and request.stack_by not in valid_columns:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Invalid stack_by field '{request.stack_by}' for bar chart."
+                )
+        if request.report_type in ["bar_chart", "pie_chart"]:
             if request.report_type == "pie_chart":
                 x_axis_list = [request.x_axis] if isinstance(request.x_axis, str) else request.x_axis
                 invalid_fields = [f for f in x_axis_list if f not in valid_columns]
@@ -567,39 +639,185 @@ async def _execute_build_report_logic(
             }
             
         elif request.report_type == "bar_chart":
-            # Bar chart: single query
-            x_axis_sql = f'"{request.x_axis}"'
-            selected_fields_sql = f'{x_axis_sql}, COUNT(*) as count'
-            
-            query = text(f"""
-                SELECT {selected_fields_sql}
-                FROM {config.WORK_ITEMS_TABLE}
-                WHERE {where_clause}
-                GROUP BY {x_axis_sql}
-                ORDER BY {x_axis_sql}
-            """)
-            
-            logger.info(f"Executing bar chart query with X-axis: {request.x_axis}, Y-axis: {request.y_axis}, filters: {len(request.filters)}")
-            result = conn.execute(query, base_params)
-            rows = result.fetchall()
-            
-            # Convert rows to list of dictionaries
-            data = []
-            for row in rows:
-                data.append({
-                    "x_value": row[0],
-                    "y_value": row[1]  # count
-                })
-            
-            response = {
-                "success": True,
-                "data": {
-                    "data": data,
-                    "count": len(data),
-                    "columns": ["x_value", "y_value"]
-                },
-                "message": f"Retrieved {len(data)} chart data points"
-            }
+            # Bar chart: single metric, optional stack_by (shared helper)
+            if request.stack_by:
+                rows = _build_report_run_grouped_count(
+                    conn, config.WORK_ITEMS_TABLE, where_clause, base_params,
+                    request.x_axis, request.stack_by,
+                )
+                data = [{"x_value": r["bucket"], "stacked": r["stacked"]} for r in rows]
+                response = {
+                    "success": True,
+                    "data": {
+                        "data": data,
+                        "count": len(data),
+                        "columns": ["x_value", "stacked"]
+                    },
+                    "message": f"Retrieved {len(data)} stacked bar chart data points"
+                }
+            else:
+                x_axis_sql = f'"{request.x_axis}"'
+                selected_fields_sql = f'{x_axis_sql}, COUNT(*) as count'
+                query = text(f"""
+                    SELECT {selected_fields_sql}
+                    FROM {config.WORK_ITEMS_TABLE}
+                    WHERE {where_clause}
+                    GROUP BY {x_axis_sql}
+                    ORDER BY {x_axis_sql}
+                """)
+                logger.info(f"Executing bar chart query with X-axis: {request.x_axis}, Y-axis: {request.y_axis}, filters: {len(request.filters)}")
+                result = conn.execute(query, base_params)
+                rows = result.fetchall()
+                data = [{"x_value": row[0], "y_value": row[1]} for row in rows]
+                response = {
+                    "success": True,
+                    "data": {
+                        "data": data,
+                        "count": len(data),
+                        "columns": ["x_value", "y_value"]
+                    },
+                    "message": f"Retrieved {len(data)} chart data points"
+                }
+        
+        elif request.report_type == "multi_bar":
+            # Time-based multi-bar: two independent metrics (e.g. issues created, issues resolved) per period
+            metric_to_column = {"created": "created_at", "resolved": "resolved_at", "updated": "updated_at"}
+            period_type = request.period
+            lookback = request.lookback_months
+            end_date = date.today()
+            start_date = end_date - timedelta(days=lookback * 31)
+            periods_list: List[Tuple[date, str]] = []
+            if period_type == "month":
+                current = date(start_date.year, start_date.month, 1)
+                end_month = date(end_date.year, end_date.month, 1)
+                while current <= end_month:
+                    periods_list.append((current, current.strftime("%b %Y")))
+                    if current.month == 12:
+                        current = date(current.year + 1, 1, 1)
+                    else:
+                        current = date(current.year, current.month + 1, 1)
+            elif period_type == "day":
+                current = start_date
+                while current <= end_date:
+                    periods_list.append((current, current.strftime("%Y-%m-%d")))
+                    current += timedelta(days=1)
+            else:
+                current = start_date
+                seen_weeks: Set[date] = set()
+                while current <= end_date:
+                    week_start = current - timedelta(days=current.weekday())
+                    if week_start not in seen_weeks:
+                        seen_weeks.add(week_start)
+                        periods_list.append((week_start, week_start.strftime("%Y-%m-%d")))
+                    current += timedelta(days=1)
+                periods_list.sort(key=lambda x: x[0])
+            if not periods_list:
+                fmt = "%b %Y" if period_type == "month" else "%Y-%m-%d"
+                periods_list = [(start_date, start_date.strftime(fmt))]
+            period_dates = [p[0] for p in periods_list]
+            period_labels = [p[1] for p in periods_list]
+            start_ts = datetime.combine(start_date, datetime.min.time())
+            if period_type == "month":
+                next_month = date(end_date.year + 1, 1, 1) if end_date.month == 12 else date(end_date.year, end_date.month + 1, 1)
+                end_ts = datetime.combine(next_month, datetime.min.time())
+            else:
+                end_ts = datetime.combine(end_date, datetime.max.time())
+            mb_params = {**base_params, "mb_start": start_ts, "mb_end": end_ts}
+
+            def run_metric_query(col: str) -> Dict[date, int]:
+                if period_type == "month":
+                    date_cond = f'"{col}" >= :mb_start AND "{col}" < :mb_end'
+                    trunc_sql = "month"
+                elif period_type == "day":
+                    date_cond = f'"{col}" >= :mb_start AND "{col}" <= :mb_end'
+                    trunc_sql = "day"
+                else:
+                    date_cond = f'"{col}" >= :mb_start AND "{col}" <= :mb_end'
+                    trunc_sql = "week"
+                where_parts = [where_clause, f'"{col}" IS NOT NULL', date_cond]
+                full_where = " AND ".join(where_parts)
+                q = text(f"""
+                    SELECT date_trunc('{trunc_sql}', "{col}")::date AS p, COUNT(*)::int
+                    FROM {config.WORK_ITEMS_TABLE}
+                    WHERE {full_where}
+                    GROUP BY 1
+                    ORDER BY 1
+                """)
+                r = conn.execute(q, mb_params)
+                return {row[0]: row[1] for row in r if row[0]}
+
+            stack_by_col = request.stack_by
+            col1 = metric_to_column[request.bar_1_metric]
+            col2 = metric_to_column[request.bar_2_metric]
+
+            if not stack_by_col:
+                counts1 = run_metric_query(col1)
+                counts2 = run_metric_query(col2)
+                data = []
+                for i, pd in enumerate(period_dates):
+                    data.append({
+                        "x_value": period_labels[i],
+                        "bar_1_value": counts1.get(pd, 0),
+                        "bar_2_value": counts2.get(pd, 0),
+                    })
+                response = {
+                    "success": True,
+                    "data": {
+                        "data": data,
+                        "count": len(data),
+                        "columns": ["x_value", "bar_1_value", "bar_2_value"]
+                    },
+                    "message": f"Retrieved {len(data)} multi-bar data points"
+                }
+            else:
+                # Stacked: group by period and stack_by column; return bar_1_stacked / bar_2_stacked per period
+                def run_metric_query_stacked(col: str) -> Dict[date, Dict[str, int]]:
+                    if period_type == "month":
+                        date_cond = f'"{col}" >= :mb_start AND "{col}" < :mb_end'
+                        trunc_sql = "month"
+                    elif period_type == "day":
+                        date_cond = f'"{col}" >= :mb_start AND "{col}" <= :mb_end'
+                        trunc_sql = "day"
+                    else:
+                        date_cond = f'"{col}" >= :mb_start AND "{col}" <= :mb_end'
+                        trunc_sql = "week"
+                    where_parts = [where_clause, f'"{col}" IS NOT NULL', date_cond]
+                    full_where = " AND ".join(where_parts)
+                    seg_expr = f'COALESCE("{stack_by_col}"::text, \'(Blank)\')'
+                    q = text(f"""
+                        SELECT date_trunc('{trunc_sql}', "{col}")::date AS p, {seg_expr} AS seg, COUNT(*)::int
+                        FROM {config.WORK_ITEMS_TABLE}
+                        WHERE {full_where}
+                        GROUP BY 1, 2
+                        ORDER BY 1, 2
+                    """)
+                    r = conn.execute(q, mb_params)
+                    out: Dict[date, Dict[str, int]] = {}
+                    for row in r:
+                        p, seg, cnt = row[0], row[1], row[2]
+                        if p not in out:
+                            out[p] = {}
+                        out[p][seg] = cnt
+                    return out
+
+                stacked1 = run_metric_query_stacked(col1)
+                stacked2 = run_metric_query_stacked(col2)
+                data = []
+                for i, pd in enumerate(period_dates):
+                    data.append({
+                        "x_value": period_labels[i],
+                        "bar_1_stacked": stacked1.get(pd, {}),
+                        "bar_2_stacked": stacked2.get(pd, {}),
+                    })
+                response = {
+                    "success": True,
+                    "data": {
+                        "data": data,
+                        "count": len(data),
+                        "columns": ["x_value", "bar_1_stacked", "bar_2_stacked"]
+                    },
+                    "message": f"Retrieved {len(data)} stacked multi-bar data points"
+                }
             
         else:  # pie_chart
             # Pie chart: multiple queries (one per x_axis field)
@@ -832,10 +1050,19 @@ class SaveCustomReportRequest(BaseModel):
     selected_fields: Optional[List[str]] = None
     x_axis: Optional[Any] = None
     y_axis: Optional[str] = None
+    bar_color: Optional[str] = None
+    stack_by: Optional[str] = None
     filters: List[Dict[str, Any]] = []
     team_name: Optional[str] = None
     isGroup: Optional[bool] = False
     default_sort: Optional[DefaultSortConfig] = None
+    period: Optional[str] = None
+    lookback_months: Optional[int] = None
+    bar_1_metric: Optional[str] = None
+    bar_2_metric: Optional[str] = None
+    bar_1_color: Optional[str] = None
+    bar_2_color: Optional[str] = None
+    stack_by: Optional[str] = None
 
 
 @build_report_router.post("/reports/build/save")
@@ -917,8 +1144,24 @@ async def save_custom_report(
                 }
         elif request.report_type in ["bar_chart", "pie_chart"] and request.x_axis:
             build_config["x_axis"] = request.x_axis
-            if request.report_type == "bar_chart" and request.y_axis:
-                build_config["y_axis"] = request.y_axis
+            if request.report_type == "bar_chart":
+                if request.y_axis:
+                    build_config["y_axis"] = request.y_axis
+                if request.stack_by:
+                    build_config["stack_by"] = request.stack_by
+                if request.bar_color:
+                    build_config["bar_color"] = request.bar_color
+        elif request.report_type == "multi_bar" and request.period and request.bar_1_metric and request.bar_2_metric:
+            build_config["period"] = request.period
+            build_config["lookback_months"] = request.lookback_months or 6
+            build_config["bar_1_metric"] = request.bar_1_metric
+            build_config["bar_2_metric"] = request.bar_2_metric
+            if request.bar_1_color:
+                build_config["bar_1_color"] = request.bar_1_color
+            if request.bar_2_color:
+                build_config["bar_2_color"] = request.bar_2_color
+            if request.stack_by:
+                build_config["stack_by"] = request.stack_by
         
         meta_schema = {
             "build_report_config": build_config
@@ -1216,8 +1459,26 @@ async def update_custom_report(
                 }
         elif request.report_type in ["bar_chart", "pie_chart"] and request.x_axis:
             build_config["x_axis"] = request.x_axis
-            if request.report_type == "bar_chart" and request.y_axis:
-                build_config["y_axis"] = request.y_axis
+            if request.report_type == "bar_chart":
+                if request.y_axis:
+                    build_config["y_axis"] = request.y_axis
+                if request.stack_by:
+                    build_config["stack_by"] = request.stack_by
+                if request.bar_color:
+                    build_config["bar_color"] = request.bar_color
+        elif request.report_type == "multi_bar" and request.period and request.bar_1_metric and request.bar_2_metric:
+            build_config["period"] = request.period
+            build_config["lookback_months"] = request.lookback_months or 6
+            build_config["bar_1_metric"] = request.bar_1_metric
+            build_config["bar_2_metric"] = request.bar_2_metric
+            if request.bar_1_color:
+                build_config["bar_1_color"] = request.bar_1_color
+            if request.bar_2_color:
+                build_config["bar_2_color"] = request.bar_2_color
+            if request.stack_by:
+                build_config["stack_by"] = request.stack_by
+            elif "stack_by" in build_config:
+                del build_config["stack_by"]
         
         meta_schema = {
             "build_report_config": build_config
