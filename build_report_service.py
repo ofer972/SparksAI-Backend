@@ -905,7 +905,9 @@ async def _execute_build_report_logic(
                         history_filter_where, history_filter_params = _build_history_filters_where(request.filters)
                         trend_values = []
                         for i, period_end in enumerate(period_end_dates):
-                            params_i = {"period_end": period_end, **trend_params_base, **history_filter_params}
+                            # Use latest available snapshot: cap to today so current period doesn't use a future date
+                            snapshot_date = min(period_end, end_date)
+                            params_i = {"period_end": snapshot_date, **trend_params_base, **history_filter_params}
                             q_trend = text(f"""
                                 SELECT COUNT(DISTINCT jh.issue_key)::int
                                 FROM public.jira_issue_history jh
