@@ -530,8 +530,12 @@ def _build_report_run_grouped_count(
     return [{"bucket": b, "stacked": out[b]} for b in bucket_order]
 
 
-# Allowed columns on jira_issue_history for trend line filter (plan: BUILD_REPORT_TREND_LINE_PLAN)
-TREND_LINE_ALLOWED_FIELDS = {"status_category", "status", "team_name", "issuetype", "quarter_pi", "flagged", "story_points"}
+# Columns that exist on jira_issue_history (for applying report filters to the trend query).
+HISTORY_TABLE_COLUMNS = {"status_category", "status", "team_name", "issuetype", "quarter_pi", "flagged", "story_points"}
+# Map report field name -> history table column name when different (e.g. work items use issue_type, history uses issuetype).
+REPORT_FIELD_TO_HISTORY_COLUMN = {"issue_type": "issuetype"}
+# Allowed field for the trend metric (trend_line_field) — must be a column on history.
+TREND_LINE_ALLOWED_FIELDS = HISTORY_TABLE_COLUMNS
 
 
 def _build_trend_history_where(
@@ -590,18 +594,20 @@ def _build_history_filters_where(
 ) -> Tuple[str, Dict[str, Any]]:
     """
     Build WHERE fragment from report filters for jira_issue_history.
-    Only includes filters whose field is in TREND_LINE_ALLOWED_FIELDS (exists on history table).
-    Returns (where_fragment, params). Empty fragment if no filters apply.
+    Applies all report filters (same as bar chart); uses history column names with
+    REPORT_FIELD_TO_HISTORY_COLUMN mapping. Skips only filters for columns that don't exist on history.
     """
     conditions = []
     params: Dict[str, Any] = {}
-    allowed = TREND_LINE_ALLOWED_FIELDS
     for idx, filter_item in enumerate(filters):
         field = filter_item.get("field")
+        if not field:
+            continue
+        history_col = REPORT_FIELD_TO_HISTORY_COLUMN.get(field, field)
+        if history_col not in HISTORY_TABLE_COLUMNS:
+            continue
         operator = filter_item.get("operator", "equals")
         values = filter_item.get("values", [])
-        if not field or field not in allowed:
-            continue
         if not values or (isinstance(values, list) and len(values) == 0):
             continue
         if isinstance(values, list):
@@ -609,7 +615,7 @@ def _build_history_filters_where(
             if not values:
                 continue
         operator = (operator or "equals").strip() or "equals"
-        field_sql = f'jh."{field}"'
+        field_sql = f'jh."{history_col}"'
         pfx = f"{param_prefix}_{idx}"
         if operator == "equals":
             if len(values) > 1:
@@ -903,19 +909,54 @@ async def _execute_build_report_logic(
                             team_names_list,
                         )
                         history_filter_where, history_filter_params = _build_history_filters_where(request.filters)
-                        trend_values = []
-                        for i, period_end in enumerate(period_end_dates):
-                            # Use latest available snapshot: cap to today so current period doesn't use a future date
-                            snapshot_date = min(period_end, end_date)
-                            params_i = {"period_end": snapshot_date, **trend_params_base, **history_filter_params}
-                            q_trend = text(f"""
-                                SELECT COUNT(DISTINCT jh.issue_key)::int
-                                FROM public.jira_issue_history jh
-                                WHERE jh.snapshot_date::date = :period_end AND ({trend_where}) AND ({history_filter_where})
-                            """)
-                            r_trend = conn.execute(q_trend, params_i)
-                            row_t = r_trend.fetchone()
-                            trend_values.append(row_t[0] if row_t else 0)
+                        # Trend line: one query for all periods. had_snapshot_in_range = True means use count (0 is real);
+                        # False means no snapshot for that period → back-fill with first period's value so we don't show fake 0.
+                        period_ends_capped = [min(p, end_date) for p in period_end_dates]
+                        params_trend = {
+                            "period_ends": period_ends_capped,
+                            "end_date_cap": end_date,
+                            **trend_params_base,
+                            **history_filter_params,
+                        }
+                        q_trend = text(f"""
+                            SELECT
+                                (SELECT MAX(j2.snapshot_date)::date
+                                 FROM public.jira_issue_history j2
+                                 WHERE j2.snapshot_date::date <= t.period_end
+                                   AND j2.snapshot_date::date <= :end_date_cap) IS NOT NULL AS had_snapshot_in_range,
+                                (SELECT COUNT(DISTINCT jh.issue_key)::int
+                                 FROM public.jira_issue_history jh
+                                 WHERE jh.snapshot_date::date = (
+                                   SELECT COALESCE(
+                                     (SELECT MAX(j2b.snapshot_date)::date
+                                      FROM public.jira_issue_history j2b
+                                      WHERE j2b.snapshot_date::date <= t.period_end
+                                        AND j2b.snapshot_date::date <= :end_date_cap),
+                                     (SELECT MIN(j3.snapshot_date)::date FROM public.jira_issue_history j3)
+                                   )
+                                 )
+                                 AND ({trend_where}) AND ({history_filter_where})
+                                ) AS cnt
+                            FROM unnest(CAST(:period_ends AS date[])) WITH ORDINALITY AS t(period_end, ord)
+                            ORDER BY t.ord
+                        """)
+                        r_trend = conn.execute(q_trend, params_trend)
+                        rows = r_trend.fetchall()
+                        raw_trend: List[Optional[int]] = []
+                        for row in rows:
+                            if row and row[0] is True:
+                                raw_trend.append(row[1] if row[1] is not None else 0)
+                            else:
+                                raw_trend.append(None)
+                        # Pass 2: back-fill periods with no snapshot (use first period that had a snapshot)
+                        trend_values = list(raw_trend)
+                        first_known_idx = next((i for i, v in enumerate(trend_values) if v is not None), None)
+                        if first_known_idx is not None:
+                            first_known_val = trend_values[first_known_idx]
+                            for j in range(first_known_idx):
+                                trend_values[j] = first_known_val
+                        else:
+                            trend_values = [0] * len(trend_values)
 
             def run_metric_query(col: str) -> Dict[date, int]:
                 if period_type == "month":
