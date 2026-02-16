@@ -5,6 +5,7 @@ Supports table, bar chart, and pie chart report types with dynamic field selecti
 
 from __future__ import annotations
 
+from calendar import monthrange
 from datetime import datetime, date, timedelta
 from typing import Any, Dict, List, Optional, Set, Tuple
 import logging
@@ -17,6 +18,7 @@ from sqlalchemy import text
 from pydantic import BaseModel, model_validator, ConfigDict
 
 from database_connection import get_db_connection
+from cache_utils import invalidate_report_cache
 import config
 from config import get_jira_url
 from global_settings_loader import settings
@@ -280,7 +282,14 @@ class BuildReportRequest(BaseModel):
     bar_1_metric: Optional[str] = None
     bar_2_metric: Optional[str] = None
     stack_by: Optional[str] = None  # column name to stack bars by (bar_chart or multi_bar)
-    
+    # Trend line (multi_bar only): count per period from jira_issue_history as of period end
+    trend_line_enabled: Optional[bool] = False
+    trend_line_field: Optional[str] = None
+    trend_line_operator: Optional[str] = None
+    trend_line_values: Optional[List[Any]] = None
+    trend_line_label: Optional[str] = None
+    trend_line_color: Optional[str] = None
+
     @model_validator(mode='before')
     @classmethod
     def validate_x_axis_before(cls, data: Any) -> Any:
@@ -336,6 +345,21 @@ def _merge_custom_report_filters(
         "team_name": filters.get("team_name") or default_filters.get("team_name"),
         "isGroup": filters.get("isGroup") if "isGroup" in filters else default_filters.get("isGroup", False),
     }
+    # Normalize selectedTreeValue/selectedTreeLabel into team_name and isGroup so that
+    # resolve_team_names_from_filter can expand groups to a list of teams. Without this,
+    # the client may send only selectedTreeValue ("group:1") and selectedTreeLabel ("R&D All"),
+    # and we would keep report default team_name, producing a single-team WHERE and wrong counts.
+    # Only apply when the request did not send an explicit team_name (report active filter);
+    # otherwise the report's team/group selection wins over the top-bar tree.
+    if filters.get("selectedTreeValue") and not (filters.get("team_name") and str(filters.get("team_name")).strip()):
+        sv = str(filters["selectedTreeValue"]).strip()
+        if sv:
+            is_group = sv.lower().startswith("group:")
+            label = filters.get("selectedTreeLabel")
+            name = (str(label).strip() if label and isinstance(label, str) else None) or sv
+            if name:
+                merged["team_name"] = name
+                merged["isGroup"] = is_group
     all_filters = list(build_config.get("filters", []))
 
     filter_overrides = filters.get("filter_overrides", [])
@@ -349,6 +373,9 @@ def _merge_custom_report_filters(
             if not isinstance(override, dict) or "field" not in override:
                 continue
             field_name = override.get("field")
+            ov_values = override.get("values", [])
+            if isinstance(ov_values, str):
+                ov_values = [ov_values] if ov_values else []
             existing_index = next((i for i, f in enumerate(all_filters) if f.get("field") == field_name), None)
             if existing_index is not None:
                 all_filters[existing_index] = {
@@ -362,6 +389,10 @@ def _merge_custom_report_filters(
                     "operator": override.get("operator", "equals"),
                     "values": override.get("values", []),
                 })
+            if field_name == "quarter_pi" and ov_values:
+                merged["pi"] = ov_values[0] if isinstance(ov_values, list) else ov_values
+            if field_name == "team_name" and ov_values:
+                merged["team_name"] = ov_values[0] if isinstance(ov_values, list) else ov_values
 
     has_pi_filter = any(f.get("field") == "quarter_pi" for f in all_filters)
     if merged.get("pi"):
@@ -499,6 +530,111 @@ def _build_report_run_grouped_count(
     return [{"bucket": b, "stacked": out[b]} for b in bucket_order]
 
 
+# Allowed columns on jira_issue_history for trend line filter (plan: BUILD_REPORT_TREND_LINE_PLAN)
+TREND_LINE_ALLOWED_FIELDS = {"status_category", "status", "team_name", "issuetype", "quarter_pi", "flagged", "story_points"}
+
+
+def _build_trend_history_where(
+    trend_field: str,
+    trend_operator: str,
+    trend_values: List[Any],
+    team_names_list: Optional[List[str]],
+    param_prefix: str = "trend",
+) -> Tuple[str, Dict[str, Any]]:
+    """
+    Build WHERE fragment and params for jira_issue_history trend query.
+    Returns (where_fragment, params). Fragment does NOT include snapshot_date condition.
+    """
+    conditions = []
+    params: Dict[str, Any] = {}
+    field_sql = f'"{trend_field}"'
+    if trend_operator == "equals":
+        if isinstance(trend_values, list) and len(trend_values) > 1:
+            placeholders = ", ".join([f":{param_prefix}_val_{i}" for i in range(len(trend_values))])
+            conditions.append(f"{field_sql} IN ({placeholders})")
+            for i, val in enumerate(trend_values):
+                params[f"{param_prefix}_val_{i}"] = val
+        else:
+            single = trend_values[0] if isinstance(trend_values, list) else trend_values
+            params[f"{param_prefix}_val"] = single
+            conditions.append(f"{field_sql} = :{param_prefix}_val")
+    elif trend_operator == "contains":
+        single = trend_values[0] if isinstance(trend_values, list) else trend_values
+        conditions.append(f"{field_sql} ILIKE :{param_prefix}_val")
+        params[f"{param_prefix}_val"] = f"%{single}%"
+    elif trend_operator == "greater_than":
+        single = trend_values[0] if isinstance(trend_values, list) else trend_values
+        conditions.append(f"{field_sql} > :{param_prefix}_val")
+        params[f"{param_prefix}_val"] = single
+    elif trend_operator == "less_than":
+        single = trend_values[0] if isinstance(trend_values, list) else trend_values
+        conditions.append(f"{field_sql} < :{param_prefix}_val")
+        params[f"{param_prefix}_val"] = single
+    else:
+        # default equals
+        single = trend_values[0] if isinstance(trend_values, list) else trend_values
+        params[f"{param_prefix}_val"] = single
+        conditions.append(f"{field_sql} = :{param_prefix}_val")
+    if team_names_list:
+        team_placeholders = ", ".join([f":th_{i}" for i in range(len(team_names_list))])
+        conditions.append(f"jh.team_name IN ({team_placeholders})")
+        for i, name in enumerate(team_names_list):
+            params[f"th_{i}"] = name
+    where = " AND ".join(conditions)
+    return where, params
+
+
+def _build_history_filters_where(
+    filters: List[Dict[str, Any]],
+    param_prefix: str = "hist_f",
+) -> Tuple[str, Dict[str, Any]]:
+    """
+    Build WHERE fragment from report filters for jira_issue_history.
+    Only includes filters whose field is in TREND_LINE_ALLOWED_FIELDS (exists on history table).
+    Returns (where_fragment, params). Empty fragment if no filters apply.
+    """
+    conditions = []
+    params: Dict[str, Any] = {}
+    allowed = TREND_LINE_ALLOWED_FIELDS
+    for idx, filter_item in enumerate(filters):
+        field = filter_item.get("field")
+        operator = filter_item.get("operator", "equals")
+        values = filter_item.get("values", [])
+        if not field or field not in allowed:
+            continue
+        if not values or (isinstance(values, list) and len(values) == 0):
+            continue
+        if isinstance(values, list):
+            values = [v for v in values if v is not None and (str(v).strip() if isinstance(v, str) else True)]
+            if not values:
+                continue
+        operator = (operator or "equals").strip() or "equals"
+        field_sql = f'jh."{field}"'
+        pfx = f"{param_prefix}_{idx}"
+        if operator == "equals":
+            if len(values) > 1:
+                placeholders = ", ".join([f":{pfx}_{i}" for i in range(len(values))])
+                conditions.append(f"{field_sql} IN ({placeholders})")
+                for i, val in enumerate(values):
+                    params[f"{pfx}_{i}"] = val
+            else:
+                params[pfx] = values[0]
+                conditions.append(f"{field_sql} = :{pfx}")
+        elif operator == "contains":
+            params[pfx] = f"%{values[0]}%"
+            conditions.append(f"{field_sql} ILIKE :{pfx}")
+        elif operator == "greater_than":
+            params[pfx] = values[0]
+            conditions.append(f"{field_sql} > :{pfx}")
+        elif operator == "less_than":
+            params[pfx] = values[0]
+            conditions.append(f"{field_sql} < :{pfx}")
+        else:
+            params[pfx] = values[0]
+            conditions.append(f"{field_sql} = :{pfx}")
+    return " AND ".join(conditions) if conditions else "1=1", params
+
+
 async def _execute_build_report_logic(
     request: BuildReportRequest,
     conn: Connection
@@ -531,6 +667,18 @@ async def _execute_build_report_logic(
                 raise HTTPException(status_code=400, detail=f"Multi-bar bar_1_metric must be one of: {sorted(MULTI_BAR_METRICS)}")
             if not request.bar_2_metric or request.bar_2_metric not in MULTI_BAR_METRICS:
                 raise HTTPException(status_code=400, detail=f"Multi-bar bar_2_metric must be one of: {sorted(MULTI_BAR_METRICS)}")
+            # Trend line validation (optional)
+            if getattr(request, "trend_line_enabled", False):
+                if not getattr(request, "trend_line_field", None) or not str(request.trend_line_field).strip():
+                    raise HTTPException(status_code=400, detail="Trend line requires trend_line_field when trend_line_enabled is true")
+                vals = getattr(request, "trend_line_values", None)
+                if not vals or (isinstance(vals, list) and len(vals) == 0):
+                    raise HTTPException(status_code=400, detail="Trend line requires at least one trend_line_value when trend_line_enabled is true")
+                if request.trend_line_field not in TREND_LINE_ALLOWED_FIELDS:
+                    raise HTTPException(
+                        status_code=400,
+                        detail=f"trend_line_field must be one of: {sorted(TREND_LINE_ALLOWED_FIELDS)}"
+                    )
         
         # Validate based on report type
         if request.report_type == "table":
@@ -724,6 +872,49 @@ async def _execute_build_report_logic(
                 end_ts = datetime.combine(end_date, datetime.max.time())
             mb_params = {**base_params, "mb_start": start_ts, "mb_end": end_ts}
 
+            # Period end dates for trend line (snapshot date = end of each period)
+            def _period_end(d: date, period_kind: str) -> date:
+                if period_kind == "month":
+                    _, last_day = monthrange(d.year, d.month)
+                    return date(d.year, d.month, last_day)
+                if period_kind == "week":
+                    return d + timedelta(days=6)
+                return d  # day
+            period_end_dates = [_period_end(pd, period_type) for pd in period_dates]
+
+            # Trend line from jira_issue_history (count matching filter as of period end)
+            trend_values: Optional[List[int]] = None
+            if getattr(request, "trend_line_enabled", False) and getattr(request, "trend_line_field", None):
+                tvals = getattr(request, "trend_line_values", None)
+                if tvals and (isinstance(tvals, list) and len(tvals) > 0 or not isinstance(tvals, list)):
+                    vals_list = tvals if isinstance(tvals, list) else [tvals]
+                    if request.trend_line_field in TREND_LINE_ALLOWED_FIELDS:
+                        try:
+                            from database_team_metrics import resolve_team_names_from_filter
+                            team_names_list = resolve_team_names_from_filter(
+                                request.team_name, request.isGroup or False, conn
+                            ) if request.team_name else None
+                        except Exception:
+                            team_names_list = None
+                        trend_where, trend_params_base = _build_trend_history_where(
+                            request.trend_line_field,
+                            getattr(request, "trend_line_operator", None) or "equals",
+                            vals_list,
+                            team_names_list,
+                        )
+                        history_filter_where, history_filter_params = _build_history_filters_where(request.filters)
+                        trend_values = []
+                        for i, period_end in enumerate(period_end_dates):
+                            params_i = {"period_end": period_end, **trend_params_base, **history_filter_params}
+                            q_trend = text(f"""
+                                SELECT COUNT(DISTINCT jh.issue_key)::int
+                                FROM public.jira_issue_history jh
+                                WHERE jh.snapshot_date::date = :period_end AND ({trend_where}) AND ({history_filter_where})
+                            """)
+                            r_trend = conn.execute(q_trend, params_i)
+                            row_t = r_trend.fetchone()
+                            trend_values.append(row_t[0] if row_t else 0)
+
             def run_metric_query(col: str) -> Dict[date, int]:
                 if period_type == "month":
                     date_cond = f'"{col}" >= :mb_start AND "{col}" < :mb_end'
@@ -754,21 +945,29 @@ async def _execute_build_report_logic(
                 counts1 = run_metric_query(col1)
                 counts2 = run_metric_query(col2)
                 data = []
+                columns = ["x_value", "bar_1_value", "bar_2_value"]
                 for i, pd in enumerate(period_dates):
-                    data.append({
+                    row = {
                         "x_value": period_labels[i],
                         "bar_1_value": counts1.get(pd, 0),
                         "bar_2_value": counts2.get(pd, 0),
-                    })
+                    }
+                    if trend_values is not None:
+                        row["trend_value"] = trend_values[i]
+                    data.append(row)
+                if trend_values is not None:
+                    columns.append("trend_value")
                 response = {
                     "success": True,
                     "data": {
                         "data": data,
                         "count": len(data),
-                        "columns": ["x_value", "bar_1_value", "bar_2_value"]
+                        "columns": columns
                     },
                     "message": f"Retrieved {len(data)} multi-bar data points"
                 }
+                if trend_values is not None:
+                    response["data"]["trend_line_label"] = (getattr(request, "trend_line_label", None) or "").strip() or "Trend"
             else:
                 # Stacked: group by period and stack_by column; return bar_1_stacked / bar_2_stacked per period
                 def run_metric_query_stacked(col: str) -> Dict[date, Dict[str, int]]:
@@ -803,21 +1002,29 @@ async def _execute_build_report_logic(
                 stacked1 = run_metric_query_stacked(col1)
                 stacked2 = run_metric_query_stacked(col2)
                 data = []
+                columns_stacked = ["x_value", "bar_1_stacked", "bar_2_stacked"]
                 for i, pd in enumerate(period_dates):
-                    data.append({
+                    row = {
                         "x_value": period_labels[i],
                         "bar_1_stacked": stacked1.get(pd, {}),
                         "bar_2_stacked": stacked2.get(pd, {}),
-                    })
+                    }
+                    if trend_values is not None:
+                        row["trend_value"] = trend_values[i]
+                    data.append(row)
+                if trend_values is not None:
+                    columns_stacked.append("trend_value")
                 response = {
                     "success": True,
                     "data": {
                         "data": data,
                         "count": len(data),
-                        "columns": ["x_value", "bar_1_stacked", "bar_2_stacked"]
+                        "columns": columns_stacked
                     },
                     "message": f"Retrieved {len(data)} stacked multi-bar data points"
                 }
+                if trend_values is not None:
+                    response["data"]["trend_line_label"] = (getattr(request, "trend_line_label", None) or "").strip() or "Trend"
             
         else:  # pie_chart
             # Pie chart: multiple queries (one per x_axis field)
@@ -871,13 +1078,16 @@ async def _execute_build_report_logic(
             meta["jira_url"] = jira_settings["url"]
         
         # Return in standard format expected by get_report_instance
-        # Format: {"data": actual_data, "meta": {...}}
-        return {
+        # Format: {"data": actual_data, "count", "columns", "meta", optional "trend_line_label"}
+        out = {
             "data": response["data"]["data"],
             "count": response["data"]["count"],
             "columns": response["data"]["columns"],
-            "meta": meta
+            "meta": meta,
         }
+        if isinstance(response.get("data"), dict) and "trend_line_label" in response["data"]:
+            out["trend_line_label"] = response["data"]["trend_line_label"]
+        return out
     
     except HTTPException:
         raise
@@ -917,7 +1127,56 @@ class BuildReportIssuesRequest(BaseModel):
     """Request body for fetching issues for a chart segment (bar or pie slice)."""
     report_id: str
     filters: Dict[str, Any] = {}
-    segment: Dict[str, Any]  # x_value (required), group_by_field (optional, for pie)
+    segment: Dict[str, Any]  # x_value (required), group_by_field (optional, for pie), stack_by_value (optional, for stacked bar)
+
+
+def _multi_bar_period_list(period_type: str, lookback_months: int) -> List[Tuple[date, str]]:
+    """Return (period_date, period_label) list for multi_bar, same logic as _execute_build_report_logic."""
+    end_date = date.today()
+    start_date = end_date - timedelta(days=lookback_months * 31)
+    periods_list: List[Tuple[date, str]] = []
+    if period_type == "month":
+        current = date(start_date.year, start_date.month, 1)
+        end_month = date(end_date.year, end_date.month, 1)
+        while current <= end_month:
+            periods_list.append((current, current.strftime("%b %Y")))
+            if current.month == 12:
+                current = date(current.year + 1, 1, 1)
+            else:
+                current = date(current.year, current.month + 1, 1)
+    elif period_type == "day":
+        current = start_date
+        while current <= end_date:
+            periods_list.append((current, current.strftime("%Y-%m-%d")))
+            current += timedelta(days=1)
+    else:
+        current = start_date
+        seen_weeks: Set[date] = set()
+        while current <= end_date:
+            week_start = current - timedelta(days=current.weekday())
+            if week_start not in seen_weeks:
+                seen_weeks.add(week_start)
+                periods_list.append((week_start, week_start.strftime("%Y-%m-%d")))
+            current += timedelta(days=1)
+        periods_list.sort(key=lambda x: x[0])
+    if not periods_list:
+        fmt = "%b %Y" if period_type == "month" else "%Y-%m-%d"
+        periods_list = [(start_date, start_date.strftime(fmt))]
+    return periods_list
+
+
+def _period_to_date_range(period_date: date, period_type: str) -> Tuple[datetime, datetime]:
+    """Return (start_dt, end_dt) inclusive for the given period (for segment filter)."""
+    start_dt = datetime.combine(period_date, datetime.min.time())
+    if period_type == "month":
+        _, last_day = monthrange(period_date.year, period_date.month)
+        end_date = date(period_date.year, period_date.month, last_day)
+    elif period_type == "week":
+        end_date = period_date + timedelta(days=6)
+    else:
+        end_date = period_date
+    end_dt = datetime.combine(end_date, datetime.max.time())
+    return start_dt, end_dt
 
 
 async def _fetch_build_report_issues(
@@ -925,10 +1184,13 @@ async def _fetch_build_report_issues(
     x_value: Any,
     group_by_field: Optional[str],
     conn: Connection,
+    stack_by_value: Optional[str] = None,
+    bar_metric: Optional[str] = None,
 ) -> List[Dict[str, Any]]:
     """
     Fetch issue rows for a chart segment using the same filters as the report.
     Returns list of dicts with: issue_key, issue_type, status, summary, created_at, updated_at, assignee_name.
+    For stacked bar_chart, stack_by_value filters to the clicked segment (same as COALESCE(column::text, '(Blank)')).
     """
     where_clause, base_params, valid_columns = _build_where_from_request(request, conn)
 
@@ -955,6 +1217,52 @@ async def _fetch_build_report_issues(
         final_where = f"{where_clause} AND {segment_cond}" if where_clause != "1=1" else segment_cond
     else:
         final_where = where_clause
+
+    # multi_bar: x_value is period label; filter issues by date in that period (date-only, no time).
+    # If bar_metric is set (e.g. "resolved"), filter only by that column so the count matches the clicked bar.
+    # Otherwise use only bar_1_metric and bar_2_metric from the report so we don't include updated_at unless the report has it.
+    if request.report_type == "multi_bar" and request.period and request.lookback_months is not None and x_value is not None:
+        period_list = _multi_bar_period_list(request.period, request.lookback_months)
+        period_labels = [p[1] for p in period_list]
+        period_dates = [p[0] for p in period_list]
+        x_str = str(x_value).strip()
+        seg_idx = next((i for i, lbl in enumerate(period_labels) if lbl == x_str), None)
+        if seg_idx is not None and "created_at" in valid_columns and "resolved_at" in valid_columns and "updated_at" in valid_columns:
+            seg_date = period_dates[seg_idx]
+            start_dt, end_dt = _period_to_date_range(seg_date, request.period)
+            seg_end_date = end_dt.date()
+            base_params = {**base_params, "mb_seg_date": seg_date, "mb_seg_end_date": seg_end_date}
+            metric_to_column = {"created": "created_at", "resolved": "resolved_at", "updated": "updated_at"}
+            if request.period == "day":
+                date_cond = '"{col}"::date = :mb_seg_date'
+            else:
+                date_cond = '("{col}"::date >= :mb_seg_date AND "{col}"::date <= :mb_seg_end_date)'
+            if bar_metric and bar_metric in metric_to_column and metric_to_column[bar_metric] in valid_columns:
+                col = metric_to_column[bar_metric]
+                period_cond = date_cond.format(col=col)
+            else:
+                cols = []
+                for m in (getattr(request, "bar_1_metric", None), getattr(request, "bar_2_metric", None)):
+                    if m and m in metric_to_column and metric_to_column[m] in valid_columns:
+                        cols.append(metric_to_column[m])
+                if not cols:
+                    cols = ["created_at", "resolved_at"]
+                period_cond = " OR ".join(date_cond.format(col=c) for c in cols)
+            final_where = f"({where_clause}) AND ({period_cond})" if where_clause != "1=1" else period_cond
+
+    # Stacked bar_chart: filter by the clicked stack segment (stack_by column = stack_by_value; "(Blank)" -> IS NULL or '')
+    if (
+        request.report_type == "bar_chart"
+        and request.stack_by
+        and request.stack_by in valid_columns
+        and stack_by_value is not None
+    ):
+        if _is_unknown_or_empty(stack_by_value) or (isinstance(stack_by_value, str) and stack_by_value.strip() == "(Blank)"):
+            stack_cond = f'("{request.stack_by}" IS NULL OR "{request.stack_by}" = \'\')'
+        else:
+            base_params = {**base_params, "segment_stack_value": stack_by_value}
+            stack_cond = f'"{request.stack_by}" = :segment_stack_value'
+        final_where = f"({final_where}) AND {stack_cond}"
     issue_columns = ["issue_key", "issue_type", "status", "summary", "created_at", "updated_at", "assignee_name"]
     # Only select columns that exist
     existing_issue_cols = [c for c in issue_columns if c in valid_columns]
@@ -1006,12 +1314,18 @@ async def get_build_report_issues(
             raise HTTPException(status_code=400, detail="Report has no build_report_config")
 
         report_type = build_config.get("report_type") or row_dict.get("chart_type")
-        if report_type not in ("bar_chart", "pie_chart"):
-            raise HTTPException(status_code=400, detail="Drill-down issues only supported for bar_chart and pie_chart")
+        if report_type not in ("bar_chart", "pie_chart", "multi_bar"):
+            raise HTTPException(
+                status_code=400,
+                detail="Drill-down issues only supported for bar_chart, pie_chart, and multi_bar",
+            )
 
         x_value = body.segment.get("x_value")
         group_by_field = body.segment.get("group_by_field")
+        stack_by_value = body.segment.get("stack_by_value")
+        bar_metric = body.segment.get("bar_metric")  # multi_bar: "created" | "resolved" | "updated" so count matches clicked bar
 
+        request_filters = body.filters or {}
         request_data = {
             "report_type": report_type,
             "filters": all_filters,
@@ -1019,11 +1333,18 @@ async def get_build_report_issues(
             "y_axis": build_config.get("y_axis", "count"),
             "team_name": merged.get("team_name"),
             "isGroup": merged.get("isGroup", False),
+            "stack_by": build_config.get("stack_by"),
+            "period": request_filters.get("period") or build_config.get("period"),
+            "lookback_months": build_config.get("lookback_months"),
+            "bar_1_metric": build_config.get("bar_1_metric"),
+            "bar_2_metric": build_config.get("bar_2_metric"),
         }
         request_data = {k: v for k, v in request_data.items() if v is not None}
         build_req = BuildReportRequest(**request_data)
 
-        issues = await _fetch_build_report_issues(build_req, x_value, group_by_field, conn)
+        issues = await _fetch_build_report_issues(
+            build_req, x_value, group_by_field, conn, stack_by_value=stack_by_value, bar_metric=bar_metric
+        )
         return {
             "success": True,
             "data": {"issues": issues},
@@ -1063,6 +1384,12 @@ class SaveCustomReportRequest(BaseModel):
     bar_1_color: Optional[str] = None
     bar_2_color: Optional[str] = None
     stack_by: Optional[str] = None
+    trend_line_enabled: Optional[bool] = False
+    trend_line_field: Optional[str] = None
+    trend_line_operator: Optional[str] = None
+    trend_line_values: Optional[List[Any]] = None
+    trend_line_label: Optional[str] = None
+    trend_line_color: Optional[str] = None
 
 
 @build_report_router.post("/reports/build/save")
@@ -1162,6 +1489,13 @@ async def save_custom_report(
                 build_config["bar_2_color"] = request.bar_2_color
             if request.stack_by:
                 build_config["stack_by"] = request.stack_by
+            if getattr(request, "trend_line_enabled", False):
+                build_config["trend_line_enabled"] = True
+                build_config["trend_line_field"] = getattr(request, "trend_line_field", None)
+                build_config["trend_line_operator"] = getattr(request, "trend_line_operator", None)
+                build_config["trend_line_values"] = getattr(request, "trend_line_values", None)
+                build_config["trend_line_label"] = (getattr(request, "trend_line_label", None) or "").strip() or None
+                build_config["trend_line_color"] = getattr(request, "trend_line_color", None) or None
         
         meta_schema = {
             "build_report_config": build_config
@@ -1206,6 +1540,7 @@ async def save_custom_report(
             }
         )
         conn.commit()
+        invalidate_report_cache(report_id)
         
         # Fetch the created report
         get_report_query = text("""
@@ -1479,6 +1814,16 @@ async def update_custom_report(
                 build_config["stack_by"] = request.stack_by
             elif "stack_by" in build_config:
                 del build_config["stack_by"]
+            if getattr(request, "trend_line_enabled", False):
+                build_config["trend_line_enabled"] = True
+                build_config["trend_line_field"] = getattr(request, "trend_line_field", None)
+                build_config["trend_line_operator"] = getattr(request, "trend_line_operator", None)
+                build_config["trend_line_values"] = getattr(request, "trend_line_values", None)
+                build_config["trend_line_label"] = (getattr(request, "trend_line_label", None) or "").strip() or None
+                build_config["trend_line_color"] = getattr(request, "trend_line_color", None) or None
+            else:
+                for k in ("trend_line_enabled", "trend_line_field", "trend_line_operator", "trend_line_values", "trend_line_label", "trend_line_color"):
+                    build_config.pop(k, None)
         
         meta_schema = {
             "build_report_config": build_config
@@ -1509,6 +1854,7 @@ async def update_custom_report(
             }
         )
         conn.commit()
+        invalidate_report_cache(report_id)
         
         # Fetch the updated report
         get_report_query = text("""

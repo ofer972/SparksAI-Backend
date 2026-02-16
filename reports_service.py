@@ -501,6 +501,26 @@ async def get_report_instance(
 
     merged_filters = _merge_filters(default_filters, override_filters)
 
+    # Custom report with no filter_overrides: use report default_filters for team/pi/isGroup
+    # so the first request matches Preview (same effective request). Only do this when the
+    # request did not send an explicit team/group (team_name or selectedTreeValue); otherwise
+    # the user's selection (e.g. top bar "R&D All") would be overwritten by the report default.
+    if (report_id.startswith("custom-") or definition.get("data_source") == "build_report"):
+        fo = merged_filters.get("filter_overrides")
+        if not fo or (isinstance(fo, list) and len(fo) == 0):
+            request_sent_team_scope = (
+                merged_filters.get("team_name") and str(merged_filters.get("team_name")).strip()
+            ) or (
+                merged_filters.get("selectedTreeValue") and str(merged_filters.get("selectedTreeValue")).strip()
+            )
+            if not request_sent_team_scope:
+                if default_filters.get("team_name") is not None:
+                    merged_filters["team_name"] = default_filters["team_name"]
+                if default_filters.get("pi") is not None:
+                    merged_filters["pi"] = default_filters["pi"]
+                if "isGroup" in default_filters:
+                    merged_filters["isGroup"] = default_filters["isGroup"]
+
     # Ensure required filters present
     _validate_required_filters(definition, merged_filters)
 
@@ -660,12 +680,18 @@ async def execute_custom_report(
         "y_axis": build_config.get("y_axis", "count"),
         "team_name": merged_default_filters.get("team_name"),
         "isGroup": merged_default_filters.get("isGroup", False),
-        "period": build_config.get("period"),
+        "period": filters.get("period") or build_config.get("period"),
         "lookback_months": build_config.get("lookback_months"),
         "bar_1_metric": build_config.get("bar_1_metric"),
         "bar_2_metric": build_config.get("bar_2_metric"),
         "stack_by": build_config.get("stack_by"),
         "bar_color": build_config.get("bar_color"),
+        "trend_line_enabled": build_config.get("trend_line_enabled"),
+        "trend_line_field": build_config.get("trend_line_field"),
+        "trend_line_operator": build_config.get("trend_line_operator"),
+        "trend_line_values": build_config.get("trend_line_values"),
+        "trend_line_label": build_config.get("trend_line_label"),
+        "trend_line_color": build_config.get("trend_line_color"),
     }
     
     # Remove None values for optional fields
@@ -688,12 +714,18 @@ async def execute_custom_report(
     if isinstance(result.get('data'), dict):
         logger.info(f"[execute_custom_report] Data keys: {list(result.get('data', {}).keys())}")
     
-    # Return in the same format as other reports
-    return {
+    # Return payload so that response_payload["result"] = this["data"] gives the frontend { data, count, columns, trend_line_label? }
+    # _execute_build_report_logic returns { "data": <array>, "count", "columns", "meta", optional "trend_line_label" }
+    inner = {
         "data": result.get("data", []),
         "count": result.get("count", 0),
         "columns": result.get("columns", []),
-        "meta": result.get("meta", {})
+    }
+    if "trend_line_label" in result:
+        inner["trend_line_label"] = result["trend_line_label"]
+    return {
+        "data": inner,
+        "meta": result.get("meta", {}),
     }
 
 

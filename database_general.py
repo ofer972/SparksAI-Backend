@@ -471,12 +471,18 @@ def get_top_ai_cards_multi_filtered(
                             AND itx.sprint_insight = TRUE
                       )
                       OR (
-                          ai.sprint_id IS NOT NULL
-                          AND EXISTS (
-                              SELECT 1
-                              FROM public.jira_sprints s
-                              WHERE s.sprint_id = ai.sprint_id
-                                AND s.state = 'active'
+                          (
+                              ai.sprint_id IS NOT NULL
+                              AND EXISTS (
+                                  SELECT 1
+                                  FROM public.jira_sprints s
+                                  WHERE s.sprint_id = ai.sprint_id
+                                    AND s.state = 'active'
+                              )
+                          )
+                          OR (
+                              it.sprint_insight = TRUE
+                              AND it.insight_type ILIKE '%Retro%'
                           )
                       )
                   )
@@ -532,12 +538,18 @@ def get_top_ai_cards_multi_filtered(
                             AND itx.sprint_insight = TRUE
                       )
                       OR (
-                          ai.sprint_id IS NOT NULL
-                          AND EXISTS (
-                              SELECT 1
-                              FROM public.jira_sprints s
-                              WHERE s.sprint_id = ai.sprint_id
-                                AND s.state = 'active'
+                          (
+                              ai.sprint_id IS NOT NULL
+                              AND EXISTS (
+                                  SELECT 1
+                                  FROM public.jira_sprints s
+                                  WHERE s.sprint_id = ai.sprint_id
+                                    AND s.state = 'active'
+                              )
+                          )
+                          OR (
+                              it.sprint_insight = TRUE
+                              AND it.insight_type ILIKE '%Retro%'
                           )
                       )
                   )
@@ -592,12 +604,18 @@ def get_top_ai_cards_multi_filtered(
                             AND itx.sprint_insight = TRUE
                       )
                       OR (
-                          ai.sprint_id IS NOT NULL
-                          AND EXISTS (
-                              SELECT 1
-                              FROM public.jira_sprints s
-                              WHERE s.sprint_id = ai.sprint_id
-                                AND s.state = 'active'
+                          (
+                              ai.sprint_id IS NOT NULL
+                              AND EXISTS (
+                                  SELECT 1
+                                  FROM public.jira_sprints s
+                                  WHERE s.sprint_id = ai.sprint_id
+                                    AND s.state = 'active'
+                              )
+                          )
+                          OR (
+                              it.sprint_insight = TRUE
+                              AND it.insight_type ILIKE '%Retro%'
                           )
                       )
                   )
