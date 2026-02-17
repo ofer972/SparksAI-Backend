@@ -7,7 +7,7 @@ from __future__ import annotations
 
 from calendar import monthrange
 from datetime import datetime, date, timedelta
-from typing import Any, Dict, List, Optional, Set, Tuple
+from typing import Any, Callable, Dict, List, Optional, Set, Tuple
 import logging
 import uuid
 import json
@@ -530,115 +530,39 @@ def _build_report_run_grouped_count(
     return [{"bucket": b, "stacked": out[b]} for b in bucket_order]
 
 
-# Columns that exist on jira_issue_history (for applying report filters to the trend query).
-HISTORY_TABLE_COLUMNS = {"status_category", "status", "team_name", "issuetype", "quarter_pi", "flagged", "story_points"}
-# Map report field name -> history table column name when different (e.g. work items use issue_type, history uses issuetype).
-REPORT_FIELD_TO_HISTORY_COLUMN = {"issue_type": "issuetype"}
-# Allowed field for the trend metric (trend_line_field) — must be a column on history.
-TREND_LINE_ALLOWED_FIELDS = HISTORY_TABLE_COLUMNS
+# Allowed trend_line_field values (for multi_bar trend-line validation).
+TREND_LINE_ALLOWED_FIELDS = {"status_category", "status", "team_name", "issuetype", "quarter_pi", "flagged", "story_points"}
 
 
-def _build_trend_history_where(
-    trend_field: str,
-    trend_operator: str,
-    trend_values: List[Any],
-    team_names_list: Optional[List[str]],
-    param_prefix: str = "trend",
-) -> Tuple[str, Dict[str, Any]]:
+def _compute_trend_cumulative_open(
+    conn: Connection,
+    table: str,
+    where_clause: str,
+    base_params: Dict[str, Any],
+    period_dates: List[date],
+    get_opened_resolved: Callable[[date], Tuple[int, int]],
+) -> List[int]:
     """
-    Build WHERE fragment and params for jira_issue_history trend query.
-    Returns (where_fragment, params). Fragment does NOT include snapshot_date condition.
+    Compute cumulative open per period (same logic for non-stacked and stacked multi_bar trend).
+    Uses same where_clause as bar queries; get_opened_resolved(pd) returns (opened, resolved) for that period.
     """
-    conditions = []
-    params: Dict[str, Any] = {}
-    field_sql = f'"{trend_field}"'
-    if trend_operator == "equals":
-        if isinstance(trend_values, list) and len(trend_values) > 1:
-            placeholders = ", ".join([f":{param_prefix}_val_{i}" for i in range(len(trend_values))])
-            conditions.append(f"{field_sql} IN ({placeholders})")
-            for i, val in enumerate(trend_values):
-                params[f"{param_prefix}_val_{i}"] = val
-        else:
-            single = trend_values[0] if isinstance(trend_values, list) else trend_values
-            params[f"{param_prefix}_val"] = single
-            conditions.append(f"{field_sql} = :{param_prefix}_val")
-    elif trend_operator == "contains":
-        single = trend_values[0] if isinstance(trend_values, list) else trend_values
-        conditions.append(f"{field_sql} ILIKE :{param_prefix}_val")
-        params[f"{param_prefix}_val"] = f"%{single}%"
-    elif trend_operator == "greater_than":
-        single = trend_values[0] if isinstance(trend_values, list) else trend_values
-        conditions.append(f"{field_sql} > :{param_prefix}_val")
-        params[f"{param_prefix}_val"] = single
-    elif trend_operator == "less_than":
-        single = trend_values[0] if isinstance(trend_values, list) else trend_values
-        conditions.append(f"{field_sql} < :{param_prefix}_val")
-        params[f"{param_prefix}_val"] = single
-    else:
-        # default equals
-        single = trend_values[0] if isinstance(trend_values, list) else trend_values
-        params[f"{param_prefix}_val"] = single
-        conditions.append(f"{field_sql} = :{param_prefix}_val")
-    if team_names_list:
-        team_placeholders = ", ".join([f":th_{i}" for i in range(len(team_names_list))])
-        conditions.append(f"jh.team_name IN ({team_placeholders})")
-        for i, name in enumerate(team_names_list):
-            params[f"th_{i}"] = name
-    where = " AND ".join(conditions)
-    return where, params
-
-
-def _build_history_filters_where(
-    filters: List[Dict[str, Any]],
-    param_prefix: str = "hist_f",
-) -> Tuple[str, Dict[str, Any]]:
-    """
-    Build WHERE fragment from report filters for jira_issue_history.
-    Applies all report filters (same as bar chart); uses history column names with
-    REPORT_FIELD_TO_HISTORY_COLUMN mapping. Skips only filters for columns that don't exist on history.
-    """
-    conditions = []
-    params: Dict[str, Any] = {}
-    for idx, filter_item in enumerate(filters):
-        field = filter_item.get("field")
-        if not field:
-            continue
-        history_col = REPORT_FIELD_TO_HISTORY_COLUMN.get(field, field)
-        if history_col not in HISTORY_TABLE_COLUMNS:
-            continue
-        operator = filter_item.get("operator", "equals")
-        values = filter_item.get("values", [])
-        if not values or (isinstance(values, list) and len(values) == 0):
-            continue
-        if isinstance(values, list):
-            values = [v for v in values if v is not None and (str(v).strip() if isinstance(v, str) else True)]
-            if not values:
-                continue
-        operator = (operator or "equals").strip() or "equals"
-        field_sql = f'jh."{history_col}"'
-        pfx = f"{param_prefix}_{idx}"
-        if operator == "equals":
-            if len(values) > 1:
-                placeholders = ", ".join([f":{pfx}_{i}" for i in range(len(values))])
-                conditions.append(f"{field_sql} IN ({placeholders})")
-                for i, val in enumerate(values):
-                    params[f"{pfx}_{i}"] = val
-            else:
-                params[pfx] = values[0]
-                conditions.append(f"{field_sql} = :{pfx}")
-        elif operator == "contains":
-            params[pfx] = f"%{values[0]}%"
-            conditions.append(f"{field_sql} ILIKE :{pfx}")
-        elif operator == "greater_than":
-            params[pfx] = values[0]
-            conditions.append(f"{field_sql} > :{pfx}")
-        elif operator == "less_than":
-            params[pfx] = values[0]
-            conditions.append(f"{field_sql} < :{pfx}")
-        else:
-            params[pfx] = values[0]
-            conditions.append(f"{field_sql} = :{pfx}")
-    return " AND ".join(conditions) if conditions else "1=1", params
+    first_period_start = period_dates[0]
+    backlog_params = {**base_params, "first_period_start": first_period_start}
+    q_backlog = text(f"""
+        SELECT COUNT(*)::int FROM {table}
+        WHERE {where_clause}
+          AND "created_at" IS NOT NULL
+          AND "created_at"::date < :first_period_start
+          AND ("resolved_at" IS NULL OR "resolved_at"::date >= :first_period_start)
+    """)
+    r_backlog = conn.execute(q_backlog, backlog_params)
+    cumulative = r_backlog.scalar() or 0
+    trend_values: List[int] = []
+    for pd in period_dates:
+        opened, resolved = get_opened_resolved(pd)
+        cumulative = cumulative + opened - resolved
+        trend_values.append(cumulative)
+    return trend_values
 
 
 async def _execute_build_report_logic(
@@ -834,7 +758,12 @@ async def _execute_build_report_logic(
                 }
         
         elif request.report_type == "multi_bar":
-            # Time-based multi-bar: two independent metrics (e.g. issues created, issues resolved) per period
+            # Time-based multi-bar: two independent metrics (e.g. issues created, issues resolved) per period.
+            # All of the following use the SAME where_clause (report filters: quarter_pi, team, issue_type, etc.):
+            #   - Bar 1 (created): run_metric_query(created_at) — WHERE where_clause + created_at in range
+            #   - Bar 2 (resolved): run_metric_query(resolved_at) — WHERE where_clause + resolved_at in range
+            #   - Trend (cumulative open): initial_backlog with where_clause + same counts1/counts2 (or stacked totals)
+            # Period type (month / week / day) and stacked vs non-stacked all use this same filter set.
             metric_to_column = {"created": "created_at", "resolved": "resolved_at", "updated": "updated_at"}
             period_type = request.period
             lookback = request.lookback_months
@@ -878,85 +807,8 @@ async def _execute_build_report_logic(
                 end_ts = datetime.combine(end_date, datetime.max.time())
             mb_params = {**base_params, "mb_start": start_ts, "mb_end": end_ts}
 
-            # Period end dates for trend line (snapshot date = end of each period)
-            def _period_end(d: date, period_kind: str) -> date:
-                if period_kind == "month":
-                    _, last_day = monthrange(d.year, d.month)
-                    return date(d.year, d.month, last_day)
-                if period_kind == "week":
-                    return d + timedelta(days=6)
-                return d  # day
-            period_end_dates = [_period_end(pd, period_type) for pd in period_dates]
-
-            # Trend line from jira_issue_history (count matching filter as of period end)
+            # Trend line: SAME filters (where_clause) and SAME logic as bar "created"/"resolved" — cumulative open from same data
             trend_values: Optional[List[int]] = None
-            if getattr(request, "trend_line_enabled", False) and getattr(request, "trend_line_field", None):
-                tvals = getattr(request, "trend_line_values", None)
-                if tvals and (isinstance(tvals, list) and len(tvals) > 0 or not isinstance(tvals, list)):
-                    vals_list = tvals if isinstance(tvals, list) else [tvals]
-                    if request.trend_line_field in TREND_LINE_ALLOWED_FIELDS:
-                        try:
-                            from database_team_metrics import resolve_team_names_from_filter
-                            team_names_list = resolve_team_names_from_filter(
-                                request.team_name, request.isGroup or False, conn
-                            ) if request.team_name else None
-                        except Exception:
-                            team_names_list = None
-                        trend_where, trend_params_base = _build_trend_history_where(
-                            request.trend_line_field,
-                            getattr(request, "trend_line_operator", None) or "equals",
-                            vals_list,
-                            team_names_list,
-                        )
-                        history_filter_where, history_filter_params = _build_history_filters_where(request.filters)
-                        # Trend line: one query for all periods. had_snapshot_in_range = True means use count (0 is real);
-                        # False means no snapshot for that period → back-fill with first period's value so we don't show fake 0.
-                        period_ends_capped = [min(p, end_date) for p in period_end_dates]
-                        params_trend = {
-                            "period_ends": period_ends_capped,
-                            "end_date_cap": end_date,
-                            **trend_params_base,
-                            **history_filter_params,
-                        }
-                        q_trend = text(f"""
-                            SELECT
-                                (SELECT MAX(j2.snapshot_date)::date
-                                 FROM public.jira_issue_history j2
-                                 WHERE j2.snapshot_date::date <= t.period_end
-                                   AND j2.snapshot_date::date <= :end_date_cap) IS NOT NULL AS had_snapshot_in_range,
-                                (SELECT COUNT(DISTINCT jh.issue_key)::int
-                                 FROM public.jira_issue_history jh
-                                 WHERE jh.snapshot_date::date = (
-                                   SELECT COALESCE(
-                                     (SELECT MAX(j2b.snapshot_date)::date
-                                      FROM public.jira_issue_history j2b
-                                      WHERE j2b.snapshot_date::date <= t.period_end
-                                        AND j2b.snapshot_date::date <= :end_date_cap),
-                                     (SELECT MIN(j3.snapshot_date)::date FROM public.jira_issue_history j3)
-                                   )
-                                 )
-                                 AND ({trend_where}) AND ({history_filter_where})
-                                ) AS cnt
-                            FROM unnest(CAST(:period_ends AS date[])) WITH ORDINALITY AS t(period_end, ord)
-                            ORDER BY t.ord
-                        """)
-                        r_trend = conn.execute(q_trend, params_trend)
-                        rows = r_trend.fetchall()
-                        raw_trend: List[Optional[int]] = []
-                        for row in rows:
-                            if row and row[0] is True:
-                                raw_trend.append(row[1] if row[1] is not None else 0)
-                            else:
-                                raw_trend.append(None)
-                        # Pass 2: back-fill periods with no snapshot (use first period that had a snapshot)
-                        trend_values = list(raw_trend)
-                        first_known_idx = next((i for i, v in enumerate(trend_values) if v is not None), None)
-                        if first_known_idx is not None:
-                            first_known_val = trend_values[first_known_idx]
-                            for j in range(first_known_idx):
-                                trend_values[j] = first_known_val
-                        else:
-                            trend_values = [0] * len(trend_values)
 
             def run_metric_query(col: str) -> Dict[date, int]:
                 if period_type == "month":
@@ -987,6 +839,15 @@ async def _execute_build_report_logic(
             if not stack_by_col:
                 counts1 = run_metric_query(col1)
                 counts2 = run_metric_query(col2)
+                if getattr(request, "trend_line_enabled", False):
+                    trend_values = _compute_trend_cumulative_open(
+                        conn,
+                        config.WORK_ITEMS_TABLE,
+                        where_clause,
+                        base_params,
+                        period_dates,
+                        lambda pd: (counts1.get(pd, 0), counts2.get(pd, 0)),
+                    )
                 data = []
                 columns = ["x_value", "bar_1_value", "bar_2_value"]
                 for i, pd in enumerate(period_dates):
@@ -1044,6 +905,18 @@ async def _execute_build_report_logic(
 
                 stacked1 = run_metric_query_stacked(col1)
                 stacked2 = run_metric_query_stacked(col2)
+                if getattr(request, "trend_line_enabled", False):
+                    trend_values = _compute_trend_cumulative_open(
+                        conn,
+                        config.WORK_ITEMS_TABLE,
+                        where_clause,
+                        base_params,
+                        period_dates,
+                        lambda pd: (
+                            sum(stacked1.get(pd, {}).values()),
+                            sum(stacked2.get(pd, {}).values()),
+                        ),
+                    )
                 data = []
                 columns_stacked = ["x_value", "bar_1_stacked", "bar_2_stacked"]
                 for i, pd in enumerate(period_dates):

@@ -524,9 +524,10 @@ async def get_report_instance(
     # Ensure required filters present
     _validate_required_filters(definition, merged_filters)
 
-    # Generate cache key from report_id and merged filters
-    cache_key = generate_cache_key(report_id, merged_filters)
-    
+    # Generate cache key from report_id and merged filters (exclude bypass_cache so refresh updates same entry)
+    cache_key_filters = {k: v for k, v in merged_filters.items() if k != "bypass_cache"}
+    cache_key = generate_cache_key(report_id, cache_key_filters)
+
     # Try cache first (unless bypassed)
     if not bypass_cache:
         cached_data = get_cached_report(cache_key)
@@ -646,6 +647,14 @@ async def invalidate_cache(report_id: Optional[str] = Query(None)):
     }
 
 
+def _lookback_from_filters_or_config(filters: Dict[str, Any], build_config: Dict[str, Any]) -> Optional[int]:
+    """Resolve lookback_months from report filters (same as period) or build_config. Coerce to int (query params are strings)."""
+    val = filters.get("lookback_months") if filters.get("lookback_months") is not None else build_config.get("lookback_months")
+    if val is None:
+        return None
+    return int(val) if not isinstance(val, int) else val
+
+
 async def execute_custom_report(
     definition: Dict[str, Any],
     filters: Dict[str, Any],
@@ -681,7 +690,7 @@ async def execute_custom_report(
         "team_name": merged_default_filters.get("team_name"),
         "isGroup": merged_default_filters.get("isGroup", False),
         "period": filters.get("period") or build_config.get("period"),
-        "lookback_months": build_config.get("lookback_months"),
+        "lookback_months": _lookback_from_filters_or_config(filters, build_config) or 6,
         "bar_1_metric": build_config.get("bar_1_metric"),
         "bar_2_metric": build_config.get("bar_2_metric"),
         "stack_by": build_config.get("stack_by"),
