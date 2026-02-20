@@ -44,8 +44,11 @@ from global_settings_loader import settings
 
 # Console log preview length (avoid dumping full LLM request/response)
 LOG_PREVIEW_CHARS = 200
-# ANSI green for refinement-path log
+# Maximum character length for AI chat question (easy to change; temporary 20k)
+AI_CHAT_MAX_QUESTION_LENGTH = 2000
+# ANSI colors for console logs
 GREEN = '\033[92m'
+RED = '\033[91m'
 RESET = '\033[0m'
 
 # Emojis for intent log messages
@@ -1841,7 +1844,14 @@ async def ai_chat(
         print(f"[AI_CHAT_DEBUG] AI Chat Request Parameters: {json.dumps(ai_chat_params, indent=2, default=str)}")
         
         # Validate question length
-        if request.question and len(request.question) > settings.AI_CHAT_MAX_QUESTION_LENGTH:
+        actual_length = len(request.question) if request.question else 0
+        if request.question and actual_length > AI_CHAT_MAX_QUESTION_LENGTH:
+            print(f"{RED}[AI_CHAT] ERROR: Question exceeds maximum length. Limitation: {AI_CHAT_MAX_QUESTION_LENGTH} characters. Actual length received: {actual_length}{RESET}")
+            logger.error(
+                "Question exceeds maximum length: limitation=%s, actual_length=%s",
+                AI_CHAT_MAX_QUESTION_LENGTH,
+                actual_length,
+            )
             raise HTTPException(
                 status_code=422,
                 detail="Question exceeds maximum length. Please shorten your question or contact your administrator."

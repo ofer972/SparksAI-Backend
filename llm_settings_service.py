@@ -23,6 +23,7 @@ LLM_SETTINGS_KEYS = [
     "ai_chatgpt_model",
     "ai_gemini_model",
     "ai_gemini_temperature",
+    "ai_gemini_thinking",
     "ai_chatgpt_temperature",
     "gemini_api_key",
     "chatgpt_api_key"

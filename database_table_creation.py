@@ -1333,6 +1333,7 @@ def insert_default_llm_settings(engine=None):
                 ('ai_chatgpt_model', 'gpt-4o', 'admin'),
                 ('ai_gemini_model', 'gemini-2.5-flash', 'admin'),
                 ('ai_gemini_temperature', '0', 'admin'),
+                ('ai_gemini_thinking', 'off', 'admin'),
                 ('ai_chatgpt_temperature', '0.3', 'admin')
             ON CONFLICT (setting_key) DO NOTHING;
             """
