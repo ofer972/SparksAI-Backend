@@ -117,6 +117,69 @@ def convert_history_to_sql_format(history_json: Dict[str, Any]) -> List[Dict[str
     return sql_history[-3:] if len(sql_history) > 3 else sql_history
 
 
+def get_report_context_from_chat_history(conversation_id: Optional[str], conn: Connection) -> Dict[str, Any]:
+    """Load team/pi from chat_history for this conversation. Returns e.g. {pi_name, team_name} for SQL report context."""
+    if not conversation_id or not conn:
+        return {}
+    try:
+        cid = int(str(conversation_id).strip())
+        q = text(f"SELECT team, pi FROM {config.CHAT_HISTORY_TABLE} WHERE id = :cid")
+        row = conn.execute(q, {"cid": cid}).fetchone()
+        if not row:
+            return {}
+        return {
+            "pi_name": (row[1] or "").strip() or None,
+            "team_name": (row[0] or "").strip() or None,
+        }
+    except Exception as e:
+        logger.warning("get_report_context_from_chat_history failed: %s", e)
+        return {}
+
+
+async def run_sql_path(
+    question: str,
+    history_json: Dict[str, Any],
+    report_context: Optional[Dict[str, Any]] = None,
+) -> Tuple[bool, Optional[str]]:
+    """
+    Call SQL service for the given question (may start with !). Returns (success, sql_formatted_for_history).
+    """
+    sql_history = convert_history_to_sql_format(history_json)
+    logger.info(f"Converted {len(sql_history)} previous SQL exchanges to history")
+    try:
+        sql_response = await call_sparksai_sql_execute(
+            question=question,
+            conversation_history=sql_history if sql_history else None,
+            include_formatted=True,
+            report_context=report_context,
+        )
+        if not sql_response.get("success"):
+            raise Exception(sql_response.get("data", {}).get("error", "Unknown error"))
+        sql_data = sql_response.get("data", {})
+        if sql_data.get("status") != "success":
+            raise Exception(sql_data.get("error", "SQL execution failed"))
+        clean_q = question[1:].strip() if question.startswith(config.SQL_AI_TRIGGER) else question.strip()
+        sql_formatted = sql_data.get("formatted_for_llm")
+        if not sql_formatted:
+            sql = sql_data.get("sql", "N/A")
+            results = sql_data.get("results", [])
+            row_count = len(results)
+            results_json = json.dumps(results[:100], indent=2, default=str) if results else "[]"
+            sql_formatted = f"""=== DATABASE QUERY ===
+Question: {clean_q}
+Answer:
+SQL Query:
+{sql}
+
+Results ({row_count} row{'s' if row_count != 1 else ''}):
+{results_json}
+=== END DATABASE QUERY ==="""
+        return (True, sql_formatted)
+    except Exception as e:
+        logger.warning("run_sql_path failed: %s", e)
+        return (False, None)
+
+
 # System message constant for all AI chat interactions
 SYSTEM_MESSAGE = "You are AI assistant specialized in Agile, Scrum, Scaled Agile. All your answers should be brief with no more than 3 paragraphs with concrete and specific information based on the content provided"
 
@@ -2363,69 +2426,15 @@ async def ai_chat(
         sql_formatted_for_history = None
         
         if request.question and request.question.startswith(config.SQL_AI_TRIGGER):
-            sql_was_attempted = True  # Mark that SQL was attempted
-            try:
-                logger.info(f"SQL AI trigger detected in question: {request.question[:100]}...")
-                
-                # Convert history to SQL service format
-                sql_history = convert_history_to_sql_format(history_json)
-                logger.info(f"Converted {len(sql_history)} previous SQL exchanges to history")
-                
-                # Call SparksAI-SQL service
-                sql_response = await call_sparksai_sql_execute(
-                    question=request.question,
-                    conversation_history=sql_history if sql_history else None,
-                    include_formatted=True
-                )
-                
-                # Extract data from response
-                if not sql_response.get("success"):
-                    raise Exception(f"SQL service returned error: {sql_response.get('data', {}).get('error', 'Unknown error')}")
-                
-                sql_data = sql_response.get("data", {})
-                sql_status = sql_data.get("status", "error")
-                
-                # Log what SQL service returned
-                logger.info(f"=== SPARKSAI-SQL SERVICE RETURNED ===")
-                logger.info(f"Status: {sql_status}")
-                logger.info(f"SQL: {sql_data.get('sql', 'N/A')}")
-                logger.info(f"Results count: {len(sql_data.get('results', []))}")
-                if sql_data.get('error'):
-                    logger.info(f"Error: {sql_data.get('error')}")
-                logger.info(f"=== END SPARKSAI-SQL SERVICE RETURNED ===")
-                
-                # Clean question for formatting (remove trigger from start)
-                clean_question_for_sql = request.question
-                if clean_question_for_sql.startswith(config.SQL_AI_TRIGGER):
-                    clean_question_for_sql = clean_question_for_sql[1:].strip()
-                
-                # Get formatted_for_llm from response (already formatted by SQL service)
-                sql_formatted = sql_data.get("formatted_for_llm")
-                if not sql_formatted:
-                    # Fallback: format manually if not provided
-                    logger.warning("formatted_for_llm not in response, formatting manually")
-                    sql = sql_data.get('sql', 'N/A')
-                    results = sql_data.get('results', [])
-                    row_count = len(results)
-                    results_json = json.dumps(results[:100], indent=2, default=str) if results else "[]"
-                    sql_formatted = f"""=== DATABASE QUERY ===
-Question: {clean_question_for_sql}
-Answer:
-SQL Query:
-{sql}
-
-Results ({row_count} row{'s' if row_count != 1 else ''}):
-{results_json}
-=== END DATABASE QUERY ==="""
-                
-                # Store SQL data for chat history
+            sql_was_attempted = True
+            logger.info("BACKEND: SQL trigger (!) detected - will call SQL service")
+            report_context = get_report_context_from_chat_history(conversation_id, conn)
+            success, sql_formatted_for_history = await run_sql_path(
+                request.question, history_json, report_context=report_context
+            )
+            if success:
                 sql_was_triggered = True
-                sql_formatted_for_history = sql_formatted
-                
-                logger.info(f"SQL success (status: {sql_status}); will append only SQL answer to history after LLM response")
-            except Exception as e:
-                logger.warning(f"SQL service processing failed: {e}")
-                # Do not store SQL error in history; LLM still gets error via question param if we inject it there, or we skip
+                logger.info("SQL success; will append only SQL answer to history after LLM response")
 
         # 3. Call LLM service
         # Remove "!" trigger from question if present before sending to LLM
@@ -2441,6 +2450,16 @@ Results ({row_count} row{'s' if row_count != 1 else ''}):
             # Combine question + SQL results so LLM sees them together
             question_to_send = f"{question_to_send}\n\n=== DATABASE QUERY RESULTS ===\n{sql_formatted_for_history}\n=== END DATABASE QUERY RESULTS ==="
             logger.info(f"Combined SQL results with question for LLM (question length: {len(question_to_send)} chars)")
+        
+        # If SQL was attempted but failed, return generic message without calling LLM
+        SQL_FAILURE_MESSAGE = "I could not find the requested information."
+        if sql_was_attempted and not sql_was_triggered:
+            ai_response = SQL_FAILURE_MESSAGE
+            llm_response = {}
+            logger.info("SQL query failed; returning generic message without calling LLM")
+        else:
+            ai_response = None
+            llm_response = None
         
         # Check for issue suggestion request in follow-up questions (before building conversation_context_for_llm)
         issue_details_context = None
@@ -2497,7 +2516,7 @@ Results ({row_count} row{'s' if row_count != 1 else ''}):
                 block = dashboard_first
             conversation_context_for_llm = block
             logger.info(f"Follow-up: dashboard first + {len(parts)} answer(s) + {len(refinement_blocks)} refinement block(s) ({len(conversation_context_for_llm)} chars)")
-
+        
         # Single-epic rule: if user asked about a specific issue/epic (issue_details_context),
         # send ONLY that epic's context so we never send two epics and confuse the LLM.
         # When refinement is being prepended we keep the full request data and do not overwrite.
@@ -2542,52 +2561,102 @@ Results ({row_count} row{'s' if row_count != 1 else ''}):
             conversation_context_for_llm = (conversation_context_for_llm or "") + "\n\n" + refinement_context_to_prepend
             logger.info(f"{EMOJI_REFINEMENT} Appended refinement context (refinement + epic, length: {len(refinement_context_to_prepend)} chars)")
         
-        # Log what we send to LLM (flow visibility without debug detail)
-        logger.info(
-            f"Sending to LLM: question_len={len(question_to_send)}, "
-            f"conversation_context={'SET' if conversation_context_for_llm else 'None'}"
-            + (f" ({len(conversation_context_for_llm)} chars)" if conversation_context_for_llm else "")
-            + f", messages_count={len(history_json.get('messages', []))}"
-        )
-        history_json_to_send = history_json
-        conversation_context_to_send = conversation_context_for_llm
-
-        llm_response = await call_llm_service(
-            conversation_id=conversation_id,
-            question=question_to_send,
-            history_json=history_json_to_send,
-            user_id=request.user_id,
-            selected_team=request.selected_team,
-            selected_pi=request.selected_pi,
-            chat_type=chat_type_str,
-            conversation_context=conversation_context_to_send,
-            system_message=system_message
-        )
-        
-        if not llm_response.get("success"):
-            raise HTTPException(
-                status_code=502,
-                detail=f"LLM service returned error: {llm_response.get('detail', 'Unknown error')}"
+        # Call LLM only when we don't already have a response (e.g. SQL failure fallback)
+        if ai_response is None:
+            logger.info(
+                f"Sending to LLM: question_len={len(question_to_send)}, "
+                f"conversation_context={'SET' if conversation_context_for_llm else 'None'}"
+                + (f" ({len(conversation_context_for_llm)} chars)" if conversation_context_for_llm else "")
+                + f", messages_count={len(history_json.get('messages', []))}"
             )
-        
-        ai_response = llm_response.get("response", "")
-        
-        # Log LLM response details
-        logger.info("=" * 80)
-        logger.info("LLM RESPONSE RECEIVED")
-        logger.info("=" * 80)
-        logger.info(f"Response length: {len(ai_response)} chars")
-        if ai_response:
-            preview_length = min(LOG_PREVIEW_CHARS, len(ai_response))
-            logger.info(f"Response preview (first {preview_length} chars): {ai_response[:preview_length]}...")
-            if len(ai_response) > preview_length:
-                logger.info(f"... (truncated, {len(ai_response) - preview_length} more chars)")
-        else:
-            logger.warning("LLM response is empty")
-        logger.info(f"Provider: {llm_response.get('provider', 'N/A')}")
-        logger.info(f"Model: {llm_response.get('model', 'N/A')}")
-        logger.info(f"Tokens used: {llm_response.get('tokens_used', 'N/A')}")
-        logger.info("=" * 80)
+            history_json_to_send = history_json
+            conversation_context_to_send = conversation_context_for_llm
+            llm_response = await call_llm_service(
+                conversation_id=conversation_id,
+                question=question_to_send,
+                history_json=history_json_to_send,
+                user_id=request.user_id,
+                selected_team=request.selected_team,
+                selected_pi=request.selected_pi,
+                chat_type=chat_type_str,
+                conversation_context=conversation_context_to_send,
+                system_message=system_message
+            )
+            if not llm_response.get("success"):
+                raise HTTPException(
+                    status_code=502,
+                    detail=f"LLM service returned error: {llm_response.get('detail', 'Unknown error')}"
+                )
+            ai_response = llm_response.get("response", "")
+            # Auto-invoke SQL when LLM indicated data is not in report (dashboard/report chat only).
+            # Controlled by setting: backend_ai_chat_auto_sql_when_data_not_in_report (default False).
+            if (
+                settings.AI_CHAT_AUTO_SQL_WHEN_DATA_NOT_IN_REPORT
+                and not sql_was_attempted
+                and chat_type_str in ("Team_dashboard", "PI_dashboard", "Custom_dashboard")
+                and ai_response
+                and ai_response.strip().startswith(config.DATA_NOT_IN_REPORT_MARKER)
+            ):
+                logger.info("BACKEND: [DATA_NOT_IN_REPORT] detected - auto-invoking SQL flow")
+                sql_was_attempted = True
+                sql_question = (config.SQL_AI_TRIGGER + " " + request.question.strip())
+                report_context = get_report_context_from_chat_history(conversation_id, conn)
+                success, formatted = await run_sql_path(
+                    sql_question, history_json, report_context=report_context
+                )
+                if success:
+                    sql_was_triggered = True
+                    sql_formatted_for_history = formatted
+                    question_retry = request.question.strip() + "\n\n=== DATABASE QUERY RESULTS ===\n" + formatted + "\n=== END DATABASE QUERY RESULTS ==="
+                    try:
+                        llm_response_retry = await call_llm_service(
+                            conversation_id=conversation_id,
+                            question=question_retry,
+                            history_json=history_json if history_json.get("messages") else {"messages": []},
+                            user_id=request.user_id,
+                            selected_team=request.selected_team,
+                            selected_pi=request.selected_pi,
+                            chat_type=chat_type_str,
+                            conversation_context=None,
+                            system_message=system_message
+                        )
+                        if not llm_response_retry.get("success"):
+                            raise HTTPException(
+                                status_code=502,
+                                detail=llm_response_retry.get("detail", "LLM service error")
+                            )
+                        ai_response = llm_response_retry.get("response", "")
+                        if ai_response:
+                            ai_response = "**This information was not included in the original report. Data may be incomplete.**\n\n" + ai_response
+                        llm_response = llm_response_retry
+                    except HTTPException:
+                        raise
+                else:
+                    if ai_response and ai_response.strip().startswith(config.DATA_NOT_IN_REPORT_MARKER):
+                        rest = ai_response.strip()[len(config.DATA_NOT_IN_REPORT_MARKER):].strip()
+                        ai_response = rest or "I don't have that information in the report."
+            if sql_was_triggered and ai_response:
+                if not ai_response.startswith("**This information was not included"):
+                    ai_response = "**This information was not included in the original report. Data may be incomplete.**\n\n" + ai_response
+            # Strip internal marker from response so it never reaches the end user (whether auto-SQL is on or off).
+            if ai_response and ai_response.strip().startswith(config.DATA_NOT_IN_REPORT_MARKER):
+                rest = ai_response.strip()[len(config.DATA_NOT_IN_REPORT_MARKER):].strip()
+                ai_response = rest or "I don't have that information in the report."
+            logger.info("=" * 80)
+            logger.info("LLM RESPONSE RECEIVED")
+            logger.info("=" * 80)
+            logger.info(f"Response length: {len(ai_response)} chars")
+            if ai_response:
+                preview_length = min(LOG_PREVIEW_CHARS, len(ai_response))
+                logger.info(f"Response preview (first {preview_length} chars): {ai_response[:preview_length]}...")
+                if len(ai_response) > preview_length:
+                    logger.info(f"... (truncated, {len(ai_response) - preview_length} more chars)")
+            else:
+                logger.warning("LLM response is empty")
+            logger.info(f"Provider: {llm_response.get('provider', 'N/A')}")
+            logger.info(f"Model: {llm_response.get('model', 'N/A')}")
+            logger.info(f"Tokens used: {llm_response.get('tokens_used', 'N/A')}")
+            logger.info("=" * 80)
         
         # 3.5. Extract and save issue key from LLM response (always extract from final LLM answer)
         extracted_issue_key = extract_issue_key_from_response(ai_response)

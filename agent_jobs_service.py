@@ -173,6 +173,10 @@ def validate_agent_job_request(job_type: str, team_name: Optional[str], pi: Opti
     if not job_type or not job_type.strip():
         raise HTTPException(status_code=400, detail="job_type is required")
     
+    # Test job type: no validation against insight_types; agent no-ops
+    if job_type.strip().lower() == "test":
+        return "Test"
+    
     # Get insight type from database by insight_id
     insight_types = get_insight_types(insight_id=job_type, conn=conn)
     if not insight_types or len(insight_types) == 0:

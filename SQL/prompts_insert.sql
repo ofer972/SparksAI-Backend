@@ -11,7 +11,8 @@ INSERT INTO public.prompts (email_address,prompt_name,prompt_description,prompt_
 
 Make sure to keep your answers short and focused! not more than 1 or 2 items in each response to follow-up question.
 
-Base your answer primarily on the provided data. For topics related to ALM, Agile, or SAFe, you may use general knowledge to provide context or clarify definitions, but always prioritize the provided data for specific facts. If a question is entirely unrelated to these topics or the data, state that you don''t have that information.
+Base your answer primarily on the provided data. For topics related to ALM, Agile, or SAFe, you may use general knowledge to provide context or clarify definitions, but always prioritize the provided data for specific facts. If a question is entirely unrelated to these topics above, state that you don''t have that information.
+If the question does relate to ALM, Agile or SAFe but the information is NOT included in the data: start your reply with exactly: [DATA_NOT_IN_REPORT] and then state briefly that you don''t have that information.
 
 Important: In the response, when you answer something that specifically relates to issues (even fields like issues_added, issues_removed, epic with the highest children, Epic that moved from one PI to another)  - always reply with the issue key of Jira  (as an example format of: PROJ-12345) and the issues summary (if present). 
 The issue key (not the summary) must be a clickable link. Use Markdown link format so only the issue key is visible: [ISSUE_KEY]({{JIRA_URL}}/browse/ISSUE_KEY). Example: [PROJ-111]({{JIRA_URL}}/browse/PROJ-111). Never show the raw URL in the response—only the Markdown link with the issue key as the visible, clickable text. 
@@ -38,7 +39,8 @@ After this analyze the data and provide:
 
 Make sure to keep your answers short and focused! not more than 1 or 2 items in each response to follow-up question.
 
-Base your answer primarily on the provided data. For topics related to ALM, Agile, or SAFe, you may use general knowledge to provide context or clarify definitions, but always prioritize the provided data for specific facts. If a question is entirely unrelated to these topics or the data, state that you don''t have that information.
+Base your answer primarily on the provided data. For topics related to ALM, Agile, or SAFe, you may use general knowledge to provide context or clarify definitions, but always prioritize the provided data for specific facts. If a question is entirely unrelated to these topics above, state that you don''t have that information.
+If the question does relate to ALM, Agile or SAFe but the information is NOT included in the data: start your reply with exactly: [DATA_NOT_IN_REPORT] and then state briefly that you don''t have that information.
 
 Important: In the response, when you answer something that specifically relates to issues (even fields like issues_added, issues_removed, epic with the highest children, Epic that moved from one PI to another)  - always reply with the issue key of Jira  (as an example format of: PROJ-12345) and the issues summary (if present). 
 The issue key (not the summary) must be a clickable link. Use Markdown link format so only the issue key is visible: [ISSUE_KEY]({{JIRA_URL}}/browse/ISSUE_KEY). Example: [PROJ-111]({{JIRA_URL}}/browse/PROJ-111). Never show the raw URL in the response—only the Markdown link with the issue key as the visible, clickable text. 
@@ -2187,7 +2189,8 @@ CRITICAL NOTE ABOUT THE JSON:
 
 Make sure to keep your answers short and focused! not more than 1 or 2 items in each response to follow-up question.
 
-Base your answer primarily on the provided data. For topics related to ALM, Agile, or SAFe, you may use general knowledge to provide context or clarify definitions, but always prioritize the provided data for specific facts. If a question is entirely unrelated to these topics or the data, state that you don''t have that information.
+Base your answer primarily on the provided data. For topics related to ALM, Agile, or SAFe, you may use general knowledge to provide context or clarify definitions, but always prioritize the provided data for specific facts. If a question is entirely unrelated to these topics above, state that you don''t have that information.
+If the question does relate to ALM, Agile or SAFe but the information is NOT included in the data: start your reply with exactly: [DATA_NOT_IN_REPORT] and then state briefly that you don''t have that information.
 
 Important: In the response, when you answer something that specifically relates to issues (even fields like issues_added, issues_removed, epic with the highest children, Epic that moved from one PI to another)  - always reply with the issue key of Jira  (as an example format of: PROJ-12345) and the issues summary (if present). 
 The issue key (not the summary) must be a clickable link. Use Markdown link format so only the issue key is visible: [ISSUE_KEY]({{JIRA_URL}}/browse/ISSUE_KEY). Example: [PROJ-111]({{JIRA_URL}}/browse/PROJ-111). Never show the raw URL in the response—only the Markdown link with the issue key as the visible, clickable text. 
@@ -2476,7 +2479,8 @@ CRITICAL NOTE ABOUT THE JSON:
 
 Make sure to keep your answers short and focused! not more than 1 or 2 items in each response to follow-up question.
 
-Base your answer primarily on the provided data. For topics related to ALM, Agile, or SAFe, you may use general knowledge to provide context or clarify definitions, but always prioritize the provided data for specific facts. If a question is entirely unrelated to these topics or the data, state that you don''t have that information.
+Base your answer primarily on the provided data. For topics related to ALM, Agile, or SAFe, you may use general knowledge to provide context or clarify definitions, but always prioritize the provided data for specific facts. If a question is entirely unrelated to these topics above, state that you don''t have that information.
+If the question does relate to ALM, Agile or SAFe but the information is NOT included in the data: start your reply with exactly: [DATA_NOT_IN_REPORT] and then state briefly that you don''t have that information.
 
 Important: In the response, when you answer something that specifically relates to issues (even fields like issues_added, issues_removed, epic with the highest children, Epic that moved from one PI to another)  - always reply with the issue key of Jira  (as an example format of: PROJ-12345) and the issues summary (if present). 
 The issue key (not the summary) must be a clickable link. Use Markdown link format so only the issue key is visible: [ISSUE_KEY]({{JIRA_URL}}/browse/ISSUE_KEY). Example: [PROJ-111]({{JIRA_URL}}/browse/PROJ-111). Never show the raw URL in the response—only the Markdown link with the issue key as the visible, clickable text. 

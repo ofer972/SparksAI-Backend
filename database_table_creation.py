@@ -2218,8 +2218,9 @@ def insert_default_global_settings():
                 ('backend_cache_ttl_groups_teams', '3600', 'integer', 'Cache Configuration', 'Cache TTL for groups/teams data - changes infrequently, cache for longer period'),
                 ('backend_redis_failure_cooldown_seconds', '1800', 'integer', 'Cache Configuration', 'Redis failure cooldown period in seconds - prevents repeated connection attempts when Redis is unavailable'),
                 
-                -- AI Chat Configuration (1 setting)
-                ('backend_ai_chat_max_question_length', '1000', 'integer', 'AI Chat', 'Maximum character length for AI chat questions')
+                -- AI Chat Configuration (2 settings)
+                ('backend_ai_chat_max_question_length', '1000', 'integer', 'AI Chat', 'Maximum character length for AI chat questions'),
+                ('backend_ai_chat_auto_sql_when_data_not_in_report', 'false', 'boolean', 'AI Chat', 'When the answer is not in the report or dashboard data, automatically try to get the information from the database (same as using ! before the question). Default: off.')
             ON CONFLICT (setting_key) DO NOTHING;
             """
             conn.execute(text(insert_sql))

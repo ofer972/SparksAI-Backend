@@ -177,3 +177,6 @@ ACTIVE_SPRINT_JIRA_URL_PLAN.md
 ACTIVE_SPRINT_REPORT_URL_PLAN.md
 ACTIVE_SPRINT_URL_PLAN.md
 CLOSED_SPRINT_URL_PLAN.md
+
+# Integration test recordings (temporary: do not push to remote)
+integration_tests/recordings/
