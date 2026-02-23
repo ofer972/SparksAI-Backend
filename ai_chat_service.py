@@ -25,7 +25,8 @@ from database_team_metrics import (
     get_closed_sprints_data_db,
     get_sprint_burndown_data_db,
     get_issues_trend_data_db,
-    get_sprints_with_total_issues_db
+    get_sprints_with_total_issues_db,
+    resolve_team_names_from_filter,
 )
 from database_pi import (
     fetch_pi_burndown_data,
@@ -118,19 +119,29 @@ def convert_history_to_sql_format(history_json: Dict[str, Any]) -> List[Dict[str
 
 
 def get_report_context_from_chat_history(conversation_id: Optional[str], conn: Connection) -> Dict[str, Any]:
-    """Load team/pi from chat_history for this conversation. Returns e.g. {pi_name, team_name} for SQL report context."""
+    """Load team/pi from chat_history; resolve group to team_names. Returns {pi_name, team_name, team_names?} for SQL."""
     if not conversation_id or not conn:
         return {}
     try:
         cid = int(str(conversation_id).strip())
-        q = text(f"SELECT team, pi FROM {config.CHAT_HISTORY_TABLE} WHERE id = :cid")
+        q = text(f"SELECT team, pi, history_json FROM {config.CHAT_HISTORY_TABLE} WHERE id = :cid")
         row = conn.execute(q, {"cid": cid}).fetchone()
         if not row:
             return {}
-        return {
-            "pi_name": (row[1] or "").strip() or None,
-            "team_name": (row[0] or "").strip() or None,
-        }
+        team_val = (row[0] or "").strip() or None
+        pi_val = (row[1] or "").strip() or None
+        history_json = row[2] if row[2] is not None else {}
+        is_group = False
+        if isinstance(history_json, dict) and history_json.get("report_context_snapshot"):
+            is_group = bool(history_json["report_context_snapshot"].get("is_group"))
+        report_context = {"pi_name": pi_val, "team_name": team_val}
+        if team_val:
+            try:
+                team_names_list = resolve_team_names_from_filter(team_val, is_group, conn)
+                report_context["team_names"] = team_names_list  # list or None (all teams)
+            except Exception as e:
+                logger.warning("resolve_team_names_from_filter failed: %s", e)
+        return report_context
     except Exception as e:
         logger.warning("get_report_context_from_chat_history failed: %s", e)
         return {}
@@ -203,6 +214,7 @@ class AIChatRequest(BaseModel):
     prompt_name: Optional[str] = Field(None, description="Prompt name")
     selected_team: Optional[str] = Field(None, description="Selected team name")
     selected_pi: Optional[str] = Field(None, description="Selected PI name")
+    is_group: Optional[bool] = Field(None, description="If true, selected_team is a group name")
     chat_type: Optional[ChatType] = Field(None, description="Type of chat")
     recommendation_id: Optional[str] = Field(None, description="ID of recommendation")
     insights_id: Optional[str] = Field(None, description="ID of insights")
@@ -218,7 +230,8 @@ def get_or_create_chat_history(
     team: Optional[str],
     pi: Optional[str],
     chat_type: Optional[str],
-    conn: Connection
+    conn: Connection,
+    is_group: Optional[bool] = None,
 ) -> Tuple[str, Dict[str, Any]]:
     """
     Get existing chat history or create new chat history row.
@@ -257,13 +270,16 @@ def get_or_create_chat_history(
                     history_json = {"messages": []}
                 if "messages" not in history_json:
                     history_json["messages"] = []
+                # Preserve report_context_snapshot when returning (used when building report_context later)
                 return str(row[0]), history_json
         except Exception as e:
             logger.warning(f"Error fetching chat history for conversation_id {conversation_id}: {e}")
             # If fetch fails, create new conversation
     
-    # Create new chat history row
+    # Create new chat history row (store is_group in history_json for report context later)
     history_json = {"messages": []}
+    if is_group is not None:
+        history_json["report_context_snapshot"] = {"is_group": bool(is_group)}
     insert_query = text(f"""
         INSERT INTO {config.CHAT_HISTORY_TABLE}
         (username, team, pi, chat_type, history_json)
@@ -300,13 +316,15 @@ def update_chat_history(
     assistant_response: str,
     conn: Connection,
     append_assistant_only: bool = False,
-    refinement_block: Optional[str] = None
+    refinement_block: Optional[str] = None,
+    is_group: Optional[bool] = None,
 ) -> None:
     """
     Update chat history with new message(s).
     Initial and normal follow-up: append user question then assistant response (chronological order).
     Refinement and SQL: append assistant only.
     When refinement_block is provided with append_assistant_only, store it so it appears in chronological order (dashboard first, then refinement blocks and answers in order).
+    When is_group is provided, persist it in history_json.report_context_snapshot so follow-up SQL can use it from history.
     """
     try:
         query = text(f"""
@@ -327,6 +345,9 @@ def update_chat_history(
             history_json = {"messages": []}
         if "messages" not in history_json:
             history_json["messages"] = []
+        # Persist is_group so get_report_context_from_chat_history has it on follow-up
+        if is_group is not None:
+            history_json.setdefault("report_context_snapshot", {})["is_group"] = bool(is_group)
 
         # Store refinement block (if any) before the assistant we're about to append; index = current assistant count
         if refinement_block and refinement_block.strip():
@@ -1933,14 +1954,15 @@ async def ai_chat(
             except AttributeError:
                 chat_type_str = str(request.chat_type)
 
-        # 1. Get or create chat history
+        # 1. Get or create chat history (is_group from request is stored in history_json.report_context_snapshot on create)
         conversation_id, history_json = get_or_create_chat_history(
             conversation_id=request.conversation_id,
             user_id=request.user_id,
             team=request.selected_team,
             pi=request.selected_pi,
             chat_type=chat_type_str,
-            conn=conn
+            conn=conn,
+            is_group=request.is_group,
         )
         
         logger.info(f"Conversation ID: {conversation_id}")
@@ -2429,6 +2451,14 @@ async def ai_chat(
             sql_was_attempted = True
             logger.info("BACKEND: SQL trigger (!) detected - will call SQL service")
             report_context = get_report_context_from_chat_history(conversation_id, conn)
+            # Use request.is_group on follow-up when provided (UI may not send dashboardData every time)
+            if getattr(request, "is_group", None) is not None and report_context:
+                team_val = report_context.get("team_name") or getattr(request, "selected_team", None)
+                if team_val:
+                    try:
+                        report_context["team_names"] = resolve_team_names_from_filter(team_val, bool(request.is_group), conn)
+                    except Exception as e:
+                        logger.warning("resolve_team_names_from_filter (request.is_group) failed: %s", e)
             success, sql_formatted_for_history = await run_sql_path(
                 request.question, history_json, report_context=report_context
             )
@@ -2601,6 +2631,13 @@ async def ai_chat(
                 sql_was_attempted = True
                 sql_question = (config.SQL_AI_TRIGGER + " " + request.question.strip())
                 report_context = get_report_context_from_chat_history(conversation_id, conn)
+                if getattr(request, "is_group", None) is not None and report_context:
+                    team_val = report_context.get("team_name") or getattr(request, "selected_team", None)
+                    if team_val:
+                        try:
+                            report_context["team_names"] = resolve_team_names_from_filter(team_val, bool(request.is_group), conn)
+                        except Exception as e:
+                            logger.warning("resolve_team_names_from_filter (request.is_group) failed: %s", e)
                 success, formatted = await run_sql_path(
                     sql_question, history_json, report_context=report_context
                 )
@@ -2681,13 +2718,16 @@ async def ai_chat(
                 conn.rollback()
         
         # 4. Update chat history. Initial and normal follow-up: append user + assistant (chronological order). Refinement/SQL: assistant only.
+        # Pass is_group so it is persisted for follow-up SQL (get_report_context_from_chat_history).
+        req_is_group = getattr(request, "is_group", None)
         if is_initial_call:
             update_chat_history(
                 conversation_id=conversation_id,
                 user_message=request.question,
                 assistant_response=ai_response,
                 conn=conn,
-                append_assistant_only=False
+                append_assistant_only=False,
+                is_group=req_is_group,
             )
         elif refinement_context_to_prepend:
             update_chat_history(
@@ -2696,7 +2736,8 @@ async def ai_chat(
                 assistant_response=ai_response,
                 conn=conn,
                 append_assistant_only=False,
-                refinement_block=refinement_context_to_prepend
+                refinement_block=refinement_context_to_prepend,
+                is_group=req_is_group,
             )
         elif sql_was_triggered and sql_formatted_for_history:
             update_chat_history(
@@ -2704,7 +2745,8 @@ async def ai_chat(
                 user_message=None,
                 assistant_response=sql_formatted_for_history,
                 conn=conn,
-                append_assistant_only=True
+                append_assistant_only=True,
+                is_group=req_is_group,
             )
         else:
             update_chat_history(
@@ -2712,7 +2754,8 @@ async def ai_chat(
                 user_message=request.question,
                 assistant_response=ai_response,
                 conn=conn,
-                append_assistant_only=False
+                append_assistant_only=False,
+                is_group=req_is_group,
             )
         
         # 5. Prepare response
