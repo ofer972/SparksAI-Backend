@@ -2623,7 +2623,7 @@ async def ai_chat(
             if (
                 settings.AI_CHAT_AUTO_SQL_WHEN_DATA_NOT_IN_REPORT
                 and not sql_was_attempted
-                and chat_type_str in ("Team_dashboard", "PI_dashboard", "Custom_dashboard")
+                and chat_type_str in ("Team_dashboard", "PI_dashboard", "Custom_dashboard", "Team_insights")
                 and ai_response
                 and ai_response.strip().upper().startswith(config.DATA_NOT_IN_REPORT_MARKER.strip().upper())
             ):
@@ -2669,16 +2669,10 @@ async def ai_chat(
                     except HTTPException:
                         raise
                 else:
-                    if ai_response and ai_response.strip().upper().startswith(config.DATA_NOT_IN_REPORT_MARKER.strip().upper()):
-                        rest = ai_response.strip()[len(config.DATA_NOT_IN_REPORT_MARKER.strip()):].strip()
-                        ai_response = rest or "I don't have that information in the report."
+                    ai_response = "Data does not exist in the information sent. DB query to get the requested information was incomplete"
             if sql_was_triggered and ai_response:
                 if not ai_response.startswith("**This information was not included"):
                     ai_response = "**This information was not included in the original report. Data may be incomplete.**\n\n" + ai_response
-            # Strip internal marker from response so it never reaches the end user (whether auto-SQL is on or off).
-            if ai_response and ai_response.strip().upper().startswith(config.DATA_NOT_IN_REPORT_MARKER.strip().upper()):
-                rest = ai_response.strip()[len(config.DATA_NOT_IN_REPORT_MARKER.strip()):].strip()
-                ai_response = rest or "I don't have that information in the report."
             logger.info("=" * 80)
             logger.info("LLM RESPONSE RECEIVED")
             logger.info("=" * 80)
