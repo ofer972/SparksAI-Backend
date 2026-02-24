@@ -2625,9 +2625,9 @@ async def ai_chat(
                 and not sql_was_attempted
                 and chat_type_str in ("Team_dashboard", "PI_dashboard", "Custom_dashboard")
                 and ai_response
-                and ai_response.strip().startswith(config.DATA_NOT_IN_REPORT_MARKER)
+                and ai_response.strip().upper().startswith(config.DATA_NOT_IN_REPORT_MARKER.strip().upper())
             ):
-                logger.info("BACKEND: [DATA_NOT_IN_REPORT] detected - auto-invoking SQL flow")
+                logger.info("BACKEND: DATA_NOT_IN_REPORT marker detected - auto-invoking SQL flow")
                 sql_was_attempted = True
                 sql_question = (config.SQL_AI_TRIGGER + " " + request.question.strip())
                 report_context = get_report_context_from_chat_history(conversation_id, conn)
@@ -2669,15 +2669,15 @@ async def ai_chat(
                     except HTTPException:
                         raise
                 else:
-                    if ai_response and ai_response.strip().startswith(config.DATA_NOT_IN_REPORT_MARKER):
-                        rest = ai_response.strip()[len(config.DATA_NOT_IN_REPORT_MARKER):].strip()
+                    if ai_response and ai_response.strip().upper().startswith(config.DATA_NOT_IN_REPORT_MARKER.strip().upper()):
+                        rest = ai_response.strip()[len(config.DATA_NOT_IN_REPORT_MARKER.strip()):].strip()
                         ai_response = rest or "I don't have that information in the report."
             if sql_was_triggered and ai_response:
                 if not ai_response.startswith("**This information was not included"):
                     ai_response = "**This information was not included in the original report. Data may be incomplete.**\n\n" + ai_response
             # Strip internal marker from response so it never reaches the end user (whether auto-SQL is on or off).
-            if ai_response and ai_response.strip().startswith(config.DATA_NOT_IN_REPORT_MARKER):
-                rest = ai_response.strip()[len(config.DATA_NOT_IN_REPORT_MARKER):].strip()
+            if ai_response and ai_response.strip().upper().startswith(config.DATA_NOT_IN_REPORT_MARKER.strip().upper()):
+                rest = ai_response.strip()[len(config.DATA_NOT_IN_REPORT_MARKER.strip()):].strip()
                 ai_response = rest or "I don't have that information in the report."
             logger.info("=" * 80)
             logger.info("LLM RESPONSE RECEIVED")

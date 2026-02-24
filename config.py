@@ -87,7 +87,7 @@ LLM_SQL_SERVICE_URL = os.getenv("LLM_SQL_SERVICE_URL", "http://localhost:8002")
 # --- SQL AI Trigger Configuration ---
 SQL_AI_TRIGGER = "!"  # Trigger character to detect SQL queries in user questions (first character check)
 # Marker in LLM response to auto-invoke SQL when data is not in report/dashboard (see system prompts)
-DATA_NOT_IN_REPORT_MARKER = os.getenv("DATA_NOT_IN_REPORT_MARKER", "[DATA_NOT_IN_REPORT]")
+DATA_NOT_IN_REPORT_MARKER = os.getenv("DATA_NOT_IN_REPORT_MARKER", "==>DATA NOT IN THE REPORT.")
 
 # --- Redis Configuration ---
 REDIS_HOST = os.getenv("REDIS_HOST") or "localhost"
