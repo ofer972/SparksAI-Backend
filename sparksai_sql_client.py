@@ -16,7 +16,8 @@ logger = logging.getLogger(__name__)
 async def call_sparksai_sql_execute(
     question: str,
     conversation_history: Optional[List[Dict[str, Any]]] = None,
-    include_formatted: bool = True
+    include_formatted: bool = True,
+    report_context: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     """
     Call SparksAI-SQL service /sql/execute endpoint to generate and execute SQL from natural language question.
@@ -25,6 +26,7 @@ async def call_sparksai_sql_execute(
         question: Natural language question (may contain trigger "!")
         conversation_history: Previous conversation exchanges in format [{'question': str, 'sql': str, 'answer': str}]
         include_formatted: Whether to include formatted_for_llm in response (default: True)
+        report_context: Optional {pi_name, team_name} to scope generated SQL to current report/dashboard.
         
     Returns:
         Dictionary with 'success', 'data' keys where 'data' contains:
@@ -43,15 +45,18 @@ async def call_sparksai_sql_execute(
     
     if conversation_history:
         payload["conversation_history"] = conversation_history
+    if report_context:
+        payload["report_context"] = report_context
     
-    logger.info(f"Calling SparksAI-SQL service: {sql_service_url}")
-    logger.info(f"Question: {question[:100]}...")
+    logger.info(">>> SQL CLIENT: Calling SparksAI-SQL service: %s", sql_service_url)
+    logger.info(">>> SQL CLIENT: Question: %s", question[:150] + ("..." if len(question) > 150 else ""))
     logger.info(f"Conversation history: {len(conversation_history) if conversation_history else 0} exchanges")
     logger.debug(f"Payload keys: {list(payload.keys())}")
     
     try:
         async with httpx.AsyncClient(timeout=120.0) as client:  # Longer timeout for SQL generation and execution
             response = await client.post(sql_service_url, json=payload)
+            logger.info(">>> SQL CLIENT: Received response from SQL service, status_code=%s", response.status_code)
             response.raise_for_status()
             result = response.json()
             

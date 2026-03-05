@@ -23,9 +23,10 @@ from database_connection import get_db_connection
 from database_general import get_ai_card_by_id, get_recommendation_by_id, get_prompt_by_email_and_name, get_formatted_job_data_for_llm_followup_insight, get_formatted_job_data_for_llm_followup_recommendation, get_insight_types
 from database_team_metrics import (
     get_closed_sprints_data_db,
-    get_sprint_burndown_data_db,
+    get_sprint_burndown_data_computed,
     get_issues_trend_data_db,
-    get_sprints_with_total_issues_db
+    get_sprints_with_total_issues_db,
+    resolve_team_names_from_filter,
 )
 from database_pi import (
     fetch_pi_burndown_data,
@@ -33,6 +34,7 @@ from database_pi import (
     fetch_scope_changes_data
 )
 import config
+from goals_service import get_current_pi
 from sparksai_sql_client import call_sparksai_sql_execute
 
 logger = logging.getLogger(__name__)
@@ -117,6 +119,82 @@ def convert_history_to_sql_format(history_json: Dict[str, Any]) -> List[Dict[str
     return sql_history[-3:] if len(sql_history) > 3 else sql_history
 
 
+def get_report_context_from_chat_history(conversation_id: Optional[str], conn: Connection) -> Dict[str, Any]:
+    """Load team/pi from chat_history; resolve group to team_names. Returns {pi_name, team_name, team_names?} for SQL."""
+    if not conversation_id or not conn:
+        return {}
+    try:
+        cid = int(str(conversation_id).strip())
+        q = text(f"SELECT team, pi, history_json FROM {config.CHAT_HISTORY_TABLE} WHERE id = :cid")
+        row = conn.execute(q, {"cid": cid}).fetchone()
+        if not row:
+            return {}
+        team_val = (row[0] or "").strip() or None
+        pi_val = (row[1] or "").strip() or None
+        # Fallback to current PI when stored PI is missing or "unknown" (same rule as insight path at creation)
+        if not pi_val or (isinstance(pi_val, str) and pi_val.strip().lower() == "unknown"):
+            pi_val = get_current_pi(conn)
+        history_json = row[2] if row[2] is not None else {}
+        is_group = False
+        if isinstance(history_json, dict) and history_json.get("report_context_snapshot"):
+            is_group = bool(history_json["report_context_snapshot"].get("is_group"))
+        report_context = {"pi_name": pi_val, "team_name": team_val}
+        if team_val:
+            try:
+                team_names_list = resolve_team_names_from_filter(team_val, is_group, conn)
+                report_context["team_names"] = team_names_list  # list or None (all teams)
+            except Exception as e:
+                logger.warning("resolve_team_names_from_filter failed: %s", e)
+        return report_context
+    except Exception as e:
+        logger.warning("get_report_context_from_chat_history failed: %s", e)
+        return {}
+
+
+async def run_sql_path(
+    question: str,
+    history_json: Dict[str, Any],
+    report_context: Optional[Dict[str, Any]] = None,
+) -> Tuple[bool, Optional[str]]:
+    """
+    Call SQL service for the given question (may start with !). Returns (success, sql_formatted_for_history).
+    """
+    sql_history = convert_history_to_sql_format(history_json)
+    logger.info(f"Converted {len(sql_history)} previous SQL exchanges to history")
+    try:
+        sql_response = await call_sparksai_sql_execute(
+            question=question,
+            conversation_history=sql_history if sql_history else None,
+            include_formatted=True,
+            report_context=report_context,
+        )
+        if not sql_response.get("success"):
+            raise Exception(sql_response.get("data", {}).get("error", "Unknown error"))
+        sql_data = sql_response.get("data", {})
+        if sql_data.get("status") != "success":
+            raise Exception(sql_data.get("error", "SQL execution failed"))
+        clean_q = question[1:].strip() if question.startswith(config.SQL_AI_TRIGGER) else question.strip()
+        sql_formatted = sql_data.get("formatted_for_llm")
+        if not sql_formatted:
+            sql = sql_data.get("sql", "N/A")
+            results = sql_data.get("results", [])
+            row_count = len(results)
+            results_json = json.dumps(results[:100], indent=2, default=str) if results else "[]"
+            sql_formatted = f"""=== DATABASE QUERY ===
+Question: {clean_q}
+Answer:
+SQL Query:
+{sql}
+
+Results ({row_count} row{'s' if row_count != 1 else ''}):
+{results_json}
+=== END DATABASE QUERY ==="""
+        return (True, sql_formatted)
+    except Exception as e:
+        logger.warning("run_sql_path failed: %s", e)
+        return (False, None)
+
+
 # System message constant for all AI chat interactions
 SYSTEM_MESSAGE = "You are AI assistant specialized in Agile, Scrum, Scaled Agile. All your answers should be brief with no more than 3 paragraphs with concrete and specific information based on the content provided"
 
@@ -140,6 +218,7 @@ class AIChatRequest(BaseModel):
     prompt_name: Optional[str] = Field(None, description="Prompt name")
     selected_team: Optional[str] = Field(None, description="Selected team name")
     selected_pi: Optional[str] = Field(None, description="Selected PI name")
+    is_group: Optional[bool] = Field(None, description="If true, selected_team is a group name")
     chat_type: Optional[ChatType] = Field(None, description="Type of chat")
     recommendation_id: Optional[str] = Field(None, description="ID of recommendation")
     insights_id: Optional[str] = Field(None, description="ID of insights")
@@ -149,13 +228,69 @@ class AIChatRequest(BaseModel):
         use_enum_values = True
 
 
+def _resolve_team_pi_from_insight_card(
+    chat_type: str,
+    insights_id: Optional[str],
+    selected_team: Optional[str],
+    selected_pi: Optional[str],
+    is_group: Optional[bool],
+    conn: Connection,
+) -> Tuple[Optional[str], Optional[str], Optional[bool]]:
+    """
+    For Team_insights or PI_insights with insights_id, load the card and resolve
+    team (team_name or group_name), pi (card pi or current PI if empty), and is_group.
+    Returns (team, pi, is_group) for use in get_or_create_chat_history.
+    - If card has group_name: use it as team and set is_group=True.
+    - If card has team_name (and no group_name): use it as team; is_group from request.
+    - If pi is empty after card/request: use get_current_pi(conn).
+    """
+    if not insights_id or chat_type not in ("Team_insights", "PI_insights"):
+        return selected_team, selected_pi, is_group
+    try:
+        insights_id_int = int(str(insights_id).strip())
+    except (ValueError, TypeError):
+        return selected_team, selected_pi, is_group
+    card = get_ai_card_by_id(insights_id_int, conn)
+    if not card:
+        return selected_team, selected_pi, is_group
+
+    def _empty(s: Optional[str]) -> bool:
+        if s is None:
+            return True
+        t = (s or "").strip().lower()
+        return t in ("", "unknown")
+
+    # Team: prefer group_name then team_name from card; else keep request
+    card_group = (card.get("group_name") or "").strip() or None
+    card_team = (card.get("team_name") or "").strip() or None
+    if card_group:
+        effective_team = card_group
+        effective_is_group = True
+    elif card_team:
+        effective_team = card_team
+        effective_is_group = is_group if is_group is not None else False
+    else:
+        effective_team = selected_team if not _empty(selected_team) else None
+        effective_is_group = is_group
+
+    # PI: card pi, else request; if still empty, get current PI
+    effective_pi = (card.get("pi") or "").strip() or None
+    if _empty(effective_pi):
+        effective_pi = (selected_pi or "").strip() or None
+    if _empty(effective_pi):
+        effective_pi = get_current_pi(conn)
+
+    return effective_team, effective_pi, effective_is_group
+
+
 def get_or_create_chat_history(
     conversation_id: Optional[str],
     user_id: Optional[str],
     team: Optional[str],
     pi: Optional[str],
     chat_type: Optional[str],
-    conn: Connection
+    conn: Connection,
+    is_group: Optional[bool] = None,
 ) -> Tuple[str, Dict[str, Any]]:
     """
     Get existing chat history or create new chat history row.
@@ -194,13 +329,16 @@ def get_or_create_chat_history(
                     history_json = {"messages": []}
                 if "messages" not in history_json:
                     history_json["messages"] = []
+                # Preserve report_context_snapshot when returning (used when building report_context later)
                 return str(row[0]), history_json
         except Exception as e:
             logger.warning(f"Error fetching chat history for conversation_id {conversation_id}: {e}")
             # If fetch fails, create new conversation
     
-    # Create new chat history row
+    # Create new chat history row (store is_group in history_json for report context later)
     history_json = {"messages": []}
+    if is_group is not None:
+        history_json["report_context_snapshot"] = {"is_group": bool(is_group)}
     insert_query = text(f"""
         INSERT INTO {config.CHAT_HISTORY_TABLE}
         (username, team, pi, chat_type, history_json)
@@ -237,13 +375,15 @@ def update_chat_history(
     assistant_response: str,
     conn: Connection,
     append_assistant_only: bool = False,
-    refinement_block: Optional[str] = None
+    refinement_block: Optional[str] = None,
+    is_group: Optional[bool] = None,
 ) -> None:
     """
     Update chat history with new message(s).
     Initial and normal follow-up: append user question then assistant response (chronological order).
     Refinement and SQL: append assistant only.
     When refinement_block is provided with append_assistant_only, store it so it appears in chronological order (dashboard first, then refinement blocks and answers in order).
+    When is_group is provided, persist it in history_json.report_context_snapshot so follow-up SQL can use it from history.
     """
     try:
         query = text(f"""
@@ -264,6 +404,9 @@ def update_chat_history(
             history_json = {"messages": []}
         if "messages" not in history_json:
             history_json["messages"] = []
+        # Persist is_group so get_report_context_from_chat_history has it on follow-up
+        if is_group is not None:
+            history_json.setdefault("report_context_snapshot", {})["is_group"] = bool(is_group)
 
         # Store refinement block (if any) before the assistant we're about to append; index = current assistant count
         if refinement_block and refinement_block.strip():
@@ -382,7 +525,7 @@ def build_team_dashboard_context(
                     logger.info(f"Auto-selected sprint '{selected_sprint_name}' for burndown")
                     
                     # Get burndown data
-                    burndown_data = get_sprint_burndown_data_db(
+                    burndown_data = get_sprint_burndown_data_computed(
                         [team_name], 
                         selected_sprint_name, 
                         issue_type="all", 
@@ -1870,14 +2013,23 @@ async def ai_chat(
             except AttributeError:
                 chat_type_str = str(request.chat_type)
 
-        # 1. Get or create chat history
+        # 1. Resolve team/pi/is_group from insight card when present; if pi empty use current PI; then get or create chat history
+        effective_team, effective_pi, effective_is_group = _resolve_team_pi_from_insight_card(
+            chat_type_str,
+            request.insights_id,
+            request.selected_team,
+            request.selected_pi,
+            request.is_group,
+            conn,
+        )
         conversation_id, history_json = get_or_create_chat_history(
             conversation_id=request.conversation_id,
             user_id=request.user_id,
-            team=request.selected_team,
-            pi=request.selected_pi,
+            team=effective_team,
+            pi=effective_pi,
             chat_type=chat_type_str,
-            conn=conn
+            conn=conn,
+            is_group=effective_is_group,
         )
         
         logger.info(f"Conversation ID: {conversation_id}")
@@ -2363,69 +2515,23 @@ async def ai_chat(
         sql_formatted_for_history = None
         
         if request.question and request.question.startswith(config.SQL_AI_TRIGGER):
-            sql_was_attempted = True  # Mark that SQL was attempted
-            try:
-                logger.info(f"SQL AI trigger detected in question: {request.question[:100]}...")
-                
-                # Convert history to SQL service format
-                sql_history = convert_history_to_sql_format(history_json)
-                logger.info(f"Converted {len(sql_history)} previous SQL exchanges to history")
-                
-                # Call SparksAI-SQL service
-                sql_response = await call_sparksai_sql_execute(
-                    question=request.question,
-                    conversation_history=sql_history if sql_history else None,
-                    include_formatted=True
-                )
-                
-                # Extract data from response
-                if not sql_response.get("success"):
-                    raise Exception(f"SQL service returned error: {sql_response.get('data', {}).get('error', 'Unknown error')}")
-                
-                sql_data = sql_response.get("data", {})
-                sql_status = sql_data.get("status", "error")
-                
-                # Log what SQL service returned
-                logger.info(f"=== SPARKSAI-SQL SERVICE RETURNED ===")
-                logger.info(f"Status: {sql_status}")
-                logger.info(f"SQL: {sql_data.get('sql', 'N/A')}")
-                logger.info(f"Results count: {len(sql_data.get('results', []))}")
-                if sql_data.get('error'):
-                    logger.info(f"Error: {sql_data.get('error')}")
-                logger.info(f"=== END SPARKSAI-SQL SERVICE RETURNED ===")
-                
-                # Clean question for formatting (remove trigger from start)
-                clean_question_for_sql = request.question
-                if clean_question_for_sql.startswith(config.SQL_AI_TRIGGER):
-                    clean_question_for_sql = clean_question_for_sql[1:].strip()
-                
-                # Get formatted_for_llm from response (already formatted by SQL service)
-                sql_formatted = sql_data.get("formatted_for_llm")
-                if not sql_formatted:
-                    # Fallback: format manually if not provided
-                    logger.warning("formatted_for_llm not in response, formatting manually")
-                    sql = sql_data.get('sql', 'N/A')
-                    results = sql_data.get('results', [])
-                    row_count = len(results)
-                    results_json = json.dumps(results[:100], indent=2, default=str) if results else "[]"
-                    sql_formatted = f"""=== DATABASE QUERY ===
-Question: {clean_question_for_sql}
-Answer:
-SQL Query:
-{sql}
-
-Results ({row_count} row{'s' if row_count != 1 else ''}):
-{results_json}
-=== END DATABASE QUERY ==="""
-                
-                # Store SQL data for chat history
+            sql_was_attempted = True
+            logger.info("BACKEND: SQL trigger (!) detected - will call SQL service")
+            report_context = get_report_context_from_chat_history(conversation_id, conn)
+            # Use request.is_group on follow-up when provided (UI may not send dashboardData every time)
+            if getattr(request, "is_group", None) is not None and report_context:
+                team_val = report_context.get("team_name") or getattr(request, "selected_team", None)
+                if team_val:
+                    try:
+                        report_context["team_names"] = resolve_team_names_from_filter(team_val, bool(request.is_group), conn)
+                    except Exception as e:
+                        logger.warning("resolve_team_names_from_filter (request.is_group) failed: %s", e)
+            success, sql_formatted_for_history = await run_sql_path(
+                request.question, history_json, report_context=report_context
+            )
+            if success:
                 sql_was_triggered = True
-                sql_formatted_for_history = sql_formatted
-                
-                logger.info(f"SQL success (status: {sql_status}); will append only SQL answer to history after LLM response")
-            except Exception as e:
-                logger.warning(f"SQL service processing failed: {e}")
-                # Do not store SQL error in history; LLM still gets error via question param if we inject it there, or we skip
+                logger.info("SQL success; will append only SQL answer to history after LLM response")
 
         # 3. Call LLM service
         # Remove "!" trigger from question if present before sending to LLM
@@ -2441,6 +2547,16 @@ Results ({row_count} row{'s' if row_count != 1 else ''}):
             # Combine question + SQL results so LLM sees them together
             question_to_send = f"{question_to_send}\n\n=== DATABASE QUERY RESULTS ===\n{sql_formatted_for_history}\n=== END DATABASE QUERY RESULTS ==="
             logger.info(f"Combined SQL results with question for LLM (question length: {len(question_to_send)} chars)")
+        
+        # If SQL was attempted but failed, return generic message without calling LLM
+        SQL_FAILURE_MESSAGE = "I could not find the requested information."
+        if sql_was_attempted and not sql_was_triggered:
+            ai_response = SQL_FAILURE_MESSAGE
+            llm_response = {}
+            logger.info("SQL query failed; returning generic message without calling LLM")
+        else:
+            ai_response = None
+            llm_response = None
         
         # Check for issue suggestion request in follow-up questions (before building conversation_context_for_llm)
         issue_details_context = None
@@ -2497,7 +2613,7 @@ Results ({row_count} row{'s' if row_count != 1 else ''}):
                 block = dashboard_first
             conversation_context_for_llm = block
             logger.info(f"Follow-up: dashboard first + {len(parts)} answer(s) + {len(refinement_blocks)} refinement block(s) ({len(conversation_context_for_llm)} chars)")
-
+        
         # Single-epic rule: if user asked about a specific issue/epic (issue_details_context),
         # send ONLY that epic's context so we never send two epics and confuse the LLM.
         # When refinement is being prepended we keep the full request data and do not overwrite.
@@ -2542,52 +2658,103 @@ Results ({row_count} row{'s' if row_count != 1 else ''}):
             conversation_context_for_llm = (conversation_context_for_llm or "") + "\n\n" + refinement_context_to_prepend
             logger.info(f"{EMOJI_REFINEMENT} Appended refinement context (refinement + epic, length: {len(refinement_context_to_prepend)} chars)")
         
-        # Log what we send to LLM (flow visibility without debug detail)
-        logger.info(
-            f"Sending to LLM: question_len={len(question_to_send)}, "
-            f"conversation_context={'SET' if conversation_context_for_llm else 'None'}"
-            + (f" ({len(conversation_context_for_llm)} chars)" if conversation_context_for_llm else "")
-            + f", messages_count={len(history_json.get('messages', []))}"
-        )
-        history_json_to_send = history_json
-        conversation_context_to_send = conversation_context_for_llm
-
-        llm_response = await call_llm_service(
-            conversation_id=conversation_id,
-            question=question_to_send,
-            history_json=history_json_to_send,
-            user_id=request.user_id,
-            selected_team=request.selected_team,
-            selected_pi=request.selected_pi,
-            chat_type=chat_type_str,
-            conversation_context=conversation_context_to_send,
-            system_message=system_message
-        )
-        
-        if not llm_response.get("success"):
-            raise HTTPException(
-                status_code=502,
-                detail=f"LLM service returned error: {llm_response.get('detail', 'Unknown error')}"
+        # Call LLM only when we don't already have a response (e.g. SQL failure fallback)
+        if ai_response is None:
+            logger.info(
+                f"Sending to LLM: question_len={len(question_to_send)}, "
+                f"conversation_context={'SET' if conversation_context_for_llm else 'None'}"
+                + (f" ({len(conversation_context_for_llm)} chars)" if conversation_context_for_llm else "")
+                + f", messages_count={len(history_json.get('messages', []))}"
             )
-        
-        ai_response = llm_response.get("response", "")
-        
-        # Log LLM response details
-        logger.info("=" * 80)
-        logger.info("LLM RESPONSE RECEIVED")
-        logger.info("=" * 80)
-        logger.info(f"Response length: {len(ai_response)} chars")
-        if ai_response:
-            preview_length = min(LOG_PREVIEW_CHARS, len(ai_response))
-            logger.info(f"Response preview (first {preview_length} chars): {ai_response[:preview_length]}...")
-            if len(ai_response) > preview_length:
-                logger.info(f"... (truncated, {len(ai_response) - preview_length} more chars)")
-        else:
-            logger.warning("LLM response is empty")
-        logger.info(f"Provider: {llm_response.get('provider', 'N/A')}")
-        logger.info(f"Model: {llm_response.get('model', 'N/A')}")
-        logger.info(f"Tokens used: {llm_response.get('tokens_used', 'N/A')}")
-        logger.info("=" * 80)
+            history_json_to_send = history_json
+            conversation_context_to_send = conversation_context_for_llm
+            llm_response = await call_llm_service(
+                conversation_id=conversation_id,
+                question=question_to_send,
+                history_json=history_json_to_send,
+                user_id=request.user_id,
+                selected_team=request.selected_team,
+                selected_pi=request.selected_pi,
+                chat_type=chat_type_str,
+                conversation_context=conversation_context_to_send,
+                system_message=system_message
+            )
+            if not llm_response.get("success"):
+                raise HTTPException(
+                    status_code=502,
+                    detail=f"LLM service returned error: {llm_response.get('detail', 'Unknown error')}"
+                )
+            ai_response = llm_response.get("response", "")
+            # Auto-invoke SQL when LLM indicated data is not in report (dashboard/report chat only).
+            # Controlled by setting: backend_ai_chat_auto_sql_when_data_not_in_report (default False).
+            if (
+                settings.AI_CHAT_AUTO_SQL_WHEN_DATA_NOT_IN_REPORT
+                and not sql_was_attempted
+                and chat_type_str in ("Team_dashboard", "PI_dashboard", "Custom_dashboard", "Team_insights")
+                and ai_response
+                and ai_response.strip().upper().startswith(config.DATA_NOT_IN_REPORT_MARKER.strip().upper())
+            ):
+                logger.info("BACKEND: DATA_NOT_IN_REPORT marker detected - auto-invoking SQL flow")
+                sql_was_attempted = True
+                sql_question = (config.SQL_AI_TRIGGER + " " + request.question.strip())
+                report_context = get_report_context_from_chat_history(conversation_id, conn)
+                if getattr(request, "is_group", None) is not None and report_context:
+                    team_val = report_context.get("team_name") or getattr(request, "selected_team", None)
+                    if team_val:
+                        try:
+                            report_context["team_names"] = resolve_team_names_from_filter(team_val, bool(request.is_group), conn)
+                        except Exception as e:
+                            logger.warning("resolve_team_names_from_filter (request.is_group) failed: %s", e)
+                success, formatted = await run_sql_path(
+                    sql_question, history_json, report_context=report_context
+                )
+                if success:
+                    sql_was_triggered = True
+                    sql_formatted_for_history = formatted
+                    question_retry = request.question.strip() + "\n\n=== DATABASE QUERY RESULTS ===\n" + formatted + "\n=== END DATABASE QUERY RESULTS ==="
+                    try:
+                        llm_response_retry = await call_llm_service(
+                            conversation_id=conversation_id,
+                            question=question_retry,
+                            history_json=history_json if history_json.get("messages") else {"messages": []},
+                            user_id=request.user_id,
+                            selected_team=request.selected_team,
+                            selected_pi=request.selected_pi,
+                            chat_type=chat_type_str,
+                            conversation_context=None,
+                            system_message=system_message
+                        )
+                        if not llm_response_retry.get("success"):
+                            raise HTTPException(
+                                status_code=502,
+                                detail=llm_response_retry.get("detail", "LLM service error")
+                            )
+                        ai_response = llm_response_retry.get("response", "")
+                        if ai_response:
+                            ai_response = "**This information was not included in the original report. Data may be incomplete.**\n\n" + ai_response
+                        llm_response = llm_response_retry
+                    except HTTPException:
+                        raise
+                else:
+                    ai_response = "Data does not exist in the information sent. DB query to get the requested information was incomplete"
+            if sql_was_triggered and ai_response:
+                if not ai_response.startswith("**This information was not included"):
+                    ai_response = "**This information was not included in the original report. Data may be incomplete.**\n\n" + ai_response
+            logger.info("=" * 80)
+            logger.info("LLM RESPONSE RECEIVED")
+            logger.info("=" * 80)
+            logger.info(f"Response length: {len(ai_response)} chars")
+            if ai_response:
+                preview_length = min(LOG_PREVIEW_CHARS, len(ai_response))
+                logger.info(f"Response preview (first {preview_length} chars): {ai_response[:preview_length]}...")
+                if len(ai_response) > preview_length:
+                    logger.info(f"... (truncated, {len(ai_response) - preview_length} more chars)")
+            else:
+                logger.warning("LLM response is empty")
+            logger.info(f"Provider: {llm_response.get('provider', 'N/A')}")
+            logger.info(f"Model: {llm_response.get('model', 'N/A')}")
+            logger.info(f"Tokens used: {llm_response.get('tokens_used', 'N/A')}")
+            logger.info("=" * 80)
         
         # 3.5. Extract and save issue key from LLM response (always extract from final LLM answer)
         extracted_issue_key = extract_issue_key_from_response(ai_response)
@@ -2612,13 +2779,16 @@ Results ({row_count} row{'s' if row_count != 1 else ''}):
                 conn.rollback()
         
         # 4. Update chat history. Initial and normal follow-up: append user + assistant (chronological order). Refinement/SQL: assistant only.
+        # Pass is_group so it is persisted for follow-up SQL (get_report_context_from_chat_history).
+        req_is_group = getattr(request, "is_group", None)
         if is_initial_call:
             update_chat_history(
                 conversation_id=conversation_id,
                 user_message=request.question,
                 assistant_response=ai_response,
                 conn=conn,
-                append_assistant_only=False
+                append_assistant_only=False,
+                is_group=req_is_group,
             )
         elif refinement_context_to_prepend:
             update_chat_history(
@@ -2627,7 +2797,8 @@ Results ({row_count} row{'s' if row_count != 1 else ''}):
                 assistant_response=ai_response,
                 conn=conn,
                 append_assistant_only=False,
-                refinement_block=refinement_context_to_prepend
+                refinement_block=refinement_context_to_prepend,
+                is_group=req_is_group,
             )
         elif sql_was_triggered and sql_formatted_for_history:
             update_chat_history(
@@ -2635,7 +2806,8 @@ Results ({row_count} row{'s' if row_count != 1 else ''}):
                 user_message=None,
                 assistant_response=sql_formatted_for_history,
                 conn=conn,
-                append_assistant_only=True
+                append_assistant_only=True,
+                is_group=req_is_group,
             )
         else:
             update_chat_history(
@@ -2643,7 +2815,8 @@ Results ({row_count} row{'s' if row_count != 1 else ''}):
                 user_message=request.question,
                 assistant_response=ai_response,
                 conn=conn,
-                append_assistant_only=False
+                append_assistant_only=False,
+                is_group=req_is_group,
             )
         
         # 5. Prepare response

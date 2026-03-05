@@ -13,6 +13,7 @@ import logging
 from database_connection import get_db_connection
 from database_general import get_all_settings_db, get_setting_db, set_setting_db, set_settings_batch_db
 from audit_utils import create_change_audit_log
+from global_settings_loader import refresh_globals_from_db
 
 logger = logging.getLogger(__name__)
 
@@ -206,6 +207,10 @@ async def update_settings_batch(
         failed = [key for key, success in results.items() if not success]
         success_count = sum(1 for success in results.values() if success)
         
+        # Refresh in-memory global settings so new values are used immediately
+        if success_count > 0:
+            refresh_globals_from_db()
+        
         return {
             "success": True,
             "data": {
@@ -301,6 +306,9 @@ async def update_setting(
                 logger.warning(f"Failed to create change audit log: {audit_err}", exc_info=True)
         else:
             logger.debug(f"No change detected for {setting_key}: '{current_value}' == '{value}'")
+        
+        # Refresh in-memory global settings so new value is used immediately
+        refresh_globals_from_db()
         
         return {
             "success": True,

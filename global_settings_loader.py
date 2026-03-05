@@ -57,6 +57,7 @@ _DEFAULTS: Dict[str, Any] = {
     "backend_cache_ttl_groups_teams": 3600,
     "backend_redis_failure_cooldown_seconds": 1800,
     "backend_ai_chat_max_question_length": 1000,
+    "backend_ai_chat_auto_sql_when_data_not_in_report": False,
 }
 
 
@@ -65,6 +66,8 @@ def _parse_value(raw: str, setting_type: str) -> Any:
         return int(raw)
     if setting_type == "float":
         return float(raw)
+    if setting_type == "boolean":
+        return (raw or "").strip().lower() in ("true", "1", "yes")
     if setting_type == "json":
         return json.loads(raw)
     return raw
@@ -319,6 +322,10 @@ class _Settings:
     @property
     def AI_CHAT_MAX_QUESTION_LENGTH(self) -> int:
         return _get("backend_ai_chat_max_question_length")
+
+    @property
+    def AI_CHAT_AUTO_SQL_WHEN_DATA_NOT_IN_REPORT(self) -> bool:
+        return _get("backend_ai_chat_auto_sql_when_data_not_in_report")
 
 
 settings = _Settings()

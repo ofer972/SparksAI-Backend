@@ -9,6 +9,8 @@ from sqlalchemy import text
 from sqlalchemy.engine import Connection
 from typing import Dict, Any, List, Optional
 from datetime import datetime, date, timedelta
+
+from sprint_burndown import compute_sprint_burndown_from_history
 import logging
 from global_settings_loader import settings
 
@@ -1058,10 +1060,79 @@ def get_closed_sprints_data_db(team_names: Optional[List[str]], months: int = 3,
         raise e
 
 
+def get_sprint_burndown_data_computed(team_names: List[str], sprint_name: str, issue_type: str = "all", conn: Connection = None) -> List[Dict[str, Any]]:
+    """
+    Get sprint burndown data using direct SQL + Python logic (no DB function).
+    Fetches sprint details and raw jira_issue_history, then computes burndown in Python.
+    """
+    if not team_names:
+        return []
+    try:
+        # 1. Sprint details
+        sprint_sql = """
+            SELECT sprint_id, name AS sprint_name, start_date::date AS start_date,
+                   end_date::date AS end_date, state
+            FROM public.jira_sprints
+            WHERE name = :sprint_name
+        """
+        sprint_result = conn.execute(text(sprint_sql), {"sprint_name": sprint_name})
+        sprint_row = sprint_result.fetchone()
+        if not sprint_row:
+            logger.warning(f"Sprint not found: {sprint_name}")
+            return []
+        row_m = dict(sprint_row._mapping)
+        sprint_id = int(row_m["sprint_id"])
+        start_d = row_m["start_date"]
+        end_d = row_m["end_date"]
+        state = (row_m.get("state") or "").strip().lower()
+        if hasattr(start_d, "date"):
+            start_d = start_d.date()
+        if hasattr(end_d, "date"):
+            end_d = end_d.date()
+        today = date.today()
+        end_date_cap = max(end_d, today) if state == "active" else end_d
+        start_min = start_d - timedelta(days=2)
+        # 2. Raw issue history (no sprint filter so we get in/out-of-sprint transitions)
+        history_sql = """
+            SELECT issue_key, snapshot_date::date AS snapshot_date, sprint_ids,
+                   status_category, issuetype, team_name
+            FROM public.jira_issue_history jh
+            WHERE jh.snapshot_date::date >= :start_min
+              AND jh.snapshot_date::date <= :end_date_cap
+              AND jh.team_name = ANY(:team_names)
+              AND (:issue_type = 'all' OR jh.issuetype = :issue_type)
+              AND jh.issuetype IS NOT NULL
+            ORDER BY jh.issue_key, jh.snapshot_date::date
+        """
+        history_result = conn.execute(text(history_sql), {
+            "start_min": start_min,
+            "end_date_cap": end_date_cap,
+            "team_names": team_names,
+            "issue_type": issue_type,
+        })
+        history_rows = [dict(row._mapping) for row in history_result]
+        return compute_sprint_burndown_from_history(
+            sprint_id=sprint_id,
+            sprint_name=sprint_name,
+            start_date=start_d,
+            end_date=end_d,
+            state=state,
+            history_rows=history_rows,
+            team_names=team_names,
+            issue_type=issue_type,
+        )
+    except Exception as e:
+        logger.error(f"Error computing sprint burndown for teams {team_names}, sprint {sprint_name}: {e}")
+        raise e
+
+
 def get_sprint_burndown_data_db(team_names: List[str], sprint_name: str, issue_type: str = "all", conn: Connection = None) -> List[Dict[str, Any]]:
     """
     Get sprint burndown data for a specific team and sprint.
     Uses the get_sprint_burndown_data_for_team database function.
+
+    .. deprecated:: Use get_sprint_burndown_data_computed() instead.
+       This function will be removed once the new Python-based implementation is verified.
     
     Args:
         team_names (List[str]): List of team names

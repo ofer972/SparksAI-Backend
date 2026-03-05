@@ -26,7 +26,7 @@ from database_pi import (
 )
 from database_releases import fetch_release_burndown_data
 from database_team_metrics import (
-    get_sprint_burndown_data_db,
+    get_sprint_burndown_data_computed,
     get_sprints_with_total_issues_db,
     get_team_current_sprint_progress,
     get_closed_sprints_data_db,
@@ -267,7 +267,7 @@ def _fetch_team_sprint_burndown(filters: Dict[str, Any], conn: Connection) -> Re
             },
         }
 
-    burndown_data = get_sprint_burndown_data_db(team_names_list, selected_sprint_name, issue_type, conn)
+    burndown_data = get_sprint_burndown_data_computed(team_names_list, selected_sprint_name, issue_type, conn)
 
     total_issues = 0
     # Use dates from sprint selection first, fall back to burndown_data if needed
