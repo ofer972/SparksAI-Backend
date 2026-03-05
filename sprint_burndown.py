@@ -152,13 +152,16 @@ def compute_sprint_burndown_from_history(
         in_sprint_now = sprint_id in curr_sids
         first_seen = first_seen_in_sprint.get(issue_key)
 
-        # Completed: transition to Done while in sprint
-        if curr_status == "Done" and prev_status != "Done" and in_sprint_before:
-            daily_completed[snap_d] += 1
         # Removed: left sprint, not Done when left, first_seen in sprint >= start_date
-        if in_sprint_before and not in_sprint_now and prev_status != "Done":
-            if first_seen is not None and first_seen >= start_date:
-                daily_removed[snap_d] += 1
+        removed_this_day = (
+            in_sprint_before and not in_sprint_now and prev_status != "Done"
+            and first_seen is not None and first_seen >= start_date
+        )
+        if removed_this_day:
+            daily_removed[snap_d] += 1
+        # Completed: transition to Done while in sprint; exclude if also removed same day
+        if curr_status == "Done" and prev_status != "Done" and in_sprint_before and not removed_this_day:
+            daily_completed[snap_d] += 1
         # Re-added: back in sprint, was in sprint before (first_seen < current_date), day > start+1
         if in_sprint_now and not in_sprint_before and first_seen is not None and first_seen < snap_d:
             if snap_d > start_date + timedelta(days=1):
@@ -209,3 +212,78 @@ def compute_sprint_burndown_from_history(
             "wip_issues_in_progress": wip,
         })
     return out
+
+
+def get_sprint_issues_for_date_and_metric(
+    sprint_id: int,
+    target_date: date,
+    history_rows: List[Dict[str, Any]],
+    metric_type: str,
+) -> List[Dict[str, Any]]:
+    """
+    Return list of issues for a given date and metric (issues_completed or issues_removed).
+    Uses transition logic: completed = in sprint on target_date, Done on target_date,
+    and (no row or not Done) on target_date-1. Removed = in sprint on target_date-1,
+    not Done, and not in sprint on target_date.
+    Returns list of {"issue_key": str, "team_name": str}. Caller adds summary from jira_issues.
+    Same-day rule: if an issue was both completed and removed on target_date, it appears
+    only in the removed list, not in the completed list.
+    """
+    prev_date = target_date - timedelta(days=1)
+    by_issue_date: Dict[tuple, Dict[str, Any]] = {}
+    for row in history_rows:
+        d = _normalize_date(row.get("snapshot_date"))
+        if d is None or d not in (target_date, prev_date):
+            continue
+        key = (row["issue_key"], d)
+        if key not in by_issue_date:
+            by_issue_date[key] = row
+
+    # Issues removed on target_date (so we can exclude them from completed when same day)
+    removed_on_day: set = set()
+    for (issue_key, d), row in by_issue_date.items():
+        if d != prev_date:
+            continue
+        if sprint_id not in _sprint_ids_set(row.get("sprint_ids")):
+            continue
+        if (row.get("status_category") or "").strip() == "Done":
+            continue
+        curr_row = by_issue_date.get((issue_key, target_date))
+        if curr_row is not None and sprint_id in _sprint_ids_set(curr_row.get("sprint_ids")):
+            continue
+        removed_on_day.add(issue_key)
+
+    result: List[Dict[str, Any]] = []
+    if metric_type == "issues_completed":
+        for (issue_key, d), row in by_issue_date.items():
+            if d != target_date:
+                continue
+            if issue_key in removed_on_day:
+                continue
+            if sprint_id not in _sprint_ids_set(row.get("sprint_ids")):
+                continue
+            if (row.get("status_category") or "").strip() != "Done":
+                continue
+            prev_row = by_issue_date.get((issue_key, prev_date))
+            if prev_row is not None and (prev_row.get("status_category") or "").strip() == "Done":
+                continue
+            result.append({
+                "issue_key": issue_key,
+                "team_name": (row.get("team_name") or "").strip() or None,
+            })
+    elif metric_type == "issues_removed":
+        for (issue_key, d), row in by_issue_date.items():
+            if d != prev_date:
+                continue
+            if sprint_id not in _sprint_ids_set(row.get("sprint_ids")):
+                continue
+            if (row.get("status_category") or "").strip() == "Done":
+                continue
+            curr_row = by_issue_date.get((issue_key, target_date))
+            if curr_row is not None and sprint_id in _sprint_ids_set(curr_row.get("sprint_ids")):
+                continue
+            result.append({
+                "issue_key": issue_key,
+                "team_name": (row.get("team_name") or "").strip() or None,
+            })
+    return result
