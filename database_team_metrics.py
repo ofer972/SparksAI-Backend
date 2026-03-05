@@ -10,7 +10,7 @@ from sqlalchemy.engine import Connection
 from typing import Dict, Any, List, Optional
 from datetime import datetime, date, timedelta
 
-from sprint_burndown import compute_sprint_burndown_from_history
+from sprint_burndown import compute_sprint_burndown_from_history, get_sprint_issues_for_date_and_metric
 import logging
 from global_settings_loader import settings
 
@@ -1189,6 +1189,86 @@ def get_sprint_burndown_data_db(team_names: List[str], sprint_name: str, issue_t
         raise e
 
 
+def get_sprint_history_issues_computed(
+    sprint_id: int,
+    target_date: date,
+    team_names: Optional[List[str]],
+    issue_type: Optional[str],
+    metric_type: str,
+    conn: Connection,
+) -> List[Dict[str, Any]]:
+    """
+    Get sprint issue list for a given date and metric (issues_completed or issues_removed)
+    using direct SQL + Python. Fetches history for target_date and target_date-1, then
+    computes completed/removed in Python; enriches with summary from jira_issues.
+    """
+    if metric_type not in ("issues_completed", "issues_removed"):
+        raise ValueError(f"get_sprint_history_issues_computed only supports issues_completed or issues_removed, got: {metric_type}")
+    target_issuetype = issue_type if issue_type else "all"
+    prev_date = target_date - timedelta(days=1)
+
+    if team_names:
+        history_sql = text("""
+            SELECT issue_key, snapshot_date::date AS snapshot_date, sprint_ids,
+                   status_category, team_name
+            FROM public.jira_issue_history jh
+            WHERE jh.snapshot_date::date IN (:target_date, :prev_date)
+              AND jh.team_name = ANY(:team_names)
+              AND (:issue_type = 'all' OR jh.issuetype = :issue_type)
+              AND jh.issuetype IS NOT NULL
+            ORDER BY jh.issue_key, jh.snapshot_date::date
+        """)
+        history_result = conn.execute(history_sql, {
+            "target_date": target_date,
+            "prev_date": prev_date,
+            "team_names": team_names,
+            "issue_type": target_issuetype,
+        })
+    else:
+        history_sql = text("""
+            SELECT issue_key, snapshot_date::date AS snapshot_date, sprint_ids,
+                   status_category, team_name
+            FROM public.jira_issue_history jh
+            WHERE jh.snapshot_date::date IN (:target_date, :prev_date)
+              AND (:issue_type = 'all' OR jh.issuetype = :issue_type)
+              AND jh.issuetype IS NOT NULL
+            ORDER BY jh.issue_key, jh.snapshot_date::date
+        """)
+        history_result = conn.execute(history_sql, {
+            "target_date": target_date,
+            "prev_date": prev_date,
+            "issue_type": target_issuetype,
+        })
+
+    history_rows = [dict(row._mapping) for row in history_result]
+    issues_with_team = get_sprint_issues_for_date_and_metric(
+        sprint_id, target_date, history_rows, metric_type
+    )
+    if not issues_with_team:
+        return []
+
+    issue_keys = [i["issue_key"] for i in issues_with_team]
+    placeholders = ", ".join([f":key_{x}" for x in range(len(issue_keys))])
+    params_summary = {f"key_{x}": k for x, k in enumerate(issue_keys)}
+    summary_sql = text(f"""
+        SELECT issue_key, summary FROM public.jira_issues
+        WHERE issue_key IN ({placeholders})
+    """)
+    summary_result = conn.execute(summary_sql, params_summary)
+    summary_by_key = {row.issue_key: (row.summary or "") for row in summary_result}
+
+    metric_category = "COMPLETED" if metric_type == "issues_completed" else "REMOVED"
+    return [
+        {
+            "issue_key": i["issue_key"],
+            "summary": summary_by_key.get(i["issue_key"]) or "",
+            "team_name": i.get("team_name"),
+            "metric_category": metric_category,
+        }
+        for i in issues_with_team
+    ]
+
+
 def get_sprint_history_issues_db(
     sprint_id: int,
     target_date: date,
@@ -1198,7 +1278,9 @@ def get_sprint_history_issues_db(
     conn: Connection = None
 ) -> List[Dict[str, Any]]:
     """
-    Get sprint issue details for a specific date using get_sprint_issue_details_for_date function.
+    Get sprint issue details for a specific date. For issues_completed and issues_removed
+    uses get_sprint_history_issues_computed (Python + direct SQL). For other metric types
+    uses get_sprint_issue_details_for_date SQL function.
     
     Args:
         sprint_id (int): Sprint ID to filter by
@@ -1217,16 +1299,25 @@ def get_sprint_history_issues_db(
         list: List of issue dictionaries with issue_key, summary, and other fields
     """
     try:
-        # Map metric_type to function's metric_category values
+        # Handle issue_type parameter (pass "all" if not provided)
+        target_issuetype = issue_type if issue_type else "all"
+
+        # Use Python + direct SQL for issues_completed and issues_removed
+        if metric_type in ("issues_completed", "issues_removed"):
+            return get_sprint_history_issues_computed(
+                sprint_id=sprint_id,
+                target_date=target_date,
+                team_names=team_names,
+                issue_type=target_issuetype,
+                metric_type=metric_type,
+                conn=conn,
+            )
+
+        # For other metric types, use SQL function
         metric_category_map = {
-            "issues_completed": "COMPLETED",
-            "issues_removed": "REMOVED",
             "wip_in_progress": "WIP",
             "actual_remaining": "REMAINING"
         }
-        
-        # Handle issue_type parameter (pass "all" if not provided)
-        target_issuetype = issue_type if issue_type else "all"
         
         # Build parameters for the function call
         params = {
