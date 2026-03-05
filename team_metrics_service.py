@@ -18,7 +18,7 @@ from database_team_metrics import (
     get_team_count_in_progress,
     get_team_current_sprint_progress,
     get_sprints_with_total_issues_db,
-    get_sprint_burndown_data_db,
+    get_sprint_burndown_data_computed,
     get_closed_sprints_data_db,
     get_issues_trend_data_db,
     get_average_sprint_velocity_per_team,
@@ -1218,7 +1218,7 @@ async def get_sprint_burndown_data(
             }
         
         # Get burndown data for selected sprint
-        burndown_data = get_sprint_burndown_data_db(team_names_list, selected_sprint_name, issue_type, conn)
+        burndown_data = get_sprint_burndown_data_computed(team_names_list, selected_sprint_name, issue_type, conn)
         
         # Calculate total issues in sprint and get start/end dates
         # Use dates from sprint selection first, fall back to burndown_data if needed

@@ -23,7 +23,7 @@ from database_connection import get_db_connection
 from database_general import get_ai_card_by_id, get_recommendation_by_id, get_prompt_by_email_and_name, get_formatted_job_data_for_llm_followup_insight, get_formatted_job_data_for_llm_followup_recommendation, get_insight_types
 from database_team_metrics import (
     get_closed_sprints_data_db,
-    get_sprint_burndown_data_db,
+    get_sprint_burndown_data_computed,
     get_issues_trend_data_db,
     get_sprints_with_total_issues_db,
     resolve_team_names_from_filter,
@@ -34,6 +34,7 @@ from database_pi import (
     fetch_scope_changes_data
 )
 import config
+from goals_service import get_current_pi
 from sparksai_sql_client import call_sparksai_sql_execute
 
 logger = logging.getLogger(__name__)
@@ -130,6 +131,9 @@ def get_report_context_from_chat_history(conversation_id: Optional[str], conn: C
             return {}
         team_val = (row[0] or "").strip() or None
         pi_val = (row[1] or "").strip() or None
+        # Fallback to current PI when stored PI is missing or "unknown" (same rule as insight path at creation)
+        if not pi_val or (isinstance(pi_val, str) and pi_val.strip().lower() == "unknown"):
+            pi_val = get_current_pi(conn)
         history_json = row[2] if row[2] is not None else {}
         is_group = False
         if isinstance(history_json, dict) and history_json.get("report_context_snapshot"):
@@ -222,6 +226,61 @@ class AIChatRequest(BaseModel):
 
     class Config:
         use_enum_values = True
+
+
+def _resolve_team_pi_from_insight_card(
+    chat_type: str,
+    insights_id: Optional[str],
+    selected_team: Optional[str],
+    selected_pi: Optional[str],
+    is_group: Optional[bool],
+    conn: Connection,
+) -> Tuple[Optional[str], Optional[str], Optional[bool]]:
+    """
+    For Team_insights or PI_insights with insights_id, load the card and resolve
+    team (team_name or group_name), pi (card pi or current PI if empty), and is_group.
+    Returns (team, pi, is_group) for use in get_or_create_chat_history.
+    - If card has group_name: use it as team and set is_group=True.
+    - If card has team_name (and no group_name): use it as team; is_group from request.
+    - If pi is empty after card/request: use get_current_pi(conn).
+    """
+    if not insights_id or chat_type not in ("Team_insights", "PI_insights"):
+        return selected_team, selected_pi, is_group
+    try:
+        insights_id_int = int(str(insights_id).strip())
+    except (ValueError, TypeError):
+        return selected_team, selected_pi, is_group
+    card = get_ai_card_by_id(insights_id_int, conn)
+    if not card:
+        return selected_team, selected_pi, is_group
+
+    def _empty(s: Optional[str]) -> bool:
+        if s is None:
+            return True
+        t = (s or "").strip().lower()
+        return t in ("", "unknown")
+
+    # Team: prefer group_name then team_name from card; else keep request
+    card_group = (card.get("group_name") or "").strip() or None
+    card_team = (card.get("team_name") or "").strip() or None
+    if card_group:
+        effective_team = card_group
+        effective_is_group = True
+    elif card_team:
+        effective_team = card_team
+        effective_is_group = is_group if is_group is not None else False
+    else:
+        effective_team = selected_team if not _empty(selected_team) else None
+        effective_is_group = is_group
+
+    # PI: card pi, else request; if still empty, get current PI
+    effective_pi = (card.get("pi") or "").strip() or None
+    if _empty(effective_pi):
+        effective_pi = (selected_pi or "").strip() or None
+    if _empty(effective_pi):
+        effective_pi = get_current_pi(conn)
+
+    return effective_team, effective_pi, effective_is_group
 
 
 def get_or_create_chat_history(
@@ -466,7 +525,7 @@ def build_team_dashboard_context(
                     logger.info(f"Auto-selected sprint '{selected_sprint_name}' for burndown")
                     
                     # Get burndown data
-                    burndown_data = get_sprint_burndown_data_db(
+                    burndown_data = get_sprint_burndown_data_computed(
                         [team_name], 
                         selected_sprint_name, 
                         issue_type="all", 
@@ -1954,15 +2013,23 @@ async def ai_chat(
             except AttributeError:
                 chat_type_str = str(request.chat_type)
 
-        # 1. Get or create chat history (is_group from request is stored in history_json.report_context_snapshot on create)
+        # 1. Resolve team/pi/is_group from insight card when present; if pi empty use current PI; then get or create chat history
+        effective_team, effective_pi, effective_is_group = _resolve_team_pi_from_insight_card(
+            chat_type_str,
+            request.insights_id,
+            request.selected_team,
+            request.selected_pi,
+            request.is_group,
+            conn,
+        )
         conversation_id, history_json = get_or_create_chat_history(
             conversation_id=request.conversation_id,
             user_id=request.user_id,
-            team=request.selected_team,
-            pi=request.selected_pi,
+            team=effective_team,
+            pi=effective_pi,
             chat_type=chat_type_str,
             conn=conn,
-            is_group=request.is_group,
+            is_group=effective_is_group,
         )
         
         logger.info(f"Conversation ID: {conversation_id}")
