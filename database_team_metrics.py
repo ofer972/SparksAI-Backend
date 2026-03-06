@@ -1202,9 +1202,9 @@ def get_sprint_history_issues_computed(
     Get sprint issue list for a given date and metric (Option A).
     Uses the same burndown computation as the chart; returns the precomputed
     issue list for (metric_type, target_date). Single source of truth.
-    Supports: issues_completed, issues_removed, total_scope, wip_in_progress, actual_remaining.
+    Supports: issues_completed, issues_removed, issues_added, total_scope, wip_in_progress, actual_remaining.
     """
-    valid_metrics = ("issues_completed", "issues_removed", "total_scope", "wip_in_progress", "actual_remaining")
+    valid_metrics = ("issues_completed", "issues_removed", "issues_added", "total_scope", "wip_in_progress", "actual_remaining")
     if metric_type not in valid_metrics:
         raise ValueError(f"get_sprint_history_issues_computed requires metric_type in {valid_metrics}, got: {metric_type}")
     if not team_names:
@@ -1282,6 +1282,7 @@ def get_sprint_history_issues_computed(
     metric_category_map = {
         "issues_completed": "COMPLETED",
         "issues_removed": "REMOVED",
+        "issues_added": "ADDED",
         "total_scope": "TOTAL_SCOPE",
         "wip_in_progress": "WIP",
         "actual_remaining": "REMAINING",
@@ -1331,7 +1332,7 @@ def get_sprint_history_issues_db(
         target_issuetype = issue_type if issue_type else "all"
 
         # Use Python + direct SQL for all metric types
-        valid_metric_types = ["issues_completed", "issues_removed", "total_scope", "wip_in_progress", "actual_remaining"]
+        valid_metric_types = ["issues_completed", "issues_removed", "issues_added", "total_scope", "wip_in_progress", "actual_remaining"]
         if metric_type not in valid_metric_types:
             raise ValueError(f"Invalid metric_type: {metric_type}. Must be one of: {', '.join(valid_metric_types)}")
 
