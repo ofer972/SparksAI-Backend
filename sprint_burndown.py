@@ -214,6 +214,100 @@ def compute_sprint_burndown_from_history(
     return out
 
 
+def compute_total_scope_issues_for_date(
+    sprint_id: int,
+    start_date: date,
+    target_date: date,
+    history_rows: List[Dict[str, Any]],
+) -> List[Dict[str, Any]]:
+    """
+    Return list of issues that are in scope on target_date using the same formula as the chart:
+    initial_scope + added through target_date + re-added through target_date - removed through target_date.
+    history_rows must cover start_date through target_date. Returns [{"issue_key", "team_name"}].
+    """
+    by_issue_date: Dict[tuple, Dict[str, Any]] = {}
+    for row in history_rows:
+        d = _normalize_date(row.get("snapshot_date"))
+        if d is None or d < start_date or d > target_date:
+            continue
+        key = (row["issue_key"], d)
+        if key not in by_issue_date:
+            by_issue_date[key] = row
+
+    first_seen_in_sprint: Dict[str, date] = {}
+    for (issue_key, snap_d), row in by_issue_date.items():
+        if snap_d is None:
+            continue
+        if sprint_id not in _sprint_ids_set(row.get("sprint_ids")):
+            continue
+        if issue_key not in first_seen_in_sprint or snap_d < first_seen_in_sprint[issue_key]:
+            first_seen_in_sprint[issue_key] = snap_d
+
+    start_plus_one = start_date + timedelta(days=1)
+    initial_scope: set = set()
+    for (issue_key, snap_d), row in by_issue_date.items():
+        if snap_d not in (start_date, start_plus_one):
+            continue
+        if sprint_id not in _sprint_ids_set(row.get("sprint_ids")):
+            continue
+        initial_scope.add(issue_key)
+
+    sorted_rows = sorted(
+        by_issue_date.items(),
+        key=lambda x: (x[0][0], x[0][1] or date(1, 1, 1)),
+    )
+    removed_through_date: Dict[date, set] = defaultdict(set)
+    readded_through_date: Dict[date, set] = defaultdict(set)
+    prev_by_issue: Dict[str, Dict] = {}
+    for (issue_key, snap_d), row in sorted_rows:
+        if snap_d is None:
+            continue
+        curr_sids = _sprint_ids_set(row.get("sprint_ids"))
+        prev = prev_by_issue.get(issue_key)
+        prev_sids = _sprint_ids_set(prev.get("sprint_ids")) if prev else set()
+        in_sprint_before = sprint_id in prev_sids
+        in_sprint_now = sprint_id in curr_sids
+        first_seen = first_seen_in_sprint.get(issue_key)
+        prev_status = (prev.get("status_category") or "").strip() if prev else ""
+
+        if in_sprint_before and not in_sprint_now and prev_status != "Done" and first_seen is not None and first_seen >= start_date:
+            removed_through_date[snap_d].add(issue_key)
+        if in_sprint_now and not in_sprint_before and first_seen is not None and first_seen < snap_d and snap_d > start_plus_one:
+            readded_through_date[snap_d].add(issue_key)
+
+        prev_by_issue[issue_key] = dict(row)
+        if "sprint_ids" in row:
+            prev_by_issue[issue_key]["sprint_ids"] = row["sprint_ids"]
+        prev_by_issue[issue_key]["status_category"] = (row.get("status_category") or "").strip()
+
+    added_through_target: set = set()
+    for issue_key, first_seen in first_seen_in_sprint.items():
+        if start_plus_one < first_seen <= target_date:
+            added_through_target.add(issue_key)
+
+    removed_set: set = set()
+    for d in removed_through_date:
+        if d <= target_date:
+            removed_set |= removed_through_date[d]
+    readded_set: set = set()
+    for d in readded_through_date:
+        if d <= target_date:
+            readded_set |= readded_through_date[d]
+
+    in_scope = (initial_scope | added_through_target | readded_set) - removed_set
+
+    # Team name: use latest row we have for each issue (iteration is already by (issue_key, date))
+    issue_to_team: Dict[str, Optional[str]] = {}
+    for (issue_key, d), row in sorted(by_issue_date.items(), key=lambda x: (x[0][0], x[0][1] or date(1, 1, 1))):
+        if issue_key in in_scope and d:
+            issue_to_team[issue_key] = (row.get("team_name") or "").strip() or None
+
+    result = []
+    for issue_key in sorted(in_scope):
+        result.append({"issue_key": issue_key, "team_name": issue_to_team.get(issue_key)})
+    return result
+
+
 def get_sprint_issues_for_date_and_metric(
     sprint_id: int,
     target_date: date,
@@ -221,13 +315,13 @@ def get_sprint_issues_for_date_and_metric(
     metric_type: str,
 ) -> List[Dict[str, Any]]:
     """
-    Return list of issues for a given date and metric (issues_completed or issues_removed).
-    Uses transition logic: completed = in sprint on target_date, Done on target_date,
-    and (no row or not Done) on target_date-1. Removed = in sprint on target_date-1,
-    not Done, and not in sprint on target_date.
+    Return list of issues for a given date and metric.
+    Supports: issues_completed, issues_removed, total_scope, wip_in_progress, actual_remaining.
+    Uses status_category for WIP (In Progress) and remaining (not Done).
     Returns list of {"issue_key": str, "team_name": str}. Caller adds summary from jira_issues.
     Same-day rule: if an issue was both completed and removed on target_date, it appears
     only in the removed list, not in the completed list.
+    For total_scope use compute_total_scope_issues_for_date with full sprint history instead.
     """
     prev_date = target_date - timedelta(days=1)
     by_issue_date: Dict[tuple, Dict[str, Any]] = {}
@@ -281,6 +375,44 @@ def get_sprint_issues_for_date_and_metric(
                 continue
             curr_row = by_issue_date.get((issue_key, target_date))
             if curr_row is not None and sprint_id in _sprint_ids_set(curr_row.get("sprint_ids")):
+                continue
+            result.append({
+                "issue_key": issue_key,
+                "team_name": (row.get("team_name") or "").strip() or None,
+            })
+    elif metric_type == "total_scope":
+        seen: set = set()
+        for (issue_key, d), row in by_issue_date.items():
+            if d != target_date:
+                continue
+            if sprint_id not in _sprint_ids_set(row.get("sprint_ids")):
+                continue
+            if issue_key in seen:
+                continue
+            seen.add(issue_key)
+            result.append({
+                "issue_key": issue_key,
+                "team_name": (row.get("team_name") or "").strip() or None,
+            })
+    elif metric_type == "wip_in_progress":
+        for (issue_key, d), row in by_issue_date.items():
+            if d != target_date:
+                continue
+            if sprint_id not in _sprint_ids_set(row.get("sprint_ids")):
+                continue
+            if (row.get("status_category") or "").strip() != "In Progress":
+                continue
+            result.append({
+                "issue_key": issue_key,
+                "team_name": (row.get("team_name") or "").strip() or None,
+            })
+    elif metric_type == "actual_remaining":
+        for (issue_key, d), row in by_issue_date.items():
+            if d != target_date:
+                continue
+            if sprint_id not in _sprint_ids_set(row.get("sprint_ids")):
+                continue
+            if (row.get("status_category") or "").strip() == "Done":
                 continue
             result.append({
                 "issue_key": issue_key,
