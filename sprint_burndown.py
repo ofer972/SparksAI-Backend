@@ -159,8 +159,9 @@ def compute_sprint_burndown_from_history(
         )
         if removed_this_day:
             daily_removed[snap_d] += 1
-        # Completed: transition to Done while in sprint; exclude if also removed same day
-        if curr_status == "Done" and prev_status != "Done" and in_sprint_before and not removed_this_day:
+        # Completed: transition to Done while in sprint on this day; exclude if also removed same day.
+        # Use in_sprint_now (not in_sprint_before) so issues added and completed the same day are counted.
+        if curr_status == "Done" and prev_status != "Done" and in_sprint_now and not removed_this_day:
             daily_completed[snap_d] += 1
         # Re-added: back in sprint, was in sprint before (first_seen < current_date), day > start+1
         if in_sprint_now and not in_sprint_before and first_seen is not None and first_seen < snap_d:
