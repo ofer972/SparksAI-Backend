@@ -10,11 +10,7 @@ from sqlalchemy.engine import Connection
 from typing import Dict, Any, List, Optional
 from datetime import datetime, date, timedelta
 
-from sprint_burndown import (
-    compute_sprint_burndown_from_history,
-    get_sprint_issues_for_date_and_metric,
-    compute_total_scope_issues_for_date,
-)
+from sprint_burndown import compute_sprint_burndown_from_history
 import logging
 from global_settings_loader import settings
 
@@ -1095,7 +1091,7 @@ def get_sprint_burndown_data_computed(team_names: List[str], sprint_name: str, i
             end_d = end_d.date()
         today = date.today()
         end_date_cap = max(end_d, today) if state == "active" else end_d
-        start_min = start_d - timedelta(days=2)
+        start_min = start_d - timedelta(days=1)
         # 2. Raw issue history (no sprint filter so we get in/out-of-sprint transitions)
         history_sql = """
             SELECT issue_key, snapshot_date::date AS snapshot_date, sprint_ids,
@@ -1115,7 +1111,7 @@ def get_sprint_burndown_data_computed(team_names: List[str], sprint_name: str, i
             "issue_type": issue_type,
         })
         history_rows = [dict(row._mapping) for row in history_result]
-        return compute_sprint_burndown_from_history(
+        chart_rows, _ = compute_sprint_burndown_from_history(
             sprint_id=sprint_id,
             sprint_name=sprint_name,
             start_date=start_d,
@@ -1125,6 +1121,7 @@ def get_sprint_burndown_data_computed(team_names: List[str], sprint_name: str, i
             team_names=team_names,
             issue_type=issue_type,
         )
+        return chart_rows
     except Exception as e:
         logger.error(f"Error computing sprint burndown for teams {team_names}, sprint {sprint_name}: {e}")
         raise e
@@ -1202,102 +1199,73 @@ def get_sprint_history_issues_computed(
     conn: Connection,
 ) -> List[Dict[str, Any]]:
     """
-    Get sprint issue list for a given date and metric using direct SQL + Python.
+    Get sprint issue list for a given date and metric (Option A).
+    Uses the same burndown computation as the chart; returns the precomputed
+    issue list for (metric_type, target_date). Single source of truth.
     Supports: issues_completed, issues_removed, total_scope, wip_in_progress, actual_remaining.
-    Fetches history for target_date (and target_date-1 for completed/removed), computes in Python,
-    enriches with summary from jira_issues.
     """
     valid_metrics = ("issues_completed", "issues_removed", "total_scope", "wip_in_progress", "actual_remaining")
     if metric_type not in valid_metrics:
         raise ValueError(f"get_sprint_history_issues_computed requires metric_type in {valid_metrics}, got: {metric_type}")
+    if not team_names:
+        return []
     target_issuetype = issue_type if issue_type else "all"
-    prev_date = target_date - timedelta(days=1)
+    teams = team_names
 
-    if metric_type == "total_scope":
-        # Total scope list must match chart formula: fetch sprint start_date and full history start_date..target_date
-        sprint_row = conn.execute(
-            text("SELECT start_date::date AS start_date FROM public.jira_sprints WHERE sprint_id = :sprint_id"),
-            {"sprint_id": sprint_id},
-        ).fetchone()
-        if not sprint_row:
-            return []
-        start_date = sprint_row[0]
-        if hasattr(start_date, "date"):
-            start_date = start_date.date()
-        if team_names:
-            history_sql = text("""
-                SELECT issue_key, snapshot_date::date AS snapshot_date, sprint_ids,
-                       status_category, team_name
-                FROM public.jira_issue_history jh
-                WHERE jh.snapshot_date::date >= :start_date AND jh.snapshot_date::date <= :target_date
-                  AND jh.team_name = ANY(:team_names)
-                  AND (:issue_type = 'all' OR jh.issuetype = :issue_type)
-                  AND jh.issuetype IS NOT NULL
-                ORDER BY jh.issue_key, jh.snapshot_date::date
-            """)
-            history_result = conn.execute(history_sql, {
-                "start_date": start_date,
-                "target_date": target_date,
-                "team_names": team_names,
-                "issue_type": target_issuetype,
-            })
-        else:
-            history_sql = text("""
-                SELECT issue_key, snapshot_date::date AS snapshot_date, sprint_ids,
-                       status_category, team_name
-                FROM public.jira_issue_history jh
-                WHERE jh.snapshot_date::date >= :start_date AND jh.snapshot_date::date <= :target_date
-                  AND (:issue_type = 'all' OR jh.issuetype = :issue_type)
-                  AND jh.issuetype IS NOT NULL
-                ORDER BY jh.issue_key, jh.snapshot_date::date
-            """)
-            history_result = conn.execute(history_sql, {
-                "start_date": start_date,
-                "target_date": target_date,
-                "issue_type": target_issuetype,
-            })
-        history_rows = [dict(row._mapping) for row in history_result]
-        issues_with_team = compute_total_scope_issues_for_date(
-            sprint_id, start_date, target_date, history_rows
-        )
-    else:
-        if team_names:
-            history_sql = text("""
-                SELECT issue_key, snapshot_date::date AS snapshot_date, sprint_ids,
-                       status_category, team_name
-                FROM public.jira_issue_history jh
-                WHERE jh.snapshot_date::date IN (:target_date, :prev_date)
-                  AND jh.team_name = ANY(:team_names)
-                  AND (:issue_type = 'all' OR jh.issuetype = :issue_type)
-                  AND jh.issuetype IS NOT NULL
-                ORDER BY jh.issue_key, jh.snapshot_date::date
-            """)
-            history_result = conn.execute(history_sql, {
-                "target_date": target_date,
-                "prev_date": prev_date,
-                "team_names": team_names,
-                "issue_type": target_issuetype,
-            })
-        else:
-            history_sql = text("""
-                SELECT issue_key, snapshot_date::date AS snapshot_date, sprint_ids,
-                   status_category, team_name
-                FROM public.jira_issue_history jh
-                WHERE jh.snapshot_date::date IN (:target_date, :prev_date)
-                  AND (:issue_type = 'all' OR jh.issuetype = :issue_type)
-                  AND jh.issuetype IS NOT NULL
-                ORDER BY jh.issue_key, jh.snapshot_date::date
-            """)
-            history_result = conn.execute(history_sql, {
-                "target_date": target_date,
-                "prev_date": prev_date,
-                "issue_type": target_issuetype,
-            })
+    # Same sprint + history fetch as chart (start_date - 1 to end_date_cap)
+    sprint_sql = text("""
+        SELECT sprint_id, name AS sprint_name, start_date::date AS start_date,
+               end_date::date AS end_date, state
+        FROM public.jira_sprints
+        WHERE sprint_id = :sprint_id
+    """)
+    sprint_result = conn.execute(sprint_sql, {"sprint_id": sprint_id})
+    sprint_row = sprint_result.fetchone()
+    if not sprint_row:
+        return []
+    row_m = dict(sprint_row._mapping)
+    start_d = row_m["start_date"]
+    end_d = row_m["end_date"]
+    state = (row_m.get("state") or "").strip().lower()
+    sprint_name = row_m.get("sprint_name") or ""
+    if hasattr(start_d, "date"):
+        start_d = start_d.date()
+    if hasattr(end_d, "date"):
+        end_d = end_d.date()
+    today = date.today()
+    end_date_cap = max(end_d, today) if state == "active" else end_d
+    start_min = start_d - timedelta(days=1)
 
-        history_rows = [dict(row._mapping) for row in history_result]
-        issues_with_team = get_sprint_issues_for_date_and_metric(
-            sprint_id, target_date, history_rows, metric_type
-        )
+    history_sql = text("""
+        SELECT issue_key, snapshot_date::date AS snapshot_date, sprint_ids,
+               status_category, issuetype, team_name
+        FROM public.jira_issue_history jh
+        WHERE jh.snapshot_date::date >= :start_min
+          AND jh.snapshot_date::date <= :end_date_cap
+          AND jh.team_name = ANY(:team_names)
+          AND (:issue_type = 'all' OR jh.issuetype = :issue_type)
+          AND jh.issuetype IS NOT NULL
+        ORDER BY jh.issue_key, jh.snapshot_date::date
+    """)
+    history_result = conn.execute(history_sql, {
+        "start_min": start_min,
+        "end_date_cap": end_date_cap,
+        "team_names": teams,
+        "issue_type": target_issuetype,
+    })
+    history_rows = [dict(row._mapping) for row in history_result]
+
+    _, issue_lists_by_metric = compute_sprint_burndown_from_history(
+        sprint_id=sprint_id,
+        sprint_name=sprint_name,
+        start_date=start_d,
+        end_date=end_d,
+        state=state,
+        history_rows=history_rows,
+        team_names=teams,
+        issue_type=target_issuetype,
+    )
+    issues_with_team = issue_lists_by_metric.get(metric_type, {}).get(target_date, [])
     if not issues_with_team:
         return []
 

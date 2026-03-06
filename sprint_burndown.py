@@ -6,8 +6,11 @@ Replaces the logic previously in get_sprint_burndown_data_for_team SQL function.
 """
 
 from datetime import date, timedelta
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 from collections import defaultdict
+
+# Option A: issue_lists_by_metric[metric][date] = list of {"issue_key", "team_name"}
+IssueListsByMetric = Dict[str, Dict[date, List[Dict[str, Any]]]]
 
 
 def _normalize_date(d: Any) -> Optional[date]:
@@ -31,6 +34,28 @@ def _sprint_ids_set(sprint_ids: Any) -> set:
     return set()
 
 
+def _team_name_for_issue_on_date(
+    by_issue_date: Dict[tuple, Dict[str, Any]], issue_key: str, d: date
+) -> Optional[str]:
+    """Get team_name for issue_key on or before date d from by_issue_date."""
+    row = by_issue_date.get((issue_key, d))
+    if row is not None:
+        val = row.get("team_name")
+        return (val.strip() or None) if isinstance(val, str) else None
+    best_row = None
+    best_d = None
+    for (ik, sd), r in by_issue_date.items():
+        if ik != issue_key or sd is None or sd > d:
+            continue
+        if best_d is None or sd > best_d:
+            best_d = sd
+            best_row = r
+    if best_row is None:
+        return None
+    val = best_row.get("team_name")
+    return (val.strip() or None) if isinstance(val, str) else None
+
+
 def compute_sprint_burndown_from_history(
     sprint_id: int,
     sprint_name: str,
@@ -40,9 +65,9 @@ def compute_sprint_burndown_from_history(
     history_rows: List[Dict[str, Any]],
     team_names: List[str],
     issue_type: str,
-) -> List[Dict[str, Any]]:
+) -> Tuple[List[Dict[str, Any]], IssueListsByMetric]:
     """
-    Compute sprint burndown daily series from raw issue history.
+    Compute sprint burndown daily series and per-day issue lists from raw issue history.
 
     Matches semantics of get_sprint_burndown_data_for_team:
     - Initial scope (planned_issues): distinct issues in sprint on start_date or start_date+1.
@@ -55,9 +80,13 @@ def compute_sprint_burndown_from_history(
     - Total scope: initial + cum(added) + cum(re-added) - cum(removed).
     - Ideal line from peak scope and sprint length.
 
-    Returns list of dicts with keys: snapshot_date, start_date, end_date,
-    remaining_issues, ideal_remaining, total_issues, issues_added_on_day,
-    issues_removed_on_day, issues_completed_on_day, wip_issues_in_progress.
+    Returns:
+      - chart_rows: list of dicts with keys snapshot_date, start_date, end_date,
+        remaining_issues, ideal_remaining, total_issues, issues_added_on_day,
+        issues_removed_on_day, issues_completed_on_day, wip_issues_in_progress.
+      - issue_lists_by_metric: for each metric ("total_scope", "issues_completed",
+        "issues_removed", "wip_in_progress", "actual_remaining"), a dict mapping
+        date -> list of {"issue_key", "team_name"} for that day (Option A: list uses this).
     """
     today = date.today()
     end_date_cap = max(end_date, today) if state == "active" else end_date
@@ -96,15 +125,24 @@ def compute_sprint_burndown_from_history(
         initial_scope.add(issue_key)
     planned_issues = len(initial_scope)
 
-    # Daily added: first_seen == d and d > start_date+1
+    # Daily added: first_seen == d and d > start_date+1 (and sets/lists for Option A)
     daily_added: Dict[date, int] = defaultdict(int)
+    added_by_date_set: Dict[date, set] = defaultdict(set)
+    added_by_date_list: Dict[date, List[Dict[str, Any]]] = defaultdict(list)
     for issue_key, first_seen in first_seen_in_sprint.items():
         if first_seen > start_date + timedelta(days=1):
             daily_added[first_seen] += 1
+            added_by_date_set[first_seen].add(issue_key)
+            row_add = by_issue_date.get((issue_key, first_seen), {})
+            tn = row_add.get("team_name")
+            team_name_add = (tn.strip() or None) if isinstance(tn, str) else None
+            added_by_date_list[first_seen].append({"issue_key": issue_key, "team_name": team_name_add})
 
-    # Per-day remaining and WIP from history (only days that have data)
+    # Per-day remaining and WIP from history (only days that have data); keep lists for Option A
     daily_remaining: Dict[date, int] = {}
     daily_wip: Dict[date, int] = {}
+    remaining_list_by_date: Dict[date, List[Dict[str, Any]]] = defaultdict(list)
+    wip_list_by_date: Dict[date, List[Dict[str, Any]]] = defaultdict(list)
     for snap_d in snapshot_dates:
         remaining_set = set()
         wip_set = set()
@@ -113,25 +151,35 @@ def compute_sprint_burndown_from_history(
                 continue
             if sprint_id not in _sprint_ids_set(row.get("sprint_ids")):
                 continue
+            tn = row.get("team_name")
+            team_name_row = (tn.strip() or None) if isinstance(tn, str) else None
             if (row.get("status_category") or "").strip() != "Done":
                 remaining_set.add(issue_key)
+                remaining_list_by_date[snap_d].append({"issue_key": issue_key, "team_name": team_name_row})
             if (row.get("status_category") or "").strip() == "In Progress":
                 wip_set.add(issue_key)
+                wip_list_by_date[snap_d].append({"issue_key": issue_key, "team_name": team_name_row})
         if remaining_set or wip_set:
             daily_remaining[snap_d] = len(remaining_set)
             daily_wip[snap_d] = len(wip_set)
-    # Carry-forward remaining and WIP for days with no data
+    # Carry-forward remaining and WIP for days with no data (counts and lists)
     last_remaining = 0
     last_wip = 0
+    last_remaining_list: List[Dict[str, Any]] = []
+    last_wip_list: List[Dict[str, Any]] = []
     for snap_d in snapshot_dates:
         if snap_d in daily_remaining:
             last_remaining = daily_remaining[snap_d]
             last_wip = daily_wip.get(snap_d, 0)
+            last_remaining_list = list(remaining_list_by_date.get(snap_d, []))
+            last_wip_list = list(wip_list_by_date.get(snap_d, []))
         else:
             daily_remaining[snap_d] = last_remaining
             daily_wip[snap_d] = last_wip
+            remaining_list_by_date[snap_d] = list(last_remaining_list)
+            wip_list_by_date[snap_d] = list(last_wip_list)
 
-    # State changes: sort by issue_key, snapshot_date
+    # State changes: sort by issue_key, snapshot_date; also build per-day lists for Option A
     sorted_rows = sorted(
         by_issue_date.items(),
         key=lambda x: (x[0][0], x[0][1] or date(1, 1, 1)),
@@ -139,6 +187,11 @@ def compute_sprint_burndown_from_history(
     daily_completed: Dict[date, int] = defaultdict(int)
     daily_removed: Dict[date, int] = defaultdict(int)
     daily_readded: Dict[date, int] = defaultdict(int)
+    daily_completed_list: Dict[date, List[Dict[str, Any]]] = defaultdict(list)
+    daily_removed_list: Dict[date, List[Dict[str, Any]]] = defaultdict(list)
+    daily_readded_list: Dict[date, List[Dict[str, Any]]] = defaultdict(list)
+    daily_removed_set: Dict[date, set] = defaultdict(set)
+    daily_readded_set: Dict[date, set] = defaultdict(set)
     prev_by_issue: Dict[str, Dict] = {}
     for (issue_key, snap_d), row in sorted_rows:
         if snap_d is None:
@@ -151,6 +204,8 @@ def compute_sprint_burndown_from_history(
         in_sprint_before = sprint_id in prev_sids
         in_sprint_now = sprint_id in curr_sids
         first_seen = first_seen_in_sprint.get(issue_key)
+        tn = row.get("team_name")
+        team_name_row = (tn.strip() or None) if isinstance(tn, str) else None
 
         # Removed: left sprint, not Done when left, first_seen in sprint >= start_date
         removed_this_day = (
@@ -159,14 +214,19 @@ def compute_sprint_burndown_from_history(
         )
         if removed_this_day:
             daily_removed[snap_d] += 1
+            daily_removed_set[snap_d].add(issue_key)
+            daily_removed_list[snap_d].append({"issue_key": issue_key, "team_name": team_name_row})
         # Completed: transition to Done while in sprint on this day; exclude if also removed same day.
         # Use in_sprint_now (not in_sprint_before) so issues added and completed the same day are counted.
         if curr_status == "Done" and prev_status != "Done" and in_sprint_now and not removed_this_day:
             daily_completed[snap_d] += 1
+            daily_completed_list[snap_d].append({"issue_key": issue_key, "team_name": team_name_row})
         # Re-added: back in sprint, was in sprint before (first_seen < current_date), day > start+1
         if in_sprint_now and not in_sprint_before and first_seen is not None and first_seen < snap_d:
             if snap_d > start_date + timedelta(days=1):
                 daily_readded[snap_d] += 1
+                daily_readded_set[snap_d].add(issue_key)
+                daily_readded_list[snap_d].append({"issue_key": issue_key, "team_name": team_name_row})
 
         prev_by_issue[issue_key] = dict(row)
         if "sprint_ids" in row:
@@ -178,11 +238,20 @@ def compute_sprint_burndown_from_history(
     cum_removed = 0
     cum_readded = 0
     total_by_date: Dict[date, int] = {}
+    in_scope_set: set = set(initial_scope)
+    total_scope_list_by_date: Dict[date, List[Dict[str, Any]]] = {}
     for snap_d in snapshot_dates:
         cum_added += daily_added.get(snap_d, 0)
         cum_removed += daily_removed.get(snap_d, 0)
         cum_readded += daily_readded.get(snap_d, 0)
+        in_scope_set |= added_by_date_set.get(snap_d, set())
+        in_scope_set -= daily_removed_set.get(snap_d, set())
+        in_scope_set |= daily_readded_set.get(snap_d, set())
         total_by_date[snap_d] = planned_issues + cum_added + cum_readded - cum_removed
+        total_scope_list_by_date[snap_d] = [
+            {"issue_key": k, "team_name": _team_name_for_issue_on_date(by_issue_date, k, snap_d)}
+            for k in sorted(in_scope_set)
+        ]
     peak_scope = max(total_by_date.values()) if total_by_date else 0
     sprint_length_days = (end_date - start_date).days
     if sprint_length_days <= 0:
@@ -212,7 +281,16 @@ def compute_sprint_burndown_from_history(
             "issues_completed_on_day": daily_completed.get(snap_d, 0),
             "wip_issues_in_progress": wip,
         })
-    return out
+
+    # Option A: per-day issue lists for list endpoint (single source of truth)
+    issue_lists_by_metric: Dict[str, Dict[date, List[Dict[str, Any]]]] = {
+        "total_scope": {d: total_scope_list_by_date.get(d, []) for d in snapshot_dates},
+        "issues_completed": {d: daily_completed_list.get(d, []) for d in snapshot_dates},
+        "issues_removed": {d: daily_removed_list.get(d, []) for d in snapshot_dates},
+        "wip_in_progress": {d: wip_list_by_date.get(d, []) for d in snapshot_dates},
+        "actual_remaining": {d: remaining_list_by_date.get(d, []) for d in snapshot_dates},
+    }
+    return (out, issue_lists_by_metric)
 
 
 def compute_total_scope_issues_for_date(
@@ -224,12 +302,14 @@ def compute_total_scope_issues_for_date(
     """
     Return list of issues that are in scope on target_date using the same formula as the chart:
     initial_scope + added through target_date + re-added through target_date - removed through target_date.
-    history_rows must cover start_date through target_date. Returns [{"issue_key", "team_name"}].
+    history_rows must cover start_date - 1 through target_date (same as chart) so first_seen and prev match.
+    Returns [{"issue_key", "team_name"}].
     """
+    history_start = start_date - timedelta(days=1)
     by_issue_date: Dict[tuple, Dict[str, Any]] = {}
     for row in history_rows:
         d = _normalize_date(row.get("snapshot_date"))
-        if d is None or d < start_date or d > target_date:
+        if d is None or d < history_start or d > target_date:
             continue
         key = (row["issue_key"], d)
         if key not in by_issue_date:
@@ -281,21 +361,21 @@ def compute_total_scope_issues_for_date(
             prev_by_issue[issue_key]["sprint_ids"] = row["sprint_ids"]
         prev_by_issue[issue_key]["status_category"] = (row.get("status_category") or "").strip()
 
-    added_through_target: set = set()
+    # Which issues were added on each day (first_seen == day, day > start+1)
+    added_by_date: Dict[date, set] = defaultdict(set)
     for issue_key, first_seen in first_seen_in_sprint.items():
         if start_plus_one < first_seen <= target_date:
-            added_through_target.add(issue_key)
+            added_by_date[first_seen].add(issue_key)
 
-    removed_set: set = set()
-    for d in removed_through_date:
-        if d <= target_date:
-            removed_set |= removed_through_date[d]
-    readded_set: set = set()
-    for d in readded_through_date:
-        if d <= target_date:
-            readded_set |= readded_through_date[d]
-
-    in_scope = (initial_scope | added_through_target | readded_set) - removed_set
+    # Build in_scope by applying add/remove/re-add in date order (matches chart formula).
+    # Fixes list vs chart mismatch when an issue was removed then re-added.
+    in_scope: set = set(initial_scope)
+    d = start_date
+    while d <= target_date:
+        in_scope |= added_by_date.get(d, set())
+        in_scope -= removed_through_date.get(d, set())
+        in_scope |= readded_through_date.get(d, set())
+        d += timedelta(days=1)
 
     # Team name: use latest row we have for each issue (iteration is already by (issue_key, date))
     issue_to_team: Dict[str, Optional[str]] = {}
