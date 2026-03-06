@@ -85,7 +85,7 @@ def compute_sprint_burndown_from_history(
         remaining_issues, ideal_remaining, total_issues, issues_added_on_day,
         issues_removed_on_day, issues_completed_on_day, wip_issues_in_progress.
       - issue_lists_by_metric: for each metric ("total_scope", "issues_completed",
-        "issues_removed", "wip_in_progress", "actual_remaining"), a dict mapping
+        "issues_removed", "issues_added", "wip_in_progress", "actual_remaining"), a dict mapping
         date -> list of {"issue_key", "team_name"} for that day (Option A: list uses this).
     """
     today = date.today()
@@ -301,6 +301,7 @@ def compute_sprint_burndown_from_history(
         "total_scope": {d: total_scope_list_by_date.get(d, []) for d in snapshot_dates},
         "issues_completed": {d: daily_completed_list.get(d, []) for d in snapshot_dates},
         "issues_removed": {d: daily_removed_list.get(d, []) for d in snapshot_dates},
+        "issues_added": {d: added_by_date_list.get(d, []) for d in snapshot_dates},
         "wip_in_progress": {d: wip_list_by_date.get(d, []) for d in snapshot_dates},
         "actual_remaining": {d: remaining_list_by_date.get(d, []) for d in snapshot_dates},
     }
