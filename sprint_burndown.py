@@ -115,15 +115,24 @@ def compute_sprint_burndown_from_history(
         if issue_key not in first_seen_in_sprint or snap_d < first_seen_in_sprint[issue_key]:
             first_seen_in_sprint[issue_key] = snap_d
 
-    # Initial scope: distinct issues in sprint on start_date or start_date+1
-    initial_scope = set()
+    # Initial scope: in sprint on start_date or start_date+1, excluding issues Done before start_date
+    start_plus_one = start_date + timedelta(days=1)
+    day_before_start = start_date - timedelta(days=1)
+    in_sprint_on_start = set()
     for (issue_key, snap_d), row in by_issue_date.items():
-        if snap_d not in (start_date, start_date + timedelta(days=1)):
+        if snap_d not in (start_date, start_plus_one):
             continue
         if sprint_id not in _sprint_ids_set(row.get("sprint_ids")):
             continue
-        initial_scope.add(issue_key)
+        in_sprint_on_start.add(issue_key)
+    completed_outside_sprint_set = set()
+    for issue_key in in_sprint_on_start:
+        prev_row = by_issue_date.get((issue_key, day_before_start))
+        if prev_row and (prev_row.get("status_category") or "").strip() == "Done":
+            completed_outside_sprint_set.add(issue_key)
+    initial_scope = in_sprint_on_start - completed_outside_sprint_set
     planned_issues = len(initial_scope)
+    issues_completed_outside_sprint = len(completed_outside_sprint_set)
 
     # Daily added: first_seen == d and d > start_date+1 (and sets/lists for Option A)
     daily_added: Dict[date, int] = defaultdict(int)
@@ -284,6 +293,7 @@ def compute_sprint_burndown_from_history(
             "issues_removed_on_day": daily_removed.get(snap_d, 0),
             "issues_completed_on_day": daily_completed.get(snap_d, 0),
             "wip_issues_in_progress": wip,
+            "issues_completed_outside_sprint": issues_completed_outside_sprint,
         })
 
     # Option A: per-day issue lists for list endpoint (single source of truth)
@@ -329,13 +339,20 @@ def compute_total_scope_issues_for_date(
             first_seen_in_sprint[issue_key] = snap_d
 
     start_plus_one = start_date + timedelta(days=1)
-    initial_scope: set = set()
+    day_before_start = start_date - timedelta(days=1)
+    in_sprint_on_start: set = set()
     for (issue_key, snap_d), row in by_issue_date.items():
         if snap_d not in (start_date, start_plus_one):
             continue
         if sprint_id not in _sprint_ids_set(row.get("sprint_ids")):
             continue
-        initial_scope.add(issue_key)
+        in_sprint_on_start.add(issue_key)
+    completed_outside_set = set()
+    for issue_key in in_sprint_on_start:
+        prev_row = by_issue_date.get((issue_key, day_before_start))
+        if prev_row and (prev_row.get("status_category") or "").strip() == "Done":
+            completed_outside_set.add(issue_key)
+    initial_scope = in_sprint_on_start - completed_outside_set
 
     sorted_rows = sorted(
         by_issue_date.items(),
