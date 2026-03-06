@@ -207,10 +207,14 @@ def compute_sprint_burndown_from_history(
         tn = row.get("team_name")
         team_name_row = (tn.strip() or None) if isinstance(tn, str) else None
 
-        # Removed: left sprint, not Done when left, first_seen in sprint >= start_date
+        # Removed: left sprint, not Done when left. Count if (a) added during sprint (first_seen >= start_date)
+        # or (b) removed after start_date (so "in sprint before start, removed after start" is counted).
         removed_this_day = (
             in_sprint_before and not in_sprint_now and prev_status != "Done"
-            and first_seen is not None and first_seen >= start_date
+            and (
+                (first_seen is not None and first_seen >= start_date)
+                or snap_d > start_date
+            )
         )
         if removed_this_day:
             daily_removed[snap_d] += 1
@@ -351,7 +355,10 @@ def compute_total_scope_issues_for_date(
         first_seen = first_seen_in_sprint.get(issue_key)
         prev_status = (prev.get("status_category") or "").strip() if prev else ""
 
-        if in_sprint_before and not in_sprint_now and prev_status != "Done" and first_seen is not None and first_seen >= start_date:
+        # Match chart: count as removed if added during sprint or if removal is after start_date
+        if in_sprint_before and not in_sprint_now and prev_status != "Done" and (
+            (first_seen is not None and first_seen >= start_date) or snap_d > start_date
+        ):
             removed_through_date[snap_d].add(issue_key)
         if in_sprint_now and not in_sprint_before and first_seen is not None and first_seen < snap_d and snap_d > start_plus_one:
             readded_through_date[snap_d].add(issue_key)
