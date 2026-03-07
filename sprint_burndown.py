@@ -288,7 +288,7 @@ def compute_sprint_burndown_from_history(
             "remaining_issues": remaining,
             "ideal_remaining": int(ideal) if ideal == int(ideal) else ideal,
             "total_issues": total_by_date.get(snap_d, 0),
-            "issues_added_on_day": daily_added.get(snap_d, 0),
+            "issues_added_on_day": daily_added.get(snap_d, 0) + daily_readded.get(snap_d, 0),
             "issues_removed_on_day": daily_removed.get(snap_d, 0),
             "issues_completed_on_day": daily_completed.get(snap_d, 0),
             "wip_issues_in_progress": wip,
@@ -300,7 +300,7 @@ def compute_sprint_burndown_from_history(
         "total_scope": {d: total_scope_list_by_date.get(d, []) for d in snapshot_dates},
         "issues_completed": {d: daily_completed_list.get(d, []) for d in snapshot_dates},
         "issues_removed": {d: daily_removed_list.get(d, []) for d in snapshot_dates},
-        "issues_added": {d: added_by_date_list.get(d, []) for d in snapshot_dates},
+        "issues_added": {d: added_by_date_list.get(d, []) + daily_readded_list.get(d, []) for d in snapshot_dates},
         "wip_in_progress": {d: wip_list_by_date.get(d, []) for d in snapshot_dates},
         "actual_remaining": {d: remaining_list_by_date.get(d, []) for d in snapshot_dates},
     }
