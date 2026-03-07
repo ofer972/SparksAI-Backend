@@ -2797,7 +2797,7 @@ async def get_pi_history_info(
     team_name: Optional[str] = Query(None, description="Team name or group name (if isGroup=true)"),
     isGroup: bool = Query(False, description="If true, team_name is treated as a group name"),
     issue_type: Optional[str] = Query(None, description="Filter by issue type (e.g., 'Story', 'Bug', 'Epic')"),
-    metric_type: str = Query(..., description="Metric type: 'issues_completed', 'issues_removed', 'total_scope', 'wip_in_progress', or 'actual_remaining'"),
+    metric_type: str = Query(..., description="Metric type: 'issues_completed', 'issues_removed', 'issues_added', 'total_scope', 'wip_in_progress', or 'actual_remaining'"),
     conn: Connection = Depends(get_db_connection)
 ):
     """
@@ -2814,6 +2814,7 @@ async def get_pi_history_info(
         metric_type: Metric type to return:
             - "issues_completed" - Issues completed on this day
             - "issues_removed" - Issues removed from PI (were in PI day before, not now)
+            - "issues_added" - Issues added to PI on this day (were not in PI day before)
             - "total_scope" - Total scope of PI on this day (all issues in PI)
             - "wip_in_progress" - Work in progress items on this day
             - "actual_remaining" - Actual remaining items on this day (not done)
@@ -2835,7 +2836,7 @@ async def get_pi_history_info(
             )
         
         # Validate metric_type
-        valid_metric_types = ["issues_completed", "issues_removed", "total_scope", "wip_in_progress", "actual_remaining"]
+        valid_metric_types = ["issues_completed", "issues_removed", "issues_added", "total_scope", "wip_in_progress", "actual_remaining"]
         if metric_type not in valid_metric_types:
             raise HTTPException(
                 status_code=400,
