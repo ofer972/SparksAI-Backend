@@ -1124,6 +1124,7 @@ def get_pi_history_issues_db(
         metric_type (str): Metric type to filter by. Valid values:
             - "issues_completed" - Issues completed on this day
             - "issues_removed" - Issues removed from PI
+            - "issues_added" - Issues added to PI on this day
             - "total_scope" - Total scope of PI on this day (all issues in PI)
             - "wip_in_progress" - Work in progress items
             - "actual_remaining" - Actual remaining items (not done)
@@ -1133,10 +1134,11 @@ def get_pi_history_issues_db(
         list: List of issue dictionaries with issue_key, summary, team_name, metric_category
     """
     try:
-        # Map metric_type to function's metric_category values
+        # Map metric_type to function's metric_category values (get_pi_issue_details_for_date returns ADDED, COMPLETED, REMOVED, WIP, REMAINING)
         metric_category_map = {
             "issues_completed": "COMPLETED",
             "issues_removed": "REMOVED",
+            "issues_added": "ADDED",
             "wip_in_progress": "WIP",
             "actual_remaining": "REMAINING"
         }
