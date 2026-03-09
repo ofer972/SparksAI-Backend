@@ -65,6 +65,7 @@ def compute_sprint_burndown_from_history(
     history_rows: List[Dict[str, Any]],
     team_names: List[str],
     issue_type: str,
+    complete_date: Optional[date] = None,
 ) -> Tuple[List[Dict[str, Any]], IssueListsByMetric]:
     """
     Compute sprint burndown daily series and per-day issue lists from raw issue history.
@@ -89,7 +90,11 @@ def compute_sprint_burndown_from_history(
         date -> list of {"issue_key", "team_name"} for that day (Option A: list uses this).
     """
     today = date.today()
-    end_date_cap = max(end_date, today) if state == "active" else end_date
+    # Active: no complete_date → cap at max(end_date, today). Closed: use complete_date when present
+    if state == "active":
+        end_date_cap = max(end_date, today)
+    else:
+        end_date_cap = complete_date if complete_date is not None else end_date
     snapshot_dates = []
     d = start_date
     while d <= end_date_cap:
@@ -293,6 +298,7 @@ def compute_sprint_burndown_from_history(
             "issues_completed_on_day": daily_completed.get(snap_d, 0),
             "wip_issues_in_progress": wip,
             "issues_completed_outside_sprint": issues_completed_outside_sprint,
+            "issues_completed_outside_sprint_keys": sorted(completed_outside_sprint_set),
         })
 
     # Option A: per-day issue lists for list endpoint (single source of truth)
@@ -305,6 +311,129 @@ def compute_sprint_burndown_from_history(
         "actual_remaining": {d: remaining_list_by_date.get(d, []) for d in snapshot_dates},
     }
     return (out, issue_lists_by_metric)
+
+
+def compute_closed_sprint_summary_from_history(
+    sprint_id: int,
+    start_date: date,
+    end_date: date,
+    complete_date: Optional[date],
+    history_rows: List[Dict[str, Any]],
+    team_names: List[str],
+    issue_type: str,
+    sprint_name: str = "",
+) -> Dict[str, Any]:
+    """
+    Compute a single closed-sprint summary from raw issue history.
+    Uses the same rules as the sprint burndown (at start, added, removed, completed,
+    re-added, same-day edge cases). Calls compute_sprint_burndown_from_history and
+    aggregates to one summary row.
+
+    Returns a dict with: issues_at_start, issues_added, issues_removed, issues_done,
+    issues_not_completed, completed_percentage, issues_at_start_keys, issues_added_keys,
+    issues_removed_keys, completed_issue_keys, issues_not_completed_keys,
+    issues_completed_outside_sprint. Key arrays are sorted lists.
+    """
+    if not history_rows:
+        return _empty_closed_sprint_summary()
+
+    state = "closed"
+    try:
+        chart_rows, issue_lists_by_metric = compute_sprint_burndown_from_history(
+            sprint_id=sprint_id,
+            sprint_name=sprint_name,
+            start_date=start_date,
+            end_date=end_date,
+            state=state,
+            history_rows=history_rows,
+            team_names=team_names,
+            issue_type=issue_type,
+            complete_date=complete_date,
+        )
+    except Exception:
+        return _empty_closed_sprint_summary()
+
+    if not chart_rows:
+        return _empty_closed_sprint_summary()
+
+    snapshot_dates = sorted(issue_lists_by_metric.get("total_scope", {}).keys())
+    last_date = snapshot_dates[-1] if snapshot_dates else start_date
+
+    # At start = total_scope on start_date (initial scope only)
+    total_scope_start = issue_lists_by_metric.get("total_scope", {}).get(start_date, [])
+    issues_at_start_keys = sorted({x["issue_key"] for x in total_scope_start})
+    issues_at_start = len(issues_at_start_keys)
+
+    # Added = distinct union of issues_added over all days (first-time + re-added)
+    added_all: set = set()
+    for d in snapshot_dates:
+        for x in issue_lists_by_metric.get("issues_added", {}).get(d, []):
+            added_all.add(x["issue_key"])
+    issues_added_keys = sorted(added_all)
+    issues_added = len(issues_added_keys)
+
+    # Removed = distinct union of issues_removed over all days
+    removed_all: set = set()
+    for d in snapshot_dates:
+        for x in issue_lists_by_metric.get("issues_removed", {}).get(d, []):
+            removed_all.add(x["issue_key"])
+    issues_removed_keys = sorted(removed_all)
+    issues_removed = len(issues_removed_keys)
+
+    # Completed = distinct union of issues_completed (transition to Done while in sprint)
+    completed_all: set = set()
+    for d in snapshot_dates:
+        for x in issue_lists_by_metric.get("issues_completed", {}).get(d, []):
+            completed_all.add(x["issue_key"])
+    completed_issue_keys = sorted(completed_all)
+    issues_done = len(completed_issue_keys)
+
+    # Not completed = actual_remaining on last date (in sprint at end, not Done)
+    actual_remaining_last = issue_lists_by_metric.get("actual_remaining", {}).get(last_date, [])
+    issues_not_completed_keys = sorted({x["issue_key"] for x in actual_remaining_last})
+    issues_not_completed = len(issues_not_completed_keys)
+
+    issues_completed_outside_sprint = int(chart_rows[0].get("issues_completed_outside_sprint", 0) or 0)
+    issues_completed_outside_sprint_keys = chart_rows[0].get("issues_completed_outside_sprint_keys") or []
+
+    total_planned = issues_at_start + issues_added
+    completed_percentage = (
+        round((issues_done / total_planned * 100.0), 2) if total_planned else 0.0
+    )
+
+    return {
+        "issues_at_start": issues_at_start,
+        "issues_added": issues_added,
+        "issues_removed": issues_removed,
+        "issues_done": issues_done,
+        "issues_not_completed": issues_not_completed,
+        "completed_percentage": completed_percentage,
+        "issues_at_start_keys": issues_at_start_keys,
+        "issues_added_keys": issues_added_keys,
+        "issues_removed_keys": issues_removed_keys,
+        "completed_issue_keys": completed_issue_keys,
+        "issues_not_completed_keys": issues_not_completed_keys,
+        "issues_completed_outside_sprint": issues_completed_outside_sprint,
+        "issues_completed_outside_sprint_keys": issues_completed_outside_sprint_keys,
+    }
+
+
+def _empty_closed_sprint_summary() -> Dict[str, Any]:
+    return {
+        "issues_at_start": 0,
+        "issues_added": 0,
+        "issues_removed": 0,
+        "issues_done": 0,
+        "issues_not_completed": 0,
+        "completed_percentage": 0.0,
+        "issues_at_start_keys": [],
+        "issues_added_keys": [],
+        "issues_removed_keys": [],
+        "completed_issue_keys": [],
+        "issues_not_completed_keys": [],
+        "issues_completed_outside_sprint": 0,
+        "issues_completed_outside_sprint_keys": [],
+    }
 
 
 def compute_total_scope_issues_for_date(
