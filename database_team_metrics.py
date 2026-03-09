@@ -10,7 +10,7 @@ from sqlalchemy.engine import Connection
 from typing import Dict, Any, List, Optional
 from datetime import datetime, date, timedelta
 
-from sprint_burndown import compute_sprint_burndown_from_history
+from sprint_burndown import compute_sprint_burndown_from_history, compute_closed_sprint_summary_from_history
 import logging
 from global_settings_loader import settings
 
@@ -957,107 +957,212 @@ def resolve_team_names_from_filter(
 def get_closed_sprints_data_db(team_names: Optional[List[str]], months: int = 3, issue_type: Optional[str] = None, sort_by: str = "default", conn: Connection = None) -> List[Dict[str, Any]]:
     """
     Get closed sprints data for specific team(s) or all teams with detailed metrics.
-    Uses the get_closed_sprint_summary_fn database function to get comprehensive sprint completion data.
-    
+    Uses Python + direct SQL (same logic as sprint burndown). Previously used
+    get_closed_sprint_summary_fn database function.
+
     Args:
         team_names (Optional[List[str]]): List of team names to filter by, or None for all teams
         months (int): Number of months to look back (1, 2, 3, 4, 6, 9)
         issue_type (Optional[str]): Issue type filter (optional, e.g., "Story", "Bug", "Task")
         sort_by (str): Sort order - "default" (team_name, end_date DESC) or "advanced" (start_date ASC, team_name ASC)
         conn (Connection): Database connection from FastAPI dependency
-    
+
     Returns:
         list: List of closed sprint dictionaries with detailed metrics (includes team_name)
     """
+    return get_closed_sprints_data_computed(team_names, months, issue_type, sort_by, conn)
+
+
+def get_closed_sprints_data_computed(
+    team_names: Optional[List[str]],
+    months: int = 3,
+    issue_type: Optional[str] = None,
+    sort_by: str = "default",
+    conn: Connection = None,
+) -> List[Dict[str, Any]]:
+    """
+    Get closed sprints data using direct SQL + Python logic (same rules as sprint burndown).
+    Fetches closed sprint list with team combinations, then raw jira_issue_history per team,
+    and computes summary via compute_closed_sprint_summary_from_history.
+    """
     try:
-        # Build parameters for the function call
-        params = {"months_back": months}
-        
-        # Add issue_type parameter (pass NULL if not provided)
-        if issue_type:
-            params["p_issue_type"] = issue_type
-        else:
-            params["p_issue_type"] = None
-        
-        # Determine sort order
+        if months not in (1, 2, 3, 4, 6, 9):
+            months = 3
+
+        issue_type_param = issue_type if issue_type else "all"
+
+        # 1. Closed sprints with team combinations (direct SQL)
+        sprint_base_sql = text("""
+            WITH sprint_base AS (
+                SELECT sprint_id, board_id, project_key, name AS sprint_name, goal AS sprint_goal,
+                       start_date::date AS start_date, end_date::date AS end_date, complete_date::date AS complete_date
+                FROM jira_sprints
+                WHERE state = 'closed' AND start_date IS NOT NULL AND end_date IS NOT NULL
+                  AND complete_date >= date_trunc('month', CURRENT_DATE - (:months * INTERVAL '1 month'))
+                  AND complete_date < (CURRENT_DATE + INTERVAL '1 day')
+            ),
+            sprint_teams AS (
+                SELECT DISTINCT s.sprint_id, h.team_name
+                FROM sprint_base s
+                JOIN jira_issue_history h ON s.sprint_id = ANY(h.sprint_ids)
+                WHERE h.team_name IS NOT NULL
+                  AND (:p_team_names IS NULL OR h.team_name = ANY(CAST(:p_team_names AS text[])))
+            )
+            SELECT st.sprint_id, st.team_name, sb.board_id, sb.project_key, sb.sprint_name, sb.sprint_goal,
+                   sb.start_date, sb.end_date, sb.complete_date
+            FROM sprint_teams st
+            JOIN sprint_base sb ON st.sprint_id = sb.sprint_id
+        """)
+        params_base = {"months": months, "p_team_names": team_names}
+        result_base = conn.execute(sprint_base_sql, params_base)
+        sprint_rows = [dict(row._mapping) for row in result_base]
+
+        if not sprint_rows:
+            return []
+
+        # Normalize dates on sprint rows
+        for row in sprint_rows:
+            for key in ("start_date", "end_date", "complete_date"):
+                v = row.get(key)
+                if v is not None and hasattr(v, "date"):
+                    row[key] = v.date()
+
+        # 2. Group by team_name for batched history fetch
+        from collections import defaultdict
+        sprints_by_team: Dict[str, List[Dict[str, Any]]] = defaultdict(list)
+        for row in sprint_rows:
+            tn = (row.get("team_name") or "").strip()
+            if tn:
+                sprints_by_team[tn].append(row)
+
+        # 3. For each team: one history query, then compute summary per sprint
+        all_results: List[Dict[str, Any]] = []
+        for team_name, sprints in sprints_by_team.items():
+            start_min = min(s["start_date"] for s in sprints) - timedelta(days=1)
+            end_cap = max(s.get("complete_date") or s["end_date"] for s in sprints)
+
+            history_sql = text("""
+                SELECT issue_key, snapshot_date::date AS snapshot_date, sprint_ids,
+                       status_category, issuetype, team_name
+                FROM jira_issue_history jh
+                WHERE jh.snapshot_date::date >= :start_min
+                  AND jh.snapshot_date::date <= :end_cap
+                  AND jh.team_name = :team_name
+                  AND (:issue_type = 'all' OR jh.issuetype = :issue_type)
+                  AND jh.issuetype IS NOT NULL
+                ORDER BY jh.issue_key, jh.snapshot_date::date
+            """)
+            history_result = conn.execute(history_sql, {
+                "start_min": start_min,
+                "end_cap": end_cap,
+                "team_name": team_name,
+                "issue_type": issue_type_param,
+            })
+            team_history = [dict(row._mapping) for row in history_result]
+
+            for sprint_meta in sprints:
+                sprint_id = int(sprint_meta["sprint_id"])
+                start_d = sprint_meta["start_date"]
+                end_d = sprint_meta["end_date"]
+                complete_d = sprint_meta.get("complete_date")
+
+                # Slice history to this sprint's date window only. Do NOT filter by sprint_id here:
+                # we need rows where the issue is NOT in the sprint (e.g. the day after removal) so
+                # the burndown logic can see the transition and count "removed" correctly.
+                end_cap_sprint = complete_d or end_d
+                history_slice = []
+                for r in team_history:
+                    snap = _normalize_date_safe(r.get("snapshot_date"))
+                    if snap is None:
+                        continue
+                    if not (start_d - timedelta(days=1) <= snap <= end_cap_sprint):
+                        continue
+                    history_slice.append(r)
+
+                summary = compute_closed_sprint_summary_from_history(
+                    sprint_id=sprint_id,
+                    start_date=start_d,
+                    end_date=end_d,
+                    complete_date=complete_d,
+                    history_rows=history_slice,
+                    team_names=[team_name],
+                    issue_type=issue_type_param,
+                    sprint_name=sprint_meta.get("sprint_name") or "",
+                )
+
+                row_dict = {
+                    "sprint_id": sprint_id,
+                    "board_id": sprint_meta.get("board_id"),
+                    "project_key": sprint_meta.get("project_key"),
+                    "sprint_name": sprint_meta.get("sprint_name"),
+                    "team_name": team_name,
+                    "sprint_goal": sprint_meta.get("sprint_goal"),
+                    "start_date": start_d,
+                    "end_date": end_d,
+                    "complete_date": complete_d,
+                    **summary,
+                }
+                all_results.append(row_dict)
+
+        # 4. Sort
         if sort_by == "advanced":
-            order_by_clause = "ORDER BY start_date ASC, team_name ASC"
+            all_results.sort(key=lambda r: (r.get("start_date") or date(1, 1, 1), (r.get("team_name") or "")))
         else:
-            order_by_clause = "ORDER BY team_name, end_date DESC"
-        
-        # Build query - pass team_names as array or NULL
-        if team_names:
-            # Pass array of team names to function
-            params["p_team_names"] = team_names
-            query = text(f"""
-                SELECT *
-                FROM public.get_closed_sprint_summary_fn(:months_back, CAST(:p_team_names AS text[]), :p_issue_type)
-                {order_by_clause}
-            """)
-            
-            logger.info(f"Executing query to get closed sprints data for teams: {team_names}")
-            logger.info(f"Parameters: team_names={team_names}, months={months}, issue_type={issue_type}, sort_by={sort_by}")
-            
-            result = conn.execute(query, params)
-        else:
-            # Pass NULL for all teams
-            query = text(f"""
-                SELECT *
-                FROM public.get_closed_sprint_summary_fn(:months_back, NULL, :p_issue_type)
-                {order_by_clause}
-            """)
-            
-            logger.info(f"Executing query to get closed sprints data for all teams")
-            logger.info(f"Parameters: months={months}, issue_type={issue_type}, sort_by={sort_by}")
-            
-            result = conn.execute(query, params)
-        
-        # Convert rows to list of dictionaries - return all fields from database function
+            all_results.sort(key=lambda r: ((r.get("team_name") or ""), -(r.get("end_date") or date(1, 1, 1)).toordinal() if r.get("end_date") else 0, r.get("sprint_id")))
+
+        # 5. Format dates and drop end_date from response (keep complete_date)
         closed_sprints = []
-        for row in result:
-            row_dict = dict(row._mapping)
-            
-            # Format complete_date if it exists
-            complete_date = row_dict.get('complete_date')
-            if complete_date and hasattr(complete_date, 'strftime'):
-                complete_date = complete_date.strftime('%Y-%m-%d')
-            
-            # Remove end_date, keep only complete_date
-            if 'end_date' in row_dict:
-                del row_dict['end_date']
-            
-            # Set complete_date (will be None if not present in DB)
-            row_dict['complete_date'] = complete_date
-            
-            # Format other date fields if they exist (excluding complete_date which is already formatted)
-            for key, value in row_dict.items():
-                if value is not None and hasattr(value, 'strftime') and key != 'complete_date':
-                    row_dict[key] = value.strftime('%Y-%m-%d')
-            
+        for row_dict in all_results:
+            complete_date_val = row_dict.get("complete_date")
+            if complete_date_val and hasattr(complete_date_val, "strftime"):
+                row_dict["complete_date"] = complete_date_val.strftime("%Y-%m-%d")
+            if "end_date" in row_dict:
+                del row_dict["end_date"]
+            for key, value in list(row_dict.items()):
+                if value is not None and hasattr(value, "strftime") and key != "complete_date":
+                    row_dict[key] = value.strftime("%Y-%m-%d")
             closed_sprints.append(row_dict)
-        
-        # Filter out sprints where both issues_at_start = 0 AND issues_added = 0
+
+        # 6. Filter out sprints where both issues_at_start = 0 AND issues_added = 0
         filtered_sprints = []
         excluded_count = 0
         for sprint in closed_sprints:
-            issues_at_start = sprint.get('issues_at_start', 0) or 0
-            issues_added = sprint.get('issues_added', 0) or 0
-            
-            # Exclude only if BOTH are zero
-            if issues_at_start == 0 and issues_added == 0:
+            if (sprint.get("issues_at_start") or 0) == 0 and (sprint.get("issues_added") or 0) == 0:
                 excluded_count += 1
                 continue
-            
             filtered_sprints.append(sprint)
-        
+
         if excluded_count > 0:
             logger.info(f"Excluded {excluded_count} sprint(s) with zero issues_at_start and zero issues_added")
-        
+
         return filtered_sprints
-            
+
     except Exception as e:
         logger.error(f"Error fetching closed sprints data (team_names={team_names}): {e}")
         raise e
+
+
+def _normalize_date_safe(d: Any) -> Optional[date]:
+    if d is None:
+        return None
+    if isinstance(d, date):
+        return d
+    if hasattr(d, "date"):
+        return d.date()
+    if isinstance(d, str):
+        try:
+            return date.fromisoformat(d[:10])
+        except Exception:
+            return None
+    return None
+
+
+def _sprint_ids_from_row(sprint_ids: Any) -> set:
+    if sprint_ids is None:
+        return set()
+    if isinstance(sprint_ids, (list, tuple)):
+        return set(int(x) for x in sprint_ids if x is not None)
+    return set()
 
 
 def get_sprint_burndown_data_computed(team_names: List[str], sprint_name: str, issue_type: str = "all", conn: Connection = None) -> List[Dict[str, Any]]:
@@ -1068,10 +1173,10 @@ def get_sprint_burndown_data_computed(team_names: List[str], sprint_name: str, i
     if not team_names:
         return []
     try:
-        # 1. Sprint details
+        # 1. Sprint details (include complete_date for closed sprints)
         sprint_sql = """
             SELECT sprint_id, name AS sprint_name, start_date::date AS start_date,
-                   end_date::date AS end_date, state
+                   end_date::date AS end_date, complete_date::date AS complete_date, state
             FROM public.jira_sprints
             WHERE name = :sprint_name
         """
@@ -1084,13 +1189,20 @@ def get_sprint_burndown_data_computed(team_names: List[str], sprint_name: str, i
         sprint_id = int(row_m["sprint_id"])
         start_d = row_m["start_date"]
         end_d = row_m["end_date"]
+        complete_d = row_m.get("complete_date")
         state = (row_m.get("state") or "").strip().lower()
         if hasattr(start_d, "date"):
             start_d = start_d.date()
         if hasattr(end_d, "date"):
             end_d = end_d.date()
+        if complete_d is not None and hasattr(complete_d, "date"):
+            complete_d = complete_d.date()
         today = date.today()
-        end_date_cap = max(end_d, today) if state == "active" else end_d
+        # Active: cap at max(end, today). Closed: use complete_date when present, else end_date
+        if state == "active":
+            end_date_cap = max(end_d, today)
+        else:
+            end_date_cap = complete_d if complete_d is not None else end_d
         start_min = start_d - timedelta(days=1)
         # 2. Raw issue history (no sprint filter so we get in/out-of-sprint transitions)
         history_sql = """
@@ -1120,6 +1232,7 @@ def get_sprint_burndown_data_computed(team_names: List[str], sprint_name: str, i
             history_rows=history_rows,
             team_names=team_names,
             issue_type=issue_type,
+            complete_date=complete_d,
         )
         return chart_rows
     except Exception as e:
@@ -1215,7 +1328,7 @@ def get_sprint_history_issues_computed(
     # Same sprint + history fetch as chart (start_date - 1 to end_date_cap)
     sprint_sql = text("""
         SELECT sprint_id, name AS sprint_name, start_date::date AS start_date,
-               end_date::date AS end_date, state
+               end_date::date AS end_date, complete_date::date AS complete_date, state
         FROM public.jira_sprints
         WHERE sprint_id = :sprint_id
     """)
@@ -1226,14 +1339,20 @@ def get_sprint_history_issues_computed(
     row_m = dict(sprint_row._mapping)
     start_d = row_m["start_date"]
     end_d = row_m["end_date"]
+    complete_d = row_m.get("complete_date")
     state = (row_m.get("state") or "").strip().lower()
     sprint_name = row_m.get("sprint_name") or ""
     if hasattr(start_d, "date"):
         start_d = start_d.date()
     if hasattr(end_d, "date"):
         end_d = end_d.date()
+    if complete_d is not None and hasattr(complete_d, "date"):
+        complete_d = complete_d.date()
     today = date.today()
-    end_date_cap = max(end_d, today) if state == "active" else end_d
+    if state == "active":
+        end_date_cap = max(end_d, today)
+    else:
+        end_date_cap = complete_d if complete_d is not None else end_d
     start_min = start_d - timedelta(days=1)
 
     history_sql = text("""
@@ -1264,6 +1383,7 @@ def get_sprint_history_issues_computed(
         history_rows=history_rows,
         team_names=teams,
         issue_type=target_issuetype,
+        complete_date=complete_d,
     )
     issues_with_team = issue_lists_by_metric.get(metric_type, {}).get(target_date, [])
     if not issues_with_team:
