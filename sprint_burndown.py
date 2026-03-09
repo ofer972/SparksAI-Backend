@@ -66,6 +66,7 @@ def compute_sprint_burndown_from_history(
     team_names: List[str],
     issue_type: str,
     complete_date: Optional[date] = None,
+    resolved_at_map: Optional[Dict[str, Optional[date]]] = None,
 ) -> Tuple[List[Dict[str, Any]], IssueListsByMetric]:
     """
     Compute sprint burndown daily series and per-day issue lists from raw issue history.
@@ -95,6 +96,7 @@ def compute_sprint_burndown_from_history(
         end_date_cap = max(end_date, today)
     else:
         end_date_cap = complete_date if complete_date is not None else end_date
+    sprint_end_date = complete_date if complete_date is not None else end_date
     snapshot_dates = []
     d = start_date
     while d <= end_date_cap:
@@ -206,6 +208,9 @@ def compute_sprint_burndown_from_history(
     daily_removed_set: Dict[date, set] = defaultdict(set)
     daily_readded_set: Dict[date, set] = defaultdict(set)
     prev_by_issue: Dict[str, Dict] = {}
+    # Issues that were ever removed from this sprint; do not count them as completed even if
+    # a later row still has this sprint in sprint_ids (e.g. Jira keeps both source and target).
+    issues_ever_removed_from_sprint: set = set()
     for (issue_key, snap_d), row in sorted_rows:
         if snap_d is None:
             continue
@@ -233,17 +238,33 @@ def compute_sprint_burndown_from_history(
             daily_removed[snap_d] += 1
             daily_removed_set[snap_d].add(issue_key)
             daily_removed_list[snap_d].append({"issue_key": issue_key, "team_name": team_name_row})
+            issues_ever_removed_from_sprint.add(issue_key)
         # Completed: transition to Done while in sprint on this day; exclude if also removed same day.
-        # Use in_sprint_now (not in_sprint_before) so issues added and completed the same day are counted.
-        if curr_status == "Done" and prev_status != "Done" and in_sprint_now and not removed_this_day:
+        # Do not count if the issue was ever removed from this sprint (e.g. moved to another sprint
+        # then done; Jira may still keep this sprint in sprint_ids, but we must not count it here).
+        # Only count if resolved_at is within sprint range (reopened issues have resolved_at cleared).
+        resolved_ok = True
+        if resolved_at_map is not None:
+            ra = resolved_at_map.get(issue_key)
+            resolved_ok = ra is not None and start_date <= ra <= sprint_end_date
+        if (
+            curr_status == "Done"
+            and prev_status != "Done"
+            and in_sprint_now
+            and not removed_this_day
+            and issue_key not in issues_ever_removed_from_sprint
+            and resolved_ok
+        ):
             daily_completed[snap_d] += 1
             daily_completed_list[snap_d].append({"issue_key": issue_key, "team_name": team_name_row})
-        # Re-added: back in sprint, was in sprint before (first_seen < current_date), day > start_date
+        # Re-added: back in sprint, was in sprint before (first_seen < current_date), day > start_date.
+        # If the issue was previously removed, allow it to count as completed again when it goes Done.
         if in_sprint_now and not in_sprint_before and first_seen is not None and first_seen < snap_d:
             if snap_d > start_date:
                 daily_readded[snap_d] += 1
                 daily_readded_set[snap_d].add(issue_key)
                 daily_readded_list[snap_d].append({"issue_key": issue_key, "team_name": team_name_row})
+                issues_ever_removed_from_sprint.discard(issue_key)
 
         prev_by_issue[issue_key] = dict(row)
         if "sprint_ids" in row:
@@ -286,7 +307,7 @@ def compute_sprint_burndown_from_history(
             max(0.0, peak_scope * (end_date - snap_d).days / sprint_length_days),
             1,
         )
-        out.append({
+        row = {
             "snapshot_date": snap_d,
             "start_date": start_date,
             "end_date": end_date,
@@ -299,7 +320,10 @@ def compute_sprint_burndown_from_history(
             "wip_issues_in_progress": wip,
             "issues_completed_outside_sprint": issues_completed_outside_sprint,
             "issues_completed_outside_sprint_keys": sorted(completed_outside_sprint_set),
-        })
+        }
+        if not out:
+            row["issues_ever_removed_keys"] = sorted(issues_ever_removed_from_sprint)
+        out.append(row)
 
     # Option A: per-day issue lists for list endpoint (single source of truth)
     issue_lists_by_metric: Dict[str, Dict[date, List[Dict[str, Any]]]] = {
@@ -322,6 +346,7 @@ def compute_closed_sprint_summary_from_history(
     team_names: List[str],
     issue_type: str,
     sprint_name: str = "",
+    resolved_at_map: Optional[Dict[str, Optional[date]]] = None,
 ) -> Dict[str, Any]:
     """
     Compute a single closed-sprint summary from raw issue history.
@@ -349,6 +374,7 @@ def compute_closed_sprint_summary_from_history(
             team_names=team_names,
             issue_type=issue_type,
             complete_date=complete_date,
+            resolved_at_map=resolved_at_map,
         )
     except Exception:
         return _empty_closed_sprint_summary()
@@ -380,12 +406,14 @@ def compute_closed_sprint_summary_from_history(
     issues_removed_keys = sorted(removed_all)
     issues_removed = len(issues_removed_keys)
 
-    # Completed = distinct union of issues_completed (transition to Done while in sprint)
+    # Completed = distinct union of issues_completed (transition to Done while in sprint),
+    # minus issues that were ever removed (e.g. Done then rework then removed, or moved then done).
     completed_all: set = set()
     for d in snapshot_dates:
         for x in issue_lists_by_metric.get("issues_completed", {}).get(d, []):
             completed_all.add(x["issue_key"])
-    completed_issue_keys = sorted(completed_all)
+    ever_removed = set(chart_rows[0].get("issues_ever_removed_keys") or [])
+    completed_issue_keys = sorted(completed_all - ever_removed)
     issues_done = len(completed_issue_keys)
 
     # Not completed = actual_remaining on last date (in sprint at end, not Done)

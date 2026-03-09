@@ -1059,6 +1059,8 @@ def get_closed_sprints_data_computed(
                 "issue_type": issue_type_param,
             })
             team_history = [dict(row._mapping) for row in history_result]
+            issue_keys_team = list({r["issue_key"] for r in team_history})
+            resolved_at_map_team = _fetch_resolved_at_map(conn, issue_keys_team)
 
             for sprint_meta in sprints:
                 sprint_id = int(sprint_meta["sprint_id"])
@@ -1088,6 +1090,7 @@ def get_closed_sprints_data_computed(
                     team_names=[team_name],
                     issue_type=issue_type_param,
                     sprint_name=sprint_meta.get("sprint_name") or "",
+                    resolved_at_map=resolved_at_map_team,
                 )
 
                 row_dict = {
@@ -1140,6 +1143,19 @@ def get_closed_sprints_data_computed(
     except Exception as e:
         logger.error(f"Error fetching closed sprints data (team_names={team_names}): {e}")
         raise e
+
+
+def _fetch_resolved_at_map(conn: Connection, issue_keys: List[str]) -> Dict[str, Optional[date]]:
+    """Fetch issue_key -> resolved_at (date or None) from jira_issues for the given keys."""
+    if not issue_keys:
+        return {}
+    placeholders = ", ".join([f":key_{i}" for i in range(len(issue_keys))])
+    params = {f"key_{i}": k for i, k in enumerate(issue_keys)}
+    res_sql = text(
+        f"SELECT issue_key, resolved_at::date AS resolved_at FROM jira_issues WHERE issue_key IN ({placeholders})"
+    )
+    res_rows = conn.execute(res_sql, params)
+    return {row.issue_key: _normalize_date_safe(row.resolved_at) for row in res_rows}
 
 
 def _normalize_date_safe(d: Any) -> Optional[date]:
@@ -1223,6 +1239,8 @@ def get_sprint_burndown_data_computed(team_names: List[str], sprint_name: str, i
             "issue_type": issue_type,
         })
         history_rows = [dict(row._mapping) for row in history_result]
+        issue_keys = list({r["issue_key"] for r in history_rows})
+        resolved_at_map = _fetch_resolved_at_map(conn, issue_keys)
         chart_rows, _ = compute_sprint_burndown_from_history(
             sprint_id=sprint_id,
             sprint_name=sprint_name,
@@ -1233,6 +1251,7 @@ def get_sprint_burndown_data_computed(team_names: List[str], sprint_name: str, i
             team_names=team_names,
             issue_type=issue_type,
             complete_date=complete_d,
+            resolved_at_map=resolved_at_map,
         )
         return chart_rows
     except Exception as e:
@@ -1373,7 +1392,8 @@ def get_sprint_history_issues_computed(
         "issue_type": target_issuetype,
     })
     history_rows = [dict(row._mapping) for row in history_result]
-
+    issue_keys = list({r["issue_key"] for r in history_rows})
+    resolved_at_map = _fetch_resolved_at_map(conn, issue_keys)
     _, issue_lists_by_metric = compute_sprint_burndown_from_history(
         sprint_id=sprint_id,
         sprint_name=sprint_name,
@@ -1384,6 +1404,7 @@ def get_sprint_history_issues_computed(
         team_names=teams,
         issue_type=target_issuetype,
         complete_date=complete_d,
+        resolved_at_map=resolved_at_map,
     )
     issues_with_team = issue_lists_by_metric.get(metric_type, {}).get(target_date, [])
     if not issues_with_team:
