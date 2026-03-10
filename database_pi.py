@@ -12,7 +12,29 @@ from datetime import datetime, date, timedelta
 
 from global_settings_loader import settings
 
+from pi_burndown import compute_pi_burndown_from_history, compute_pi_scope_change_sets
+
 logger = logging.getLogger(__name__)
+
+
+def _fetch_resolved_at_map(conn: Connection, issue_keys: List[str]) -> Dict[str, Optional[date]]:
+    """Fetch issue_key -> resolved_at (date or None) from jira_issues for the given keys."""
+    if not issue_keys:
+        return {}
+    placeholders = ", ".join([f":key_{i}" for i in range(len(issue_keys))])
+    params = {f"key_{i}": k for i, k in enumerate(issue_keys)}
+    res_sql = text(
+        f"SELECT issue_key, resolved_at::date AS resolved_at FROM jira_issues WHERE issue_key IN ({placeholders})"
+    )
+    res_rows = conn.execute(res_sql, params)
+    result = {}
+    for row in res_rows:
+        ra = row.resolved_at
+        if hasattr(ra, "date"):
+            ra = ra.date()
+        result[row.issue_key] = ra
+    return result
+
 
 # Status values (thresholds from settings.HEATMAP_*)
 HEATMAP_STATUS_COMPLETED = "completed"  # 100% completion
@@ -209,13 +231,130 @@ def fetch_pi_predictability_data(pi_names, team_names: Optional[List[str]] = Non
         raise e
 
 
+def get_pi_burndown_data_computed(
+    pi_name: str,
+    project_keys: Optional[List[str]] = None,
+    issue_type: Optional[str] = None,
+    team_names: Optional[List[str]] = None,
+    conn: Connection = None,
+) -> List[Dict[str, Any]]:
+    """
+    Get PI burndown data using Python logic (no SQL burndown function).
+    Fetches PI details (including planning_grace_days) and raw jira_issue_history, then computes in Python.
+    Same semantics as get_pi_burndown_data with grace period and re-added (sprint-style adaptations).
+    """
+    if not pi_name:
+        return []
+    try:
+        issue_type = issue_type or "Epic"
+        # 1. PI details including grace period
+        pi_sql = text("""
+            SELECT pi_name, start_date::date AS start_date, end_date::date AS end_date,
+                   COALESCE(planning_grace_days, 0)::int AS grace_period_days
+            FROM public.pis
+            WHERE pi_name = :pi_name
+        """)
+        pi_result = conn.execute(pi_sql, {"pi_name": pi_name})
+        pi_row = pi_result.fetchone()
+        if not pi_row:
+            logger.warning(f"PI not found: {pi_name}")
+            return []
+        row_m = dict(pi_row._mapping)
+        start_d = row_m["start_date"]
+        end_d = row_m["end_date"]
+        grace_period_days = int(row_m.get("grace_period_days") or 0)
+        if hasattr(start_d, "date"):
+            start_d = start_d.date()
+        if hasattr(end_d, "date"):
+            end_d = end_d.date()
+        today = date.today()
+        end_date_cap = max(end_d, today)
+        start_min = start_d - timedelta(days=1)
+
+        # 2. Raw issue history (date range, team/issue_type/project filter; no PI filter so we get in/out transitions)
+        params: Dict[str, Any] = {
+            "pi_name": pi_name,
+            "start_min": start_min,
+            "end_date_cap": end_date_cap,
+            "issue_type": issue_type,
+        }
+        if team_names:
+            params["team_names"] = team_names
+        if project_keys:
+            params["project_keys"] = project_keys
+
+        if team_names and project_keys:
+            history_sql = text("""
+                SELECT issue_key, snapshot_date::date AS snapshot_date, quarter_pi, quarter_pi_of_epic,
+                       status_category, team_name, issuetype
+                FROM public.jira_issue_history jh
+                WHERE jh.snapshot_date::date >= :start_min AND jh.snapshot_date::date <= :end_date_cap
+                  AND (:issue_type = 'all' OR jh.issuetype = :issue_type)
+                  AND jh.team_name = ANY(:team_names)
+                  AND (split_part(jh.issue_key, '-', 1) = ANY(:project_keys))
+                ORDER BY jh.issue_key, jh.snapshot_date::date
+            """)
+        elif team_names:
+            history_sql = text("""
+                SELECT issue_key, snapshot_date::date AS snapshot_date, quarter_pi, quarter_pi_of_epic,
+                       status_category, team_name, issuetype
+                FROM public.jira_issue_history jh
+                WHERE jh.snapshot_date::date >= :start_min AND jh.snapshot_date::date <= :end_date_cap
+                  AND (:issue_type = 'all' OR jh.issuetype = :issue_type)
+                  AND jh.team_name = ANY(:team_names)
+                ORDER BY jh.issue_key, jh.snapshot_date::date
+            """)
+        elif project_keys:
+            history_sql = text("""
+                SELECT issue_key, snapshot_date::date AS snapshot_date, quarter_pi, quarter_pi_of_epic,
+                       status_category, team_name, issuetype
+                FROM public.jira_issue_history jh
+                WHERE jh.snapshot_date::date >= :start_min AND jh.snapshot_date::date <= :end_date_cap
+                  AND (:issue_type = 'all' OR jh.issuetype = :issue_type)
+                  AND (split_part(jh.issue_key, '-', 1) = ANY(:project_keys))
+                ORDER BY jh.issue_key, jh.snapshot_date::date
+            """)
+        else:
+            history_sql = text("""
+                SELECT issue_key, snapshot_date::date AS snapshot_date, quarter_pi, quarter_pi_of_epic,
+                       status_category, team_name, issuetype
+                FROM public.jira_issue_history jh
+                WHERE jh.snapshot_date::date >= :start_min AND jh.snapshot_date::date <= :end_date_cap
+                  AND (:issue_type = 'all' OR jh.issuetype = :issue_type)
+                ORDER BY jh.issue_key, jh.snapshot_date::date
+            """)
+        history_result = conn.execute(history_sql, params)
+        history_rows = [dict(row._mapping) for row in history_result]
+
+        issue_keys = list({r["issue_key"] for r in history_rows})
+        resolved_at_map = _fetch_resolved_at_map(conn, issue_keys)
+
+        chart_rows, _ = compute_pi_burndown_from_history(
+            pi_name=pi_name,
+            start_date=start_d,
+            end_date=end_d,
+            grace_period_days=grace_period_days,
+            history_rows=history_rows,
+            team_names=team_names,
+            issue_type=issue_type,
+            project_keys=project_keys,
+            resolved_at_map=resolved_at_map,
+        )
+        burndown_data = reduce_pi_burndown_data(chart_rows, days_without_change_threshold=5)
+        logger.info(f"Computed PI burndown for {pi_name}: {len(burndown_data)} records")
+        return burndown_data
+    except Exception as e:
+        logger.error(f"Error computing PI burndown for {pi_name}: {e}")
+        raise e
+
+
 def fetch_pi_burndown_data(pi_name: str, project_keys: str = None, issue_type: str = None, team_names: Optional[List[str]] = None, conn: Connection = None) -> List[Dict[str, Any]]:
     """
-    Fetch PI burndown data from the database function.
+    Fetch PI burndown data using Python computation (same logic as get_pi_burndown_data with grace + re-added).
     
     Args:
         pi_name (str): PI name to fetch data for (mandatory)
-        project_keys (str, optional): Project keys filter
+        project_keys (str, optional): Project keys filter (comma-separated or single)
         issue_type (str, optional): Issue type filter (defaults to 'Epic' if not provided)
         team_names (Optional[List[str]], optional): List of team names filter, or None for all teams
         conn (Connection): Database connection from FastAPI dependency
@@ -226,146 +365,125 @@ def fetch_pi_burndown_data(pi_name: str, project_keys: str = None, issue_type: s
     try:
         if not pi_name:
             return []
-        
-        # Default issue_type to 'Epic' if not provided (note: can still pass 'all' explicitly)
         if not issue_type or issue_type == "":
-            issue_type = 'Epic'
-        
-        logger.info(f"Executing PI burndown query for PI: {pi_name}")
-        logger.info(f"Filters: project_keys={project_keys}, issue_type={issue_type}, team_names={team_names}")
-        
-        # Build parameters for the function call
-        params = {
-            'pi_name': pi_name,
-            'project_keys': project_keys,
-            'issue_type': issue_type
-        }
-        
-        # Build query - pass team_names as array or NULL (following pattern from get_closed_sprints_data_db)
-        if team_names:
-            # Pass array of team names to function
-            params['team_names'] = team_names
-            sql_query_text = text("""
-                SELECT * FROM public.get_pi_burndown_data(
-                    :pi_name,
-                    :project_keys,
-                    :issue_type,
-                    CAST(:team_names AS text[])
-                )
-            """)
-            
-            logger.info(f"Executing SQL for PI burndown: {pi_name} with teams: {team_names}")
-        else:
-            # Pass NULL for all teams
-            sql_query_text = text("""
-                SELECT * FROM public.get_pi_burndown_data(
-                    :pi_name,
-                    :project_keys,
-                    :issue_type,
-                    NULL
-                )
-            """)
-            
-            logger.info(f"Executing SQL for PI burndown: {pi_name} for all teams")
-        
-        # Execute query with parameters (SECURE: prevents SQL injection)
-        result = conn.execute(sql_query_text, params)
-        
-        # Convert rows to list of dictionaries
-        burndown_data = []
-        for row in result:
-            row_dict = dict(row._mapping)
-            
-            # Format array/list columns if present
-            # Following the same pattern as pi_predictability_data
-            for col in row_dict.keys():
-                if isinstance(row_dict[col], list):
-                    row_dict[col] = ', '.join(row_dict[col])
-            
-            burndown_data.append(row_dict)
-        
-        logger.info(f"Retrieved {len(burndown_data)} PI burndown records")
-        
-        # Apply Enhanced Option 5 data reduction
-        burndown_data = reduce_pi_burndown_data(burndown_data, days_without_change_threshold=5)
-        
-        return burndown_data
-            
+            issue_type = "Epic"
+        # Normalize project_keys to list (API may pass "AD,XY" or None)
+        pk_list: Optional[List[str]] = None
+        if project_keys:
+            pk_list = [p.strip() for p in str(project_keys).split(",") if p.strip()]
+        return get_pi_burndown_data_computed(
+            pi_name=pi_name,
+            project_keys=pk_list,
+            issue_type=issue_type,
+            team_names=team_names,
+            conn=conn,
+        )
     except Exception as e:
         logger.error(f"Error fetching PI burndown data: {e}")
         raise e
 
 
+def _fetch_pi_scope_change_rows_for_pi(
+    pi_name: str,
+    team_names: Optional[List[str]],
+    conn: Connection,
+) -> List[Dict[str, Any]]:
+    """Compute scope change rows for one PI using same logic as PI burndown (grace, planned/added/removed/completed/not completed)."""
+    try:
+        pi_sql = text("""
+            SELECT pi_name, start_date::date AS start_date, end_date::date AS end_date,
+                   COALESCE(planning_grace_days, 0)::int AS grace_period_days
+            FROM public.pis WHERE pi_name = :pi_name
+        """)
+        pi_row = conn.execute(pi_sql, {"pi_name": pi_name}).fetchone()
+        if not pi_row:
+            return []
+        row_m = dict(pi_row._mapping)
+        start_d = row_m["start_date"]
+        end_d = row_m["end_date"]
+        grace_period_days = int(row_m.get("grace_period_days") or 0)
+        if hasattr(start_d, "date"):
+            start_d = start_d.date()
+        if hasattr(end_d, "date"):
+            end_d = end_d.date()
+        start_min = start_d - timedelta(days=1)
+        params = {"start_min": start_min, "end_date_cap": end_d, "issue_type": "Epic"}
+        if team_names:
+            params["team_names"] = team_names
+        if team_names:
+            history_sql = text("""
+                SELECT issue_key, snapshot_date::date AS snapshot_date, quarter_pi, quarter_pi_of_epic,
+                       status_category, team_name, issuetype
+                FROM public.jira_issue_history jh
+                WHERE jh.snapshot_date::date >= :start_min AND jh.snapshot_date::date <= :end_date_cap
+                  AND jh.issuetype = 'Epic'
+                  AND jh.team_name = ANY(:team_names)
+                ORDER BY jh.issue_key, jh.snapshot_date::date
+            """)
+        else:
+            history_sql = text("""
+                SELECT issue_key, snapshot_date::date AS snapshot_date, quarter_pi, quarter_pi_of_epic,
+                       status_category, team_name, issuetype
+                FROM public.jira_issue_history jh
+                WHERE jh.snapshot_date::date >= :start_min AND jh.snapshot_date::date <= :end_date_cap
+                  AND jh.issuetype = 'Epic'
+                ORDER BY jh.issue_key, jh.snapshot_date::date
+            """)
+        history_rows = [dict(r._mapping) for r in conn.execute(history_sql, params)]
+        issue_keys = list({r["issue_key"] for r in history_rows})
+        resolved_at_map = _fetch_resolved_at_map(conn, issue_keys)
+        sets = compute_pi_scope_change_sets(
+            pi_name=pi_name,
+            start_date=start_d,
+            end_date=end_d,
+            grace_period_days=grace_period_days,
+            history_rows=history_rows,
+            team_names=team_names,
+            issue_type="Epic",
+            project_keys=None,
+            resolved_at_map=resolved_at_map,
+        )
+        rows = [
+            {"Quarter Name": pi_name, "Stack Group": "Plan/Add", "Metric Name": "Epics Planned", "Value": len(sets["planned_issue_keys"]), "Issue Keys": list(sets["planned_issue_keys"])},
+            {"Quarter Name": pi_name, "Stack Group": "Plan/Add", "Metric Name": "Epics Added", "Value": len(sets["added_issue_keys"]), "Issue Keys": list(sets["added_issue_keys"])},
+            {"Quarter Name": pi_name, "Stack Group": "Res/NotRes/Rem", "Metric Name": "Epics Removed", "Value": len(sets["removed_issue_keys"]), "Issue Keys": list(sets["removed_issue_keys"])},
+            {"Quarter Name": pi_name, "Stack Group": "Res/NotRes/Rem", "Metric Name": "Epics Completed", "Value": len(sets["completed_issue_keys"]), "Issue Keys": list(sets["completed_issue_keys"])},
+            {"Quarter Name": pi_name, "Stack Group": "Res/NotRes/Rem", "Metric Name": "Epics Not Completed", "Value": len(sets["not_completed_issue_keys"]), "Issue Keys": list(sets["not_completed_issue_keys"])},
+        ]
+        return rows
+    except Exception as e:
+        logger.error(f"Error computing scope change for PI {pi_name}: {e}")
+        raise e
+
+
 def fetch_scope_changes_data(pi_names: List[str], team_names: Optional[List[str]] = None, conn: Connection = None) -> List[Dict[str, Any]]:
     """
-    Fetch scope changes data for specified PIs.
+    Fetch scope changes data for specified PIs using Python logic (same as PI burndown: grace, planned/added/removed/completed/not completed).
     
-    Uses the function: public.get_epic_pi_scope_changes
     Columns: "Quarter Name", "Stack Group", "Metric Name", "Value", "Issue Keys"
-    Results are ordered by PI end date (chronological order).
-    
-    Args:
-        pi_names (List[str]): List of PI names to filter by (mandatory)
-        team_names (Optional[List[str]]): List of team names filter, or None for all teams
-        conn (Connection): Database connection from FastAPI dependency
-    
-    Returns:
-        list: List of dictionaries with scope changes data (all columns from function)
     """
     try:
         if not pi_names:
             return []
-        
-        logger.info(f"Executing scope changes query for PIs: {pi_names}, Teams: {team_names if team_names else 'all'}")
-        
-        # Build parameters for the function call
-        params = {}
-        
-        # Build query - pass team_names as array or NULL (following pattern from fetch_pi_burndown_data)
-        if team_names:
-            # Pass array of team names to function
-            params['team_names'] = team_names
-            sql_query_text = text("""
-                SELECT * FROM public.get_epic_pi_scope_changes(
-                    CAST(:team_names AS text[])
-                )
-            """)
-            
-            logger.info(f"Executing SQL for scope changes: PIs={pi_names} with teams: {team_names}")
-        else:
-            # Pass NULL for all teams
-            sql_query_text = text("""
-                SELECT * FROM public.get_epic_pi_scope_changes(
-                    NULL
-                )
-            """)
-            
-            logger.info(f"Executing SQL for scope changes: PIs={pi_names} for all teams")
-        
-        # Execute query with parameters (SECURE: prevents SQL injection)
-        result = conn.execute(sql_query_text, params)
-        
-        # Convert rows to list of dictionaries
+        logger.info(f"Computing scope changes for PIs: {pi_names}, Teams: {team_names if team_names else 'all'}")
         scope_data = []
-        for row in result:
-            row_dict = dict(row._mapping)
-            
-            # Filter by pi_names if specific PIs requested (function returns all PIs)
-            row_pi_name = row_dict.get('Quarter Name')
-            if row_pi_name not in pi_names:
-                continue
-            
-            # Format array/list columns if present
-            for col in row_dict.keys():
-                if isinstance(row_dict[col], list):
-                    row_dict[col] = ', '.join(row_dict[col])
-            
-            scope_data.append(row_dict)
-        
+        for pi_name in pi_names:
+            scope_data.extend(_fetch_pi_scope_change_rows_for_pi(pi_name=pi_name, team_names=team_names, conn=conn))
+        # Format list columns as comma-separated string for compatibility with existing consumers
+        for row in scope_data:
+            for col in list(row.keys()):
+                if isinstance(row.get(col), list):
+                    row[col] = ", ".join(str(x) for x in row[col]) if row[col] else ""
+        # Sort by PI end date (get end_date per PI for ordering)
+        pi_end_dates: Dict[str, date] = {}
+        for pi_name in pi_names:
+            r = conn.execute(text("SELECT end_date::date AS end_date FROM public.pis WHERE pi_name = :n"), {"n": pi_name}).fetchone()
+            if r:
+                ed = r[0]
+                pi_end_dates[pi_name] = ed.date() if hasattr(ed, "date") else ed
+        scope_data.sort(key=lambda r: (pi_end_dates.get(r.get("Quarter Name") or "", date.min), r.get("Stack Group") or "", r.get("Metric Name") or ""))
         logger.info(f"Retrieved {len(scope_data)} scope changes records")
-        
         return scope_data
-            
     except Exception as e:
         logger.error(f"Error fetching scope changes data: {e}")
         raise e
@@ -1105,6 +1223,137 @@ def fetch_epic_counts_by_owning_team(
         raise e
 
 
+def get_pi_history_issues_computed(
+    pi_name: str,
+    target_date: date,
+    team_names: Optional[List[str]],
+    issue_type: Optional[str] = None,
+    metric_type: str = "total_scope",
+    project_keys: Optional[List[str]] = None,
+    conn: Connection = None,
+) -> List[Dict[str, Any]]:
+    """
+    Get PI issue list for a given date and metric using the same Python burndown computation as the chart.
+    Returns issues aligned with the burndown logic (grace period, re-added, etc.).
+    """
+    valid_metrics = ("issues_completed", "issues_removed", "issues_added", "total_scope", "wip_in_progress", "actual_remaining")
+    if metric_type not in valid_metrics:
+        raise ValueError(f"get_pi_history_issues_computed requires metric_type in {valid_metrics}, got: {metric_type}")
+    if not pi_name:
+        return []
+    try:
+        issue_type = issue_type or "all"
+        # 1. PI details
+        pi_sql = text("""
+            SELECT pi_name, start_date::date AS start_date, end_date::date AS end_date,
+                   COALESCE(planning_grace_days, 0)::int AS grace_period_days
+            FROM public.pis WHERE pi_name = :pi_name
+        """)
+        pi_row = conn.execute(pi_sql, {"pi_name": pi_name}).fetchone()
+        if not pi_row:
+            return []
+        row_m = dict(pi_row._mapping)
+        start_d = row_m["start_date"]
+        end_d = row_m["end_date"]
+        grace_period_days = int(row_m.get("grace_period_days") or 0)
+        if hasattr(start_d, "date"):
+            start_d = start_d.date()
+        if hasattr(end_d, "date"):
+            end_d = end_d.date()
+        today = date.today()
+        end_date_cap = max(end_d, today)
+        start_min = start_d - timedelta(days=1)
+        params = {"start_min": start_min, "end_date_cap": end_date_cap, "issue_type": issue_type}
+        if team_names:
+            params["team_names"] = team_names
+        if project_keys:
+            params["project_keys"] = project_keys
+        if team_names and project_keys:
+            history_sql = text("""
+                SELECT issue_key, snapshot_date::date AS snapshot_date, quarter_pi, quarter_pi_of_epic,
+                       status_category, team_name, issuetype
+                FROM public.jira_issue_history jh
+                WHERE jh.snapshot_date::date >= :start_min AND jh.snapshot_date::date <= :end_date_cap
+                  AND (:issue_type = 'all' OR jh.issuetype = :issue_type)
+                  AND jh.team_name = ANY(:team_names)
+                  AND (split_part(jh.issue_key, '-', 1) = ANY(:project_keys))
+                ORDER BY jh.issue_key, jh.snapshot_date::date
+            """)
+        elif team_names:
+            history_sql = text("""
+                SELECT issue_key, snapshot_date::date AS snapshot_date, quarter_pi, quarter_pi_of_epic,
+                       status_category, team_name, issuetype
+                FROM public.jira_issue_history jh
+                WHERE jh.snapshot_date::date >= :start_min AND jh.snapshot_date::date <= :end_date_cap
+                  AND (:issue_type = 'all' OR jh.issuetype = :issue_type)
+                  AND jh.team_name = ANY(:team_names)
+                ORDER BY jh.issue_key, jh.snapshot_date::date
+            """)
+        elif project_keys:
+            history_sql = text("""
+                SELECT issue_key, snapshot_date::date AS snapshot_date, quarter_pi, quarter_pi_of_epic,
+                       status_category, team_name, issuetype
+                FROM public.jira_issue_history jh
+                WHERE jh.snapshot_date::date >= :start_min AND jh.snapshot_date::date <= :end_date_cap
+                  AND (:issue_type = 'all' OR jh.issuetype = :issue_type)
+                  AND (split_part(jh.issue_key, '-', 1) = ANY(:project_keys))
+                ORDER BY jh.issue_key, jh.snapshot_date::date
+            """)
+        else:
+            history_sql = text("""
+                SELECT issue_key, snapshot_date::date AS snapshot_date, quarter_pi, quarter_pi_of_epic,
+                       status_category, team_name, issuetype
+                FROM public.jira_issue_history jh
+                WHERE jh.snapshot_date::date >= :start_min AND jh.snapshot_date::date <= :end_date_cap
+                  AND (:issue_type = 'all' OR jh.issuetype = :issue_type)
+                ORDER BY jh.issue_key, jh.snapshot_date::date
+            """)
+        history_rows = [dict(r._mapping) for r in conn.execute(history_sql, params)]
+        issue_keys_for_resolved = list({r["issue_key"] for r in history_rows})
+        resolved_at_map = _fetch_resolved_at_map(conn, issue_keys_for_resolved)
+        _, issue_lists_by_metric = compute_pi_burndown_from_history(
+            pi_name=pi_name,
+            start_date=start_d,
+            end_date=end_d,
+            grace_period_days=grace_period_days,
+            history_rows=history_rows,
+            team_names=team_names,
+            issue_type=issue_type,
+            project_keys=project_keys,
+            resolved_at_map=resolved_at_map,
+        )
+        issues_with_team = issue_lists_by_metric.get(metric_type, {}).get(target_date, [])
+        if not issues_with_team:
+            return []
+        issue_keys = [i["issue_key"] for i in issues_with_team]
+        placeholders = ", ".join([f":key_{x}" for x in range(len(issue_keys))])
+        params_summary = {f"key_{x}": k for x, k in enumerate(issue_keys)}
+        summary_sql = text(f"SELECT issue_key, summary FROM public.jira_issues WHERE issue_key IN ({placeholders})")
+        summary_result = conn.execute(summary_sql, params_summary)
+        summary_by_key = {row.issue_key: (row.summary or "") for row in summary_result}
+        metric_category_map = {
+            "issues_completed": "COMPLETED",
+            "issues_removed": "REMOVED",
+            "issues_added": "ADDED",
+            "total_scope": "TOTAL_SCOPE",
+            "wip_in_progress": "WIP",
+            "actual_remaining": "REMAINING",
+        }
+        category = metric_category_map.get(metric_type, "TOTAL_SCOPE")
+        return [
+            {
+                "issue_key": i["issue_key"],
+                "summary": summary_by_key.get(i["issue_key"], ""),
+                "team_name": i.get("team_name"),
+                "metric_category": category,
+            }
+            for i in issues_with_team
+        ]
+    except Exception as e:
+        logger.error(f"Error in get_pi_history_issues_computed: {e}")
+        raise e
+
+
 def get_pi_history_issues_db(
     pi_name: str,
     target_date: date,
@@ -1114,162 +1363,14 @@ def get_pi_history_issues_db(
     conn: Connection = None
 ) -> List[Dict[str, Any]]:
     """
-    Get PI issue details for a specific date using get_pi_issue_details_for_date function.
-    
-    Args:
-        pi_name (str): PI name (quarter_pi) to filter by
-        target_date (date): The date to query (date only, no time)
-        team_names (Optional[List[str]]): List of team names, or None for all teams
-        issue_type (Optional[str]): Issue type filter (e.g., "Story", "Bug", "Epic"). If None, passes "all" to function.
-        metric_type (str): Metric type to filter by. Valid values:
-            - "issues_completed" - Issues completed on this day
-            - "issues_removed" - Issues removed from PI
-            - "issues_added" - Issues added to PI on this day
-            - "total_scope" - Total scope of PI on this day (all issues in PI)
-            - "wip_in_progress" - Work in progress items
-            - "actual_remaining" - Actual remaining items (not done)
-        conn (Connection): Database connection from FastAPI dependency
-    
-    Returns:
-        list: List of issue dictionaries with issue_key, summary, team_name, metric_category
+    Get PI issue details for a specific date (uses Python computation aligned with PI burndown chart).
     """
-    try:
-        # Map metric_type to function's metric_category values (get_pi_issue_details_for_date returns ADDED, COMPLETED, REMOVED, WIP, REMAINING)
-        metric_category_map = {
-            "issues_completed": "COMPLETED",
-            "issues_removed": "REMOVED",
-            "issues_added": "ADDED",
-            "wip_in_progress": "WIP",
-            "actual_remaining": "REMAINING"
-        }
-        
-        # Handle issue_type parameter (pass "all" if not provided)
-        target_issuetype = issue_type if issue_type else "all"
-        
-        # Build parameters for the function call
-        params = {
-            "target_pi_name": pi_name,
-            "target_issuetype": target_issuetype,
-            "target_date": target_date.strftime("%Y-%m-%d")
-        }
-        
-        # Build query - pass team_names as array or NULL
-        # The SQL function handles NULL team_names (returns all teams)
-        if team_names:
-            params["team_names"] = team_names
-            sql_query_text = text("""
-                SELECT * FROM public.get_pi_issue_details_for_date(
-                    :target_pi_name,
-                    :target_issuetype,
-                    CAST(:team_names AS text[]),
-                    CAST(:target_date AS date)
-                )
-            """)
-            logger.info(f"Executing query to get PI history issues: pi={pi_name}, date={target_date}, issue_type={target_issuetype}, teams={team_names}, metric_type={metric_type}")
-        else:
-            # Pass NULL for all teams - function handles it
-            sql_query_text = text("""
-                SELECT * FROM public.get_pi_issue_details_for_date(
-                    :target_pi_name,
-                    :target_issuetype,
-                    NULL,
-                    CAST(:target_date AS date)
-                )
-            """)
-            logger.info(f"Executing query to get PI history issues: pi={pi_name}, date={target_date}, issue_type={target_issuetype}, teams=all, metric_type={metric_type}")
-        
-        # Execute query with parameters (SECURE: prevents SQL injection)
-        result = conn.execute(sql_query_text, params)
-        rows = result.fetchall()
-        
-        # Convert rows to list of dictionaries
-        all_issues = []
-        for row in rows:
-            row_dict = dict(row._mapping)
-            all_issues.append(row_dict)
-        
-        # Filter by metric_type if not "total_scope"
-        if metric_type == "total_scope":
-            # For total_scope, we need ALL issues in PI on that date
-            # The function returns issues with specific categories, so we need a separate query
-            # Query jira_issue_history directly for all issues in PI on that date
-            # Return same structure as function: issue_key, summary, team_name, metric_category
-            params_scope = {
-                "target_pi_name": pi_name,
-                "target_date": target_date.strftime("%Y-%m-%d"),
-                "target_issuetype": target_issuetype
-            }
-            
-            # Build team filter if team_names provided
-            if team_names:
-                team_placeholders = ", ".join([f":team_name_{i}" for i in range(len(team_names))])
-                for i, name in enumerate(team_names):
-                    params_scope[f"team_name_{i}"] = name
-                
-                scope_query = text(f"""
-                    SELECT DISTINCT
-                        jh.issue_key,
-                        ji.summary,
-                        jh.team_name,
-                        'TOTAL_SCOPE' as metric_category
-                    FROM public.jira_issue_history jh
-                    LEFT JOIN public.jira_issues ji ON jh.issue_key = ji.issue_key
-                    WHERE jh.snapshot_date::date = CAST(:target_date AS date)
-                    AND jh.quarter_pi = :target_pi_name
-                    AND (:target_issuetype = 'all' OR jh.issuetype = :target_issuetype)
-                    AND jh.team_name IN ({team_placeholders})
-                """)
-            else:
-                # No team filter - get all teams
-                scope_query = text("""
-                    SELECT DISTINCT
-                        jh.issue_key,
-                        ji.summary,
-                        jh.team_name,
-                        'TOTAL_SCOPE' as metric_category
-                    FROM public.jira_issue_history jh
-                    LEFT JOIN public.jira_issues ji ON jh.issue_key = ji.issue_key
-                    WHERE jh.snapshot_date::date = CAST(:target_date AS date)
-                    AND jh.quarter_pi = :target_pi_name
-                    AND (:target_issuetype = 'all' OR jh.issuetype = :target_issuetype)
-                """)
-            
-            scope_result = conn.execute(scope_query, params_scope)
-            scope_rows = scope_result.fetchall()
-            
-            issues = []
-            for row in scope_rows:
-                row_dict = dict(row._mapping)
-                issues.append({
-                    "issue_key": row_dict.get("issue_key"),
-                    "summary": row_dict.get("summary"),
-                    "team_name": row_dict.get("team_name"),
-                    "metric_category": row_dict.get("metric_category")
-                })
-            
-            logger.info(f"Retrieved {len(issues)} issues for total_scope metric")
-            return issues
-        else:
-            # Filter by metric_category
-            target_category = metric_category_map.get(metric_type)
-            if not target_category:
-                raise ValueError(f"Invalid metric_type: {metric_type}")
-            
-            # Filter issues by metric_category - return only what function returns
-            filtered_issues = [
-                {
-                    "issue_key": issue.get("issue_key"),
-                    "summary": issue.get("summary"),
-                    "team_name": issue.get("team_name"),
-                    "metric_category": issue.get("metric_category")
-                }
-                for issue in all_issues 
-                if issue.get("metric_category") == target_category
-            ]
-            
-            logger.info(f"Retrieved {len(filtered_issues)} issues for metric_type={metric_type}")
-            return filtered_issues
-            
-    except Exception as e:
-        logger.error(f"Error fetching PI history issues (pi={pi_name}, date={target_date}, metric_type={metric_type}): {e}")
-        raise e
+    return get_pi_history_issues_computed(
+        pi_name=pi_name,
+        target_date=target_date,
+        team_names=team_names,
+        issue_type=issue_type,
+        metric_type=metric_type,
+        project_keys=None,
+        conn=conn,
+    )
