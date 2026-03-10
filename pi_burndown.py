@@ -223,13 +223,19 @@ def compute_pi_burndown_from_history(
         tn = row.get("team_name")
         team_name_row = (tn.strip() or None) if isinstance(tn, str) else None
 
-        # Removed: left PI, not Done. Count if added during PI (first_seen >= start_date) or removal after start_date
+        # Removed: left PI. Count if added during PI (first_seen >= start_date) or removal after start_date.
+        # Normally exclude when Done when left; but if Done and removed on the same day (resolved_at == snap_d),
+        # count as removed so total scope is reduced.
+        in_scope_for_removal = (first_seen is not None and first_seen >= start_date) or snap_d > start_date
+        done_same_day = False
+        if prev_status == "Done" and resolved_at_map is not None:
+            ra = resolved_at_map.get(issue_key)
+            done_same_day = ra is not None and _normalize_date(ra) == snap_d
         removed_this_day = (
-            prev_in and not curr_in and prev_status != "Done"
-            and (
-                (first_seen is not None and first_seen >= start_date)
-                or snap_d > start_date
-            )
+            prev_in
+            and not curr_in
+            and in_scope_for_removal
+            and (prev_status != "Done" or done_same_day)
         )
         if removed_this_day:
             daily_removed[snap_d] += 1
