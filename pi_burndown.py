@@ -144,6 +144,29 @@ def compute_pi_burndown_from_history(
     initial_scope = planned_set - completed_outside_set
     planned_issues = len(initial_scope)
 
+    # Resurfaced (edge case only): Done before start -> re-appears in middle (TODO/In Progress) -> later closed.
+    # Only issues in completed_outside_set count; first day >= start_date where in scope and status != Done
+    # adds them to scope so total_scope and remaining increase in the middle, then decrease when Done again.
+    first_resurfaced_day: Dict[str, date] = {}
+    for issue_key in completed_outside_set:
+        for (ik, snap_d), row in by_issue_date.items():
+            if ik != issue_key or snap_d is None or snap_d < start_date:
+                continue
+            if not _in_scope(row) or (row.get("status_category") or "").strip() == "Done":
+                continue
+            if issue_key not in first_resurfaced_day or snap_d < first_resurfaced_day[issue_key]:
+                first_resurfaced_day[issue_key] = snap_d
+    daily_resurfaced: Dict[date, int] = defaultdict(int)
+    daily_resurfaced_set: Dict[date, set] = defaultdict(set)
+    daily_resurfaced_list: Dict[date, List[Dict[str, Any]]] = defaultdict(list)
+    for issue_key, resurfaced_d in first_resurfaced_day.items():
+        daily_resurfaced[resurfaced_d] += 1
+        daily_resurfaced_set[resurfaced_d].add(issue_key)
+        row_r = by_issue_date.get((issue_key, resurfaced_d), {})
+        tn = row_r.get("team_name")
+        team_name_r = (tn.strip() or None) if isinstance(tn, str) else None
+        daily_resurfaced_list[resurfaced_d].append({"issue_key": issue_key, "team_name": team_name_r})
+
     # Added: first_seen in PI after grace_end (and sets/lists)
     daily_added: Dict[date, int] = defaultdict(int)
     added_by_date_set: Dict[date, set] = defaultdict(set)
@@ -261,10 +284,11 @@ def compute_pi_burndown_from_history(
         prev_by_issue[issue_key]["effective_pi"] = row.get("effective_pi")
         prev_by_issue[issue_key]["status_category"] = curr_status
 
-    # Total scope: planned + cum(added) + cum(re-added) - cum(removed)
+    # Total scope: planned + cum(added) + cum(re-added) + cum(resurfaced) - cum(removed)
     cum_added = 0
     cum_removed = 0
     cum_readded = 0
+    cum_resurfaced = 0
     total_by_date: Dict[date, int] = {}
     in_scope_set: set = set(initial_scope)
     total_scope_list_by_date: Dict[date, List[Dict[str, Any]]] = {}
@@ -272,10 +296,12 @@ def compute_pi_burndown_from_history(
         cum_added += daily_added.get(snap_d, 0)
         cum_removed += daily_removed.get(snap_d, 0)
         cum_readded += daily_readded.get(snap_d, 0)
+        cum_resurfaced += daily_resurfaced.get(snap_d, 0)
         in_scope_set |= added_by_date_set.get(snap_d, set())
         in_scope_set -= daily_removed_set.get(snap_d, set())
         in_scope_set |= daily_readded_set.get(snap_d, set())
-        total_by_date[snap_d] = planned_issues + cum_added + cum_readded - cum_removed
+        in_scope_set |= daily_resurfaced_set.get(snap_d, set())
+        total_by_date[snap_d] = planned_issues + cum_added + cum_readded + cum_resurfaced - cum_removed
         total_scope_list_by_date[snap_d] = [
             {"issue_key": k, "team_name": _team_name_for_issue_on_date(by_issue_date, k, snap_d)}
             for k in sorted(in_scope_set)
@@ -303,7 +329,7 @@ def compute_pi_burndown_from_history(
             "start_date": start_date,
             "end_date": end_date,
             "planned_issues": planned_issues,
-            "issues_added_on_day": daily_added.get(snap_d, 0) + daily_readded.get(snap_d, 0),
+            "issues_added_on_day": daily_added.get(snap_d, 0) + daily_readded.get(snap_d, 0) + daily_resurfaced.get(snap_d, 0),
             "issues_removed_on_day": daily_removed.get(snap_d, 0),
             "issues_completed_on_day": daily_completed.get(snap_d, 0),
             "remaining_issues": remaining,
@@ -315,7 +341,7 @@ def compute_pi_burndown_from_history(
         "total_scope": {d: total_scope_list_by_date.get(d, []) for d in snapshot_dates},
         "issues_completed": {d: daily_completed_list.get(d, []) for d in snapshot_dates},
         "issues_removed": {d: daily_removed_list.get(d, []) for d in snapshot_dates},
-        "issues_added": {d: added_by_date_list.get(d, []) + daily_readded_list.get(d, []) for d in snapshot_dates},
+        "issues_added": {d: added_by_date_list.get(d, []) + daily_readded_list.get(d, []) + daily_resurfaced_list.get(d, []) for d in snapshot_dates},
         "wip_in_progress": {d: wip_list_by_date.get(d, []) for d in snapshot_dates},
         "actual_remaining": {d: remaining_list_by_date.get(d, []) for d in snapshot_dates},
     }
@@ -383,10 +409,23 @@ def compute_pi_scope_change_sets(
         if start_date <= snap_d <= grace_end and _in_scope(row):
             planned_set.add(issue_key)
     day_before_start = start_date - timedelta(days=1)
+    completed_outside_set_scope: set = set()
     for issue_key in list(planned_set):
         prev_row = by_issue_date.get((issue_key, day_before_start))
         if prev_row and (prev_row.get("status_category") or "").strip() == "Done":
+            completed_outside_set_scope.add(issue_key)
             planned_set.discard(issue_key)
+
+    # Resurfaced (same as burndown): Done before start -> re-appears as not-Done during PI -> can be Completed at end.
+    resurfaced_set: set = set()
+    for issue_key in completed_outside_set_scope:
+        for (ik, snap_d), row in by_issue_date.items():
+            if ik != issue_key or snap_d is None or snap_d < start_date:
+                continue
+            if not _in_scope(row) or (row.get("status_category") or "").strip() == "Done":
+                continue
+            resurfaced_set.add(issue_key)
+            break
 
     first_seen_in_pi: Dict[str, date] = {}
     for (issue_key, snap_d), row in by_issue_date.items():
@@ -398,7 +437,7 @@ def compute_pi_scope_change_sets(
     for issue_key, first_seen in first_seen_in_pi.items():
         if first_seen > grace_end:
             added_set.add(issue_key)
-    all_in_scope = planned_set | added_set
+    all_in_scope = planned_set | added_set | resurfaced_set
 
     # For "in PI at end" and "status at end": use latest available snapshot date (capped at end_date).
     # For a current/active PI, end_date is in the future so we have no rows for it; use latest data we have.
@@ -441,9 +480,12 @@ def compute_pi_scope_change_sets(
     completed_set = done_at_end - removed_set
     not_completed_set = all_in_scope - removed_set - completed_set
 
+    # Report "Epics Added" includes resurfaced (Done before start -> re-appeared in middle) so they show in Added
+    added_for_report = added_set | resurfaced_set
+
     return {
         "planned_issue_keys": planned_set,
-        "added_issue_keys": added_set,
+        "added_issue_keys": added_for_report,
         "removed_issue_keys": removed_set,
         "completed_issue_keys": completed_set,
         "not_completed_issue_keys": not_completed_set,

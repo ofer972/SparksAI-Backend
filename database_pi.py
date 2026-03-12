@@ -36,6 +36,50 @@ def _fetch_resolved_at_map(conn: Connection, issue_keys: List[str]) -> Dict[str,
     return result
 
 
+def _fetch_avg_cycle_time_completed_epics(
+    conn: Connection,
+    issue_keys: List[str],
+    start_date: date,
+    end_date: date,
+) -> Optional[float]:
+    """Avg cycle_time_days for epics that are Done, resolved_at in [start_date, end_date], cycle_time_days > 1."""
+    if not issue_keys:
+        return None
+    cycle_map = _fetch_cycle_time_days_for_completed_epics(conn, issue_keys, start_date, end_date)
+    values = [cycle_map[k] for k in issue_keys if k in cycle_map]
+    if not values:
+        return None
+    return round(sum(values) / len(values), 2)
+
+
+def _fetch_cycle_time_days_for_completed_epics(
+    conn: Connection,
+    issue_keys: List[str],
+    start_date: date,
+    end_date: date,
+) -> Dict[str, float]:
+    """Return issue_key -> cycle_time_days for epics that are Done, resolved_at in [start_date, end_date], cycle_time_days > 1.
+    Same predicate as _fetch_avg_cycle_time_completed_epics; used to batch per-PI cycle time lookups."""
+    if not issue_keys:
+        return {}
+    placeholders = ", ".join([f":key_{i}" for i in range(len(issue_keys))])
+    params = {f"key_{i}": k for i, k in enumerate(issue_keys)}
+    params["start_date"] = start_date
+    params["end_date"] = end_date
+    sql = text(f"""
+        SELECT issue_key, cycle_time_days::float AS cycle_time_days
+        FROM jira_issues
+        WHERE issue_key IN ({placeholders})
+          AND status_category = 'Done'
+          AND resolved_at IS NOT NULL
+          AND resolved_at::date BETWEEN :start_date AND :end_date
+          AND cycle_time_days IS NOT NULL
+          AND cycle_time_days > 1
+    """)
+    rows = conn.execute(sql, params).fetchall()
+    return {row.issue_key: float(row.cycle_time_days) for row in rows}
+
+
 # Status values (thresholds from settings.HEATMAP_*)
 HEATMAP_STATUS_COMPLETED = "completed"  # 100% completion
 HEATMAP_STATUS_LOW = "low"  # < 2 uncompleted
@@ -157,12 +201,10 @@ def reduce_pi_burndown_data(burndown_data: List[Dict[str, Any]], days_without_ch
 
 def fetch_pi_predictability_data(pi_names, team_names: Optional[List[str]] = None, conn: Connection = None) -> List[Dict[str, Any]]:
     """
-    Fetch PI predictability data from the database function.
+    Fetch PI predictability data using Python logic (same scope as Epic scope / PI burndown).
     
-    For multiple PIs: loop through each PI and call the database function for each one.
-    For multiple teams: call the function once per team and combine results.
-    The SQL function get_pi_predictability_by_team accepts a single TEXT parameter (not array),
-    so we call it once per team when team_names is provided.
+    Uses compute_pi_scope_change_sets so in-scope and completed match Epic Scope and PI burndown
+    (grace, planned/added/resurfaced/removed, completed at PI end). One row per (pi_name, team_name).
     
     Args:
         pi_names (str | List[str]): Single PI name or list of PI names
@@ -170,62 +212,129 @@ def fetch_pi_predictability_data(pi_names, team_names: Optional[List[str]] = Non
         conn (Connection): Database connection from FastAPI dependency
     
     Returns:
-        list: List of dictionaries with PI predictability data (all columns)
+        list: List of dictionaries with PI predictability data (same columns as before)
     """
     try:
-        # Normalize pi_names to a list
         if isinstance(pi_names, str):
             pi_names = [pi_names]
-        
-        logger.info(f"Executing PI predictability query for PIs: {pi_names}")
-        logger.info(f"Team filter: {team_names if team_names else 'None (all teams)'}")
-        
-        # IMPORTANT: Preserve the exact order returned by the database function
-        # Try calling with NULL for both parameters to get the function's natural order
-        # Then filter by pi_names and team_names in Python to preserve that order
+        if not pi_names:
+            return []
+
+        logger.info(f"Computing PI predictability (Python) for PIs: {pi_names}, Teams: {team_names if team_names else 'all'}")
+
         all_data = []
-        
-        # Try calling with NULL for both parameters to preserve database function's natural order
-        # This returns all data in the order the function defines, then we filter in Python
-        sql_query_text = text("""
-            SELECT * FROM public.get_pi_predictability_by_team(
-                NULL,
-                NULL
-            )
+        pi_sql = text("""
+            SELECT pi_name, start_date::date AS start_date, end_date::date AS end_date,
+                   COALESCE(planning_grace_days, 0)::int AS grace_period_days
+            FROM public.pis WHERE pi_name = ANY(:pi_names)
         """)
-        
-        logger.info(f"Executing SQL with NULL for both parameters to preserve database function order")
-        logger.info(f"Will filter by PIs: {pi_names}, Teams: {team_names if team_names else 'all'}")
-        
-        result = conn.execute(sql_query_text)
-        
-        # Convert rows to list of dictionaries, preserving exact order from database function
-        for row in result:
-            row_dict = dict(row._mapping)
-            
-            # Filter by pi_names if specific PIs requested
-            row_pi_name = row_dict.get('pi_name')
-            if row_pi_name not in pi_names:
-                continue  # Skip this row if PI not in filter
-            
-            # Filter by team_names if provided
+        pi_rows = conn.execute(pi_sql, {"pi_names": pi_names}).fetchall()
+        pi_info = {}
+        for r in pi_rows:
+            row_m = dict(r._mapping)
+            start_d = row_m["start_date"]
+            end_d = row_m["end_date"]
+            if hasattr(start_d, "date"):
+                start_d = start_d.date()
+            if hasattr(end_d, "date"):
+                end_d = end_d.date()
+            pi_info[row_m["pi_name"]] = {
+                "start_date": start_d,
+                "end_date": end_d,
+                "grace_period_days": int(row_m.get("grace_period_days") or 0),
+            }
+
+        for pi_name in pi_names:
+            if pi_name not in pi_info:
+                continue
+            info = pi_info[pi_name]
+            start_d = info["start_date"]
+            end_d = info["end_date"]
+            grace_period_days = info["grace_period_days"]
+            start_min = start_d - timedelta(days=1)
+
+            params = {"start_min": start_min, "end_date_cap": end_d}
             if team_names:
-                row_team_name = row_dict.get('team_name')
-                if row_team_name not in team_names:
-                    continue  # Skip this row if team not in filter
-            
-            # Format array columns
-            for col in ['issues_in_scope_keys', 'completed_issues_keys']:
-                if col in row_dict:
-                    if isinstance(row_dict[col], list):
-                        row_dict[col] = ', '.join(row_dict[col])
-            
-            all_data.append(row_dict)
-        
-        logger.info(f"Retrieved {len(all_data)} PI predictability records")
-        
+                params["team_names"] = team_names
+            if team_names:
+                history_sql = text("""
+                    SELECT issue_key, snapshot_date::date AS snapshot_date, quarter_pi, quarter_pi_of_epic,
+                           status_category, team_name, issuetype
+                    FROM public.jira_issue_history jh
+                    WHERE jh.snapshot_date::date >= :start_min AND jh.snapshot_date::date <= :end_date_cap
+                      AND jh.issuetype = 'Epic'
+                      AND jh.team_name = ANY(:team_names)
+                    ORDER BY jh.issue_key, jh.snapshot_date::date
+                """)
+            else:
+                history_sql = text("""
+                    SELECT issue_key, snapshot_date::date AS snapshot_date, quarter_pi, quarter_pi_of_epic,
+                           status_category, team_name, issuetype
+                    FROM public.jira_issue_history jh
+                    WHERE jh.snapshot_date::date >= :start_min AND jh.snapshot_date::date <= :end_date_cap
+                      AND jh.issuetype = 'Epic'
+                    ORDER BY jh.issue_key, jh.snapshot_date::date
+                """)
+            history_rows = [dict(r._mapping) for r in conn.execute(history_sql, params)]
+            issue_keys = list({r["issue_key"] for r in history_rows})
+            resolved_at_map = _fetch_resolved_at_map(conn, issue_keys)
+
+            teams_for_pi = sorted(set(r["team_name"] for r in history_rows if r.get("team_name")))
+            if team_names:
+                teams_for_pi = [t for t in teams_for_pi if t in team_names]
+
+            # First pass: compute scope/completed per team and collect rows (without avg_cycle)
+            team_rows: List[Dict[str, Any]] = []
+            all_completed_keys_for_pi: set = set()
+            for team_name in teams_for_pi:
+                sets = compute_pi_scope_change_sets(
+                    pi_name=pi_name,
+                    start_date=start_d,
+                    end_date=end_d,
+                    grace_period_days=grace_period_days,
+                    history_rows=history_rows,
+                    team_names=[team_name],
+                    issue_type="Epic",
+                    project_keys=None,
+                    resolved_at_map=resolved_at_map,
+                )
+                all_in_scope = sets["all_in_scope"]
+                completed_issue_keys = sets["completed_issue_keys"]
+                all_completed_keys_for_pi |= completed_issue_keys
+                total = len(all_in_scope)
+                completed_count = len(completed_issue_keys)
+                pct = (completed_count * 100.0 / total) if total else 0
+                issues_in_scope_keys = sorted(all_in_scope)
+                completed_keys_list = sorted(completed_issue_keys)
+                row_dict = {
+                    "team_name": team_name,
+                    "pi_name": pi_name,
+                    "total_issues_in_scope": total,
+                    "issues_in_scope_keys": ", ".join(issues_in_scope_keys) if issues_in_scope_keys else "",
+                    "issues_completed_within_pi_dates": completed_count,
+                    "completed_issues_keys": ", ".join(completed_keys_list) if completed_keys_list else "",
+                    "pi_predictability_percentage": round(pct, 2),
+                    "avg_cycle_time_completed_epics_days": None,  # set below after batched query
+                    "_completed_issue_keys": completed_issue_keys,
+                }
+                team_rows.append(row_dict)
+
+            # One cycle-time query per PI (same predicate: Done, resolved_at in range, cycle_time_days > 1)
+            cycle_time_by_key = _fetch_cycle_time_days_for_completed_epics(
+                conn, list(all_completed_keys_for_pi), start_d, end_d
+            )
+            for row_dict in team_rows:
+                keys = row_dict.pop("_completed_issue_keys")
+                values = [cycle_time_by_key[k] for k in keys if k in cycle_time_by_key]
+                row_dict["avg_cycle_time_completed_epics_days"] = (
+                    round(sum(values) / len(values), 2) if values else None
+                )
+                all_data.append(row_dict)
+
+        all_data.sort(key=lambda r: (r.get("team_name") or "", r.get("pi_name") or ""))
+        logger.info(f"Retrieved {len(all_data)} PI predictability records (Python)")
         return all_data
-            
+
     except Exception as e:
         logger.error(f"Error fetching PI predictability data: {e}")
         raise e
